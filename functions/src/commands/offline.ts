@@ -9,12 +9,12 @@
  * - 已人工出餐的离线单导入为 served；只有尚未制作的才可由收银核实后转电子厨单。
  */
 import { Firestore, Transaction } from 'firebase-admin/firestore';
-import { BOM_VERSIONS } from '../../../src/domain/bom';
 import { businessDateOf } from '../../../src/domain/businessDay';
 import { computeTotals } from '../../../src/domain/cart';
 import { canonicalJson, isUuid, payloadHash } from '../../../src/domain/idempotency';
 import { isValidQuantity, parseLineConfig, LineConfig } from '../../../src/domain/lineItem';
-import { MENU_VERSIONS, SERVICE_MODES } from '../../../src/domain/menu';
+import { SERVICE_MODES } from '../../../src/domain/menu';
+import { loadBom, loadMenu } from '../core/catalog';
 import {
   effectiveTimeMs, OfflineEvent, OfflineEventResult, OfflineOrderPayload, OfflineReviewReason, TIME_SKEW_LIMIT_MS,
 } from '../../../src/domain/offline';
@@ -135,8 +135,8 @@ async function decide(
     if (at > nowMs + TIME_SKEW_LIMIT_MS || at < (shift.openedAtMs as number) - TIME_SKEW_LIMIT_MS) return review('TIME_ANOMALY', orderId);
     if (at > (shift.offlineCapabilityExpiresAtMs as number)) return review('OFFLINE_CAPABILITY_EXPIRED', orderId);
     if (orderSnap.exists) return review('ORDER_ID_CONFLICT', orderId);
-    const menu = MENU_VERSIONS[p.menuVersion];
-    const bom = BOM_VERSIONS[config.activeBomVersion];
+    const menu = await loadMenu(tx, store, p.menuVersion);
+    const bom = await loadBom(tx, store, config.activeBomVersion);
     if (!menu || !bom) return review('MENU_UNKNOWN', orderId);
     const lines: { lineId: string; config: LineConfig; quantity: number }[] = [];
     for (const l of p.lines) {

@@ -5,7 +5,7 @@
  * - 写入的营业日必须未关账；关账后的差错走更正版本（restateBusinessDay）。
  */
 import { Firestore } from 'firebase-admin/firestore';
-import { BOM_VERSIONS } from '../../../src/domain/bom';
+import { loadBom } from '../core/catalog';
 import { businessDateOf, isDateString } from '../../../src/domain/businessDay';
 import { wastageCostUnits } from '../../../src/domain/ledger';
 import { runCommand, StoreRefs } from '../core/command';
@@ -92,7 +92,7 @@ export async function recordWastage(db: Firestore, uid: string | undefined, raw:
     type: 'recordWastage', storeId: input.storeId, operationId: input.operationId, uid, roles: ['owner'], payload: input,
     run: async ({ tx, store, nowMs, actor }) => {
       const config = await loadStoreConfig(tx, store);
-      const bom = BOM_VERSIONS[config.activeBomVersion];
+      const bom = await loadBom(tx, store, config.activeBomVersion);
       if (!bom) throw new CommandError('STORE_NOT_CONFIGURED');
       // 关联订单的理论成本仍计入（未反转）时，这份食材已扣过一次：只记数量，不重复扣款。
       let alreadyAllocated = false;

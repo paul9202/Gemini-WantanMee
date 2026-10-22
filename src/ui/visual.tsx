@@ -6,6 +6,7 @@ import { CSSProperties, ReactNode, useState } from 'react';
 import { PICTOGRAMS, PictogramId } from '../domain/pictograms';
 import { ICON_SYMBOLS, IconName } from './iconSymbols';
 import manifest from './photoManifest.json';
+import { useLang } from '../app/i18n';
 
 const PHOTO_PATHS: Record<string, { path: string; alt: string }> = Object.fromEntries(
   manifest.photos.map((p) => [p.photoId, { path: p.path, alt: p.altZh }]),
@@ -137,13 +138,14 @@ export function PictoArt({ id, size = 32 }: { id: PictogramId; size?: number }) 
 /** 图卡 = 图形 + 短中文。tone 用于 KDS 深色主题。 */
 export function Picto({ id, size = 28, tone = 'light', emphasized = true }: { id: PictogramId; size?: number; tone?: 'light' | 'dark'; emphasized?: boolean }) {
   const def = PICTOGRAMS[id];
+  const lang = useLang();
   const base = tone === 'dark'
     ? emphasized ? 'bg-[#2d3d34] text-kds-text border-[#4b5f52]' : 'bg-transparent text-kds-muted border-[#33443a]'
     : emphasized ? 'bg-white text-ink border-line' : 'bg-subtle text-ink-2 border-transparent';
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 font-semibold ${base}`} style={{ fontSize: Math.max(13, size * 0.55) }}>
       <PictoArt id={id} size={size} />
-      <span>{def.zh}</span>
+      <span>{lang === 'en' ? def.en : def.zh}</span>
     </span>
   );
 }

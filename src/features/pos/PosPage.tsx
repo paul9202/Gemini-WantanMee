@@ -8,7 +8,6 @@ import { collection, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, computeTotals, emptyCart, setLineQuantity, setServiceMode, updateLineConfig } from '../../domain/cart';
 import { defaultConfig, LineConfig } from '../../domain/lineItem';
-import { MENU_VERSIONS } from '../../domain/menu';
 import { formatRM, parseRMInput } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, TokenStateName } from '../../domain/tokens';
@@ -25,9 +24,11 @@ import {
   appendManualEvent, recordServerOffset, reloadLocal, serverNow, saveSnapshot, setManualOffline, syncNow, unresolvedOps, unsyncedEvents, useOfflineRuntime, voidRejectedSequence,
 } from '../../data/offline/runtime';
 import { useRegister } from '../../data/register';
+import { menuForVersion, useMenu } from '../../data/menu';
 import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
 import { Icon } from '../../ui/visual';
+import { useT } from '../../app/i18n';
 import { CartPanel } from './CartPanel';
 import { PaymentDrawer, PaymentInput } from './PaymentDrawer';
 import { ProductPanel } from './ProductPanel';
@@ -62,9 +63,10 @@ export function PosPage() {
   const rt = useOfflineRuntime();
   const offlineMode = !browserOnline || rt.manualOffline;
   const writer = useWriterLock(true);
+  const tr = useT();
   useHeartbeat(deviceId, !offlineMode);
   const opsStatus = useLiveDoc<{ kitchenLastSeenAtMs?: number }>(storePath('operationsStatus/current'));
-  const menu = config ? MENU_VERSIONS[config.activeMenuVersion] : undefined;
+  const menu = useMenu(config?.activeMenuVersion);
 
   const tokensQ = useLiveQuery<{ number: number; state: TokenStateName; orderId: string | null; version: number }>(collection(db, storePath('tokens')), 'tokens');
   const tokensFromServer = !tokensQ.fromCache && tokensQ.data.length > 0;
@@ -141,7 +143,7 @@ export function PosPage() {
     stage.kind === 'accepted' ? storePath(`orders/${stage.result.orderId}`) : null,
   );
 
-  if (!menu || !config || !draft) return <p className="p-6">正在载入菜单…</p>;
+  if (!menu || !config || !draft) return <p className="p-6">{tr('正在载入菜单…', 'Loading menu…')}</p>;
   if (reg.status !== 'ready') return <RegisterGate status={reg.status} isOwner={member?.role === 'owner'} />;
 
   const totals = computeTotals(menu, BOM_V1, cart);
@@ -149,10 +151,10 @@ export function PosPage() {
   const busy = stage.kind === 'saving' || stage.kind === 'submitting';
   const blockingOnline = unresolved.filter((o) => o.status === 'not_found');
 
-  const payDisabledReason = writer !== 'held' ? '另一个标签页正在收银，这里只能查看'
-    : cart.lines.length === 0 ? '先加入餐品'
-    : token === null ? '没有可用餐牌，请先回收餐牌'
-    : !offlineMode && blockingOnline.length > 0 ? '有收款待你决定处理方式，请先到「同步」页处理'
+  const payDisabledReason = writer !== 'held' ? tr('另一个标签页正在收银，这里只能查看', 'Another tab is the register — view only here')
+    : cart.lines.length === 0 ? tr('先加入餐品', 'Add an item first')
+    : token === null ? tr('没有可用餐牌，请先回收餐牌', 'No free token — collect tokens first')
+    : !offlineMode && blockingOnline.length > 0 ? tr('有收款待你决定处理方式，请先到「同步」页处理', 'A payment needs your decision — open Sync first')
     : null;
 
   function addOrSave() {
@@ -161,7 +163,7 @@ export function PosPage() {
       setCart(updateLineConfig(menu, cart, editingLineId, draft));
       setEditingLineId(null);
     } else {
-      setUndo({ cart, label: '已加入本单' });
+      setUndo({ cart, label: tr('已加入本单', 'Added') });
       setCart(addLine(menu, cart, draft, crypto.randomUUID()));
     }
     // 每次加入后特殊选项归默认，防止上一位顾客的走青或 Kosong 残留；保留所选餐品与面种。
@@ -172,7 +174,7 @@ export function PosPage() {
 
   function changeQuantity(lineId: string, q: number) {
     if (q > 50) return;
-    if (q === 0) setUndo({ cart, label: '已移除一行' });
+    if (q === 0) setUndo({ cart, label: tr('已移除一行', 'Removed') });
     setCart(setLineQuantity(cart, lineId, q));
     if (q === 0 && editingLineId === lineId) setEditingLineId(null);
   }
@@ -304,56 +306,56 @@ export function PosPage() {
         <div role="alert" className="flex flex-wrap items-center gap-3 border-b-2 border-warn bg-warn-bg px-4 py-2 text-warn">
           <Icon name="handoff" size={36} />
           <div className="min-w-0 flex-1">
-            <b className="text-lg">离线营业 · 仅本机保存 · 未同步 {unsynced.length} 条</b>
-            <div className="text-sm">后厨屏不会自动收到，请把纸单递给厨师（人工传单）。{reg.fromSnapshot ? `离线营业资格到 ${new Date(reg.shift!.offlineCapabilityExpiresAtMs).toLocaleString('zh-CN', { hour12: false })}` : ''}</div>
+            <b className="text-lg">{tr(`离线营业 · 仅本机保存 · 未同步 ${unsynced.length} 条`, `Offline · saved on this device only · ${unsynced.length} not synced`)}</b>
+            <div className="text-sm">{tr('后厨屏不会自动收到，请把纸单递给厨师（人工传单）。', 'The kitchen screen will not get these — hand the paper ticket to the cook. ')}{reg.fromSnapshot ? `${tr('离线营业资格到', 'Offline allowed until')} ${new Date(reg.shift!.offlineCapabilityExpiresAtMs).toLocaleString('zh-CN', { hour12: false })}` : ''}</div>
           </div>
           {rt.manualOffline && browserOnline && (
-            <button type="button" onClick={() => void setManualOffline(false).then(() => syncNow())} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">恢复在线</button>
+            <button type="button" onClick={() => void setManualOffline(false).then(() => syncNow())} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">{tr('恢复在线', 'Back online')}</button>
           )}
-          <button type="button" onClick={() => navigate('/sync')} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">同步中心</button>
+          <button type="button" onClick={() => navigate('/sync')} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">{tr('同步中心', 'Sync')}</button>
         </div>
       )}
       {!offlineMode && (unsynced.length > 0 || reviewCount > 0 || rt.syncing) && (
         <div role="status" className="flex flex-wrap items-center gap-3 border-b border-warn bg-warn-bg px-4 py-2 text-warn">
-          <b>{rt.syncing ? '正在补同步本机记录…' : `本机还有 ${unsynced.length} 条未同步`}{reviewCount ? ` · ${reviewCount} 条待老板核对` : ''}</b>
-          <button type="button" onClick={() => navigate('/sync')} className="ml-auto h-10 rounded-lg border border-warn bg-card px-3 font-semibold">同步中心</button>
+          <b>{rt.syncing ? tr('正在补同步本机记录…', 'Syncing local records…') : tr(`本机还有 ${unsynced.length} 条未同步`, `${unsynced.length} local record(s) not synced`)}{reviewCount ? tr(` · ${reviewCount} 条待老板核对`, ` · ${reviewCount} need owner review`) : ''}</b>
+          <button type="button" onClick={() => navigate('/sync')} className="ml-auto h-10 rounded-lg border border-warn bg-card px-3 font-semibold">{tr('同步中心', 'Sync')}</button>
         </div>
       )}
-      {writer === 'busy' && <div role="alert" className="border-b border-danger bg-danger-bg px-4 py-2 font-semibold text-danger">另一个标签页正在收银。为避免重复记录，这个标签页只能查看。</div>}
+      {writer === 'busy' && <div role="alert" className="border-b border-danger bg-danger-bg px-4 py-2 font-semibold text-danger">{tr('另一个标签页正在收银。为避免重复记录，这个标签页只能查看。', 'Another tab is the register. This tab is view-only to avoid duplicates.')}</div>}
 
       <div className="flex flex-wrap items-center gap-3 border-b border-line bg-canvas px-4 py-2">
-        <div className="flex rounded-xl bg-subtle p-1" role="group" aria-label="就餐方式">
+        <div className="flex rounded-xl bg-subtle p-1" role="group" aria-label={tr('就餐方式', 'Service')}>
           {(['dine_in', 'takeaway'] as const).map((m) => (
             <button key={m} type="button" aria-pressed={cart.serviceMode === m} onClick={() => setCart(setServiceMode(cart, m))}
               className={`flex h-12 items-center gap-2 rounded-lg px-4 text-lg font-bold ${cart.serviceMode === m ? 'bg-card shadow' : 'text-ink-2'}`}>
-              <Icon name={m === 'dine_in' ? 'table' : 'bag'} size={30} />{m === 'dine_in' ? '堂食' : '打包'}
+              <Icon name={m === 'dine_in' ? 'table' : 'bag'} size={30} />{m === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
             </button>
           ))}
         </div>
         <button type="button" onClick={() => setPickerOpen(true)} className="flex h-14 items-center gap-3 rounded-xl border-2 border-control bg-card px-4">
-          <span className="text-lg">餐牌</span><b className="text-3xl tabular-nums">{token ?? '满'}</b><span aria-hidden>▾</span>
+          <span className="text-lg">{tr('餐牌', 'Token')}</span><b className="text-3xl tabular-nums">{token ?? tr('满', 'Full')}</b><span aria-hidden>▾</span>
         </button>
-        <span className="rounded-lg bg-ok-bg px-2 py-1 text-sm font-semibold text-ok">{counts.available}个可用</span>
+        <span className="rounded-lg bg-ok-bg px-2 py-1 text-sm font-semibold text-ok">{tr(`${counts.available}个可用`, `${counts.available} free`)}</span>
         {counts.awaiting_return > 0 && (
           <button type="button" onClick={() => setPickerOpen(true)} className="rounded-lg bg-warn-bg px-2 py-1 text-sm font-semibold text-warn">
-            {counts.awaiting_return}个待回收
+            {tr(`${counts.awaiting_return}个待回收`, `${counts.awaiting_return} to collect`)}
           </button>
         )}
-        {!tokensFromServer && <span className="text-sm text-warn">餐牌为本机记录{rt.snapshot ? `（快照 ${new Date(rt.snapshot.savedAtMs).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}</span>}
+        {!tokensFromServer && <span className="text-sm text-warn">{tr('餐牌为本机记录', 'Tokens from this device')}{rt.snapshot ? `（快照 ${new Date(rt.snapshot.savedAtMs).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}</span>}
       </div>
 
       {(unknownOps.length > 0 || notice) && (
         <div className="space-y-2 border-b border-warn bg-warn-bg px-4 py-2" role="alert">
           {unknownOps.map((op) => (
             <div key={op.operationId} className="flex flex-wrap items-center gap-3 text-warn">
-              <b>{op.summary.tokenNumber}号 · {formatRM(op.summary.totalSen)}：已记录收款，正在核对订单；请勿再次收钱。请问厨房是否收到这张单。</b>
-              {!offlineMode && <button type="button" onClick={() => void syncNow()} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">核对结果</button>}
+              <b>{tr(`${op.summary.tokenNumber}号 · ${formatRM(op.summary.totalSen)}：已记录收款，正在核对订单；请勿再次收钱。请问厨房是否收到这张单。`, `No. ${op.summary.tokenNumber} · ${formatRM(op.summary.totalSen)}: payment recorded, checking the order. Do NOT collect again. Ask the kitchen if they got it.`)}</b>
+              {!offlineMode && <button type="button" onClick={() => void syncNow()} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">{tr('核对结果', 'Check result')}</button>}
               {!offlineMode && <button type="button" onClick={() => void setManualOffline(true)} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">云端连不上？改为离线营业</button>}
             </div>
           ))}
           {notice && (
             <div className="flex items-center gap-3 text-ink"><span>{notice}</span>
-              <button type="button" onClick={() => setNotice(null)} className="ml-auto h-10 rounded-lg border border-control px-3">知道了</button>
+              <button type="button" onClick={() => setNotice(null)} className="ml-auto h-10 rounded-lg border border-control px-3">{tr('知道了', 'OK')}</button>
             </div>
           )}
         </div>
@@ -366,7 +368,7 @@ export function PosPage() {
         </section>
         <aside className={`${cartOpen ? 'fixed inset-x-0 top-16 bottom-0 z-30 flex' : 'hidden'} min-h-0 flex-col bg-card lg:static lg:z-auto lg:flex lg:max-w-[560px] lg:min-w-[340px] lg:flex-[38]`}>
           {cartOpen && (
-            <button type="button" onClick={() => setCartOpen(false)} className="h-12 border-b border-line font-semibold text-ink-2 lg:hidden">▼ 收起本单，继续点餐</button>
+            <button type="button" onClick={() => setCartOpen(false)} className="h-12 border-b border-line font-semibold text-ink-2 lg:hidden">{tr('▼ 收起本单，继续点餐', '▼ Hide order, keep ordering')}</button>
           )}
           <div className="min-h-0 flex-1">
             <CartPanel menu={menu} cart={cart} totals={totals} tokenNumber={token} editingLineId={editingLineId}
@@ -385,7 +387,9 @@ export function PosPage() {
                         const o = rt.localOrders.find((x) => x.clientOrderId === id);
                         if (!o) throw new Error('找不到本机订单');
                         const rec = rt.outbox.find((r) => r.event.type === 'offline_order_created' && r.event.payload.clientOrderId === id);
-                        return receiptFromLocal(o, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(rt.outbox.map((r) => r.event), id).served });
+                        const soldMenu = await menuForVersion(o.menuVersion);
+                        if (!soldMenu) throw new Error('本机没有这张单成交时的菜单版本');
+                        return receiptFromLocal(o, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(rt.outbox.map((r) => r.event), id).served });
                       },
                     });
                   }
@@ -410,25 +414,25 @@ export function PosPage() {
 
       <div className="flex items-center gap-2 border-t border-line bg-card p-2 lg:hidden">
         <button type="button" onClick={() => setCartOpen(true)} aria-expanded={cartOpen} className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-xl border-2 border-control px-3 text-left">
-          <span className="text-lg font-bold">本单 · {token ?? '—'}</span>
-          <span className="text-ink-2">{totals.portionCount}份</span>
-          {stage.kind === 'accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-ok">✓ {stage.result.tokenNumber}号已接单</span>}
-          {stage.kind === 'local_accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-warn">本机已接单 · 请人工传单</span>}
-          <span className="ml-auto text-sm text-ink-2">查看 ▲</span>
+          <span className="text-lg font-bold">{tr('本单', 'Order')} · {token ?? '—'}</span>
+          <span className="text-ink-2">{tr(`${totals.portionCount}份`, `${totals.portionCount} pcs`)}</span>
+          {stage.kind === 'accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-ok">✓ {tr(`${stage.result.tokenNumber}号已接单`, `No. ${stage.result.tokenNumber} accepted`)}</span>}
+          {stage.kind === 'local_accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-warn">{tr('本机已接单 · 请人工传单', 'Saved here · hand ticket over')}</span>}
+          <span className="ml-auto text-sm text-ink-2">{tr('查看 ▲', 'View ▲')}</span>
         </button>
         <button type="button" onClick={() => setPayOpen(true)} disabled={Boolean(payDisabledReason)}
-          className="h-14 shrink-0 rounded-xl bg-brand px-4 text-lg font-bold text-white disabled:bg-control">收款 {formatRM(totals.totalSen)}</button>
+          className="h-14 shrink-0 rounded-xl bg-brand px-4 text-lg font-bold text-white disabled:bg-control">{tr('收款', 'Pay')} {formatRM(totals.totalSen)}</button>
       </div>
 
       <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line bg-card px-4 py-2 text-base">
         <Icon name="clock" size={20} />
-        {offlineMode ? <span className="text-warn">断网中：厨房队列无法更新</span> : <span>厨房待做 <b>{queueQ.data.length}</b> 单</span>}
+        {offlineMode ? <span className="text-warn">{tr('断网中：厨房队列无法更新', 'Offline: kitchen queue not updating')}</span> : <span>{tr('厨房待做', 'Kitchen queue')} <b>{queueQ.data.length}</b> {tr('单', '')}</span>}
         {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} />}
         {!offlineMode && Number.isFinite(oldest) && <QueueClock since={oldest} />}
         {undo && (
           <span className="ml-auto flex items-center gap-2 rounded-lg bg-subtle px-3 py-1">
             {undo.label}
-            <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); setEditingLineId(null); }} className="h-10 rounded-lg border border-control px-3 font-semibold">撤销</button>
+            <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); setEditingLineId(null); }} className="h-10 rounded-lg border border-control px-3 font-semibold">{tr('撤销', 'Undo')}</button>
           </span>
         )}
       </footer>
@@ -443,8 +447,8 @@ export function PosPage() {
       )}
       {payOpen && stage.kind === 'rejected' && (
         <div role="alert" className="fixed bottom-28 right-4 z-50 max-w-[440px] rounded-xl border-2 border-danger bg-danger-bg p-4 text-danger shadow-xl">
-          <b>云端未接单：{stage.reason}</b>
-          <p className="text-sm">这次没有生成订单。若已收钱，请勿再次收钱，修正后再提交。</p>
+          <b>{tr('云端未接单：', 'Not accepted: ')}{stage.reason}</b>
+          <p className="text-sm">{tr('这次没有生成订单。若已收钱，请勿再次收钱，修正后再提交。', 'No order was created. If you already took money, do not collect again — fix and resubmit.')}</p>
         </div>
       )}
     </div>
@@ -454,14 +458,16 @@ export function PosPage() {
 function KitchenHealthBadge({ lastSeenMs }: { lastSeenMs: number | null }) {
   useNow(5000);
   const rt = useOfflineRuntime();
+  const tr = useT();
   const h = kitchenHealth(lastSeenMs, serverNow(rt));
-  if (h === 'online') return <span className="text-ok">· 后厨屏在线</span>;
-  return <span className="font-semibold text-danger">· {h === 'unknown' ? '后厨屏未连接' : `后厨屏离线（最后 ${formatClock(serverNow(rt) - lastSeenMs!)} 前）`}</span>;
+  if (h === 'online') return <span className="text-ok">· {tr('后厨屏在线', 'Kitchen online')}</span>;
+  return <span className="font-semibold text-danger">· {h === 'unknown' ? tr('后厨屏未连接', 'Kitchen not connected') : tr(`后厨屏离线（最后 ${formatClock(serverNow(rt) - lastSeenMs!)} 前）`, `Kitchen offline (last seen ${formatClock(serverNow(rt) - lastSeenMs!)} ago)`)}</span>;
 }
 
 function QueueClock({ since }: { since: number }) {
   const now = useNow();
-  return <span>· 最久 <b>{formatClock(now - since)}</b></span>;
+  const tr = useT();
+  return <span>· {tr('最久', 'Longest')} <b>{formatClock(now - since)}</b></span>;
 }
 
 /**
@@ -473,6 +479,7 @@ function SubmitSteps({ stage, kitchenAckAtMs, handedOff, onHandoff, kitchenLastS
   kitchenLastSeenMs: number | null; offsetMs: number; onlineHandoffAtMs: number | null; onOnlineHandoff: () => void; onReceipt: () => void;
 }) {
   const now = useNow(1000);
+  const tr = useT();
   if (stage.kind === 'idle') return null;
   const ack: AckState | null = stage.kind === 'accepted'
     ? ackState({ acceptedAtMs: stage.result.acceptedAtMs, kitchenAckAtMs, nowServerMs: now + offsetMs, kitchenLastSeenMs })
@@ -483,15 +490,15 @@ function SubmitSteps({ stage, kitchenAckAtMs, handedOff, onHandoff, kitchenLastS
   const cloud = stage.kind === 'accepted';
   const steps: { label: string; done: boolean; icon: 'register' | 'cloud' | 'cook' | 'handoff'; warn?: boolean }[] = offline
     ? [
-        { label: '本机已接单', done: true, icon: 'register' },
-        { label: '云端未同步（断网）', done: false, icon: 'cloud', warn: true },
-        { label: handedOff ? '已人工交接' : '请人工传单', done: handedOff, icon: 'handoff', warn: !handedOff },
+        { label: tr('本机已接单', 'Saved here'), done: true, icon: 'register' },
+        { label: tr('云端未同步（断网）', 'Not synced (offline)'), done: false, icon: 'cloud', warn: true },
+        { label: handedOff ? tr('已人工交接', 'Handed over') : tr('请人工传单', 'Hand ticket over'), done: handedOff, icon: 'handoff', warn: !handedOff },
       ]
     : [
-        { label: '本机已记录', done: local, icon: 'register' },
-        { label: '云端已接单', done: cloud, icon: 'cloud' },
+        { label: tr('本机已记录', 'Saved here'), done: local, icon: 'register' },
+        { label: tr('云端已接单', 'Accepted online'), done: cloud, icon: 'cloud' },
         {
-          label: kitchenAck ? '后厨已收到' : ack === 'alarm' ? '后厨屏可能离线' : ack === 'waiting' ? '等待厨房确认' : '正在送到后厨',
+          label: kitchenAck ? tr('后厨已收到', 'Kitchen got it') : ack === 'alarm' ? tr('后厨屏可能离线', 'Kitchen may be offline') : ack === 'waiting' ? tr('等待厨房确认', 'Waiting for kitchen') : tr('正在送到后厨', 'Sending to kitchen'),
           done: cloud && kitchenAck, icon: 'cook', warn: ack === 'waiting' || ack === 'alarm',
         },
       ];
@@ -510,41 +517,41 @@ function SubmitSteps({ stage, kitchenAckAtMs, handedOff, onHandoff, kitchenLastS
       </div>
       {ack === 'alarm' && (
         <div role="alert" className="mt-2 rounded-lg border-2 border-danger bg-danger-bg p-2 text-center text-danger">
-          <b>已超过 15 秒没有后厨回执，后厨屏可能离线。请把纸单递给厨师。</b>
+          <b>{tr('已超过 15 秒没有后厨回执，后厨屏可能离线。请把纸单递给厨师。', 'No kitchen receipt after 15 s — the kitchen screen may be offline. Hand the paper ticket to the cook.')}</b>
           {onlineHandoffAtMs
-            ? <p className="mt-1 font-semibold">✓ 已登记人工传单；后厨屏恢复后会看到提示，避免做两份。</p>
-            : <button type="button" onClick={onOnlineHandoff} className="mt-2 inline-flex h-12 items-center gap-2 rounded-xl bg-danger px-4 font-bold text-white"><Icon name="handoff" size={28} />我已递纸单给厨师</button>}
+            ? <p className="mt-1 font-semibold">✓ {tr('已登记人工传单；后厨屏恢复后会看到提示，避免做两份。', 'Hand-over recorded; the kitchen screen will show it to avoid cooking twice.')}</p>
+            : <button type="button" onClick={onOnlineHandoff} className="mt-2 inline-flex h-12 items-center gap-2 rounded-xl bg-danger px-4 font-bold text-white"><Icon name="handoff" size={28} />{tr('我已递纸单给厨师', 'I gave the ticket to the cook')}</button>}
         </div>
       )}
       {stage.kind === 'accepted' && (
         <p className="mt-2 text-center font-semibold">
-          {stage.result.tokenNumber}号 · 票号 {stage.result.receiptNumber} · {formatRM(stage.result.totalSen)}
-          {stage.result.changeSen !== null && stage.result.changeSen > 0 && <> · 找零 <span className="text-xl">{formatRM(stage.result.changeSen)}</span></>}
+          {tr(`${stage.result.tokenNumber}号 · 票号 ${stage.result.receiptNumber}`, `No. ${stage.result.tokenNumber} · receipt ${stage.result.receiptNumber}`)} · {formatRM(stage.result.totalSen)}
+          {stage.result.changeSen !== null && stage.result.changeSen > 0 && <> · {tr('找零', 'change')} <span className="text-xl">{formatRM(stage.result.changeSen)}</span></>}
         </p>
       )}
       {offline && (
         <div className="mt-2 text-center">
           <p className="font-semibold">
-            {stage.tokenNumber}号 · 临时号 {stage.offlineReceiptNumber} · {formatRM(stage.totalSen)}
-            {stage.changeSen !== null && stage.changeSen > 0 && <> · 找零 <span className="text-xl">{formatRM(stage.changeSen)}</span></>}
+            {tr(`${stage.tokenNumber}号 · 临时号 ${stage.offlineReceiptNumber}`, `No. ${stage.tokenNumber} · temp ${stage.offlineReceiptNumber}`)} · {formatRM(stage.totalSen)}
+            {stage.changeSen !== null && stage.changeSen > 0 && <> · {tr('找零', 'change')} <span className="text-xl">{formatRM(stage.changeSen)}</span></>}
           </p>
-          <p className="text-sm text-warn">已保存在本机；后厨屏不会收到。请把纸单递给厨师。</p>
+          <p className="text-sm text-warn">{tr('已保存在本机；后厨屏不会收到。请把纸单递给厨师。', 'Saved on this device; the kitchen screen will not get it. Hand the ticket to the cook.')}</p>
           {!handedOff && (
             <button type="button" onClick={onHandoff} className="mt-2 inline-flex h-12 items-center gap-2 rounded-xl bg-warn px-4 font-bold text-white">
-              <Icon name="handoff" size={28} />我已把单交给厨师
+              <Icon name="handoff" size={28} />{tr('我已把单交给厨师', 'I handed it to the cook')}
             </button>
           )}
         </div>
       )}
       {(stage.kind === 'accepted' || offline) && (
         <div className="mt-2 text-center">
-          <button type="button" onClick={onReceipt} className="h-11 rounded-lg border border-control bg-card px-4 font-semibold">收据</button>
+          <button type="button" onClick={onReceipt} className="h-11 rounded-lg border border-control bg-card px-4 font-semibold">{tr('收据', 'Receipt')}</button>
         </div>
       )}
-      {stage.kind === 'submitting' && <p className="mt-2 text-center text-warn">正在提交，请勿重复收钱或重复点击。</p>}
-      {stage.kind === 'unknown' && <p className="mt-2 text-center font-semibold text-warn">已记录收款，正在核对订单；请勿再次收钱。</p>}
-      {stage.kind === 'local_failed' && <p className="mt-2 text-center font-semibold text-danger">本机保存失败，订单尚未确认（{stage.message}）。购物车已保留。</p>}
-      {stage.kind === 'rejected' && <p className="mt-2 text-center font-semibold text-danger">云端未接单：{stage.reason}</p>}
+      {stage.kind === 'submitting' && <p className="mt-2 text-center text-warn">{tr('正在提交，请勿重复收钱或重复点击。', 'Submitting — do not collect again or tap again.')}</p>}
+      {stage.kind === 'unknown' && <p className="mt-2 text-center font-semibold text-warn">{tr('已记录收款，正在核对订单；请勿再次收钱。', 'Payment recorded, checking the order. Do NOT collect again.')}</p>}
+      {stage.kind === 'local_failed' && <p className="mt-2 text-center font-semibold text-danger">{tr('本机保存失败，订单尚未确认', 'Could not save on this device — order not confirmed')}（{stage.message}）{tr('。购物车已保留。', '. Cart kept.')}</p>}
+      {stage.kind === 'rejected' && <p className="mt-2 text-center font-semibold text-danger">{tr('云端未接单：', 'Not accepted: ')}{stage.reason}</p>}
     </div>
   );
 }
@@ -555,13 +562,14 @@ function RegisterGate({ status, isOwner }: { status: string; isOwner: boolean })
   const [floatText, setFloatText] = useState('100');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  if (status === 'loading') return <p className="p-6">正在检查收银机…</p>;
+  const tr = useT();
+  if (status === 'loading') return <p className="p-6">{tr('正在检查收银机…', 'Checking register…')}</p>;
   if (status === 'offline_expired') {
     return (
       <div className="mx-auto mt-10 max-w-lg rounded-2xl border-2 border-danger bg-card p-6">
-        <h2 className="text-2xl font-bold text-danger">离线营业资格已过期（超过 24 小时）</h2>
-        <p className="mt-2">请改用纸单营业，并通知老板。已有的本机记录仍可在「同步」页查看和导出。</p>
-        <button type="button" onClick={() => navigate('/sync')} className="mt-4 h-14 rounded-xl bg-brand px-6 text-lg font-bold text-white">去同步中心</button>
+        <h2 className="text-2xl font-bold text-danger">{tr('离线营业资格已过期（超过 24 小时）', 'Offline allowance expired (over 24 h)')}</h2>
+        <p className="mt-2">{tr('请改用纸单营业，并通知老板。已有的本机记录仍可在「同步」页查看和导出。', 'Use paper tickets and tell the owner. Existing records can still be viewed and exported in Sync.')}</p>
+        <button type="button" onClick={() => navigate('/sync')} className="mt-4 h-14 rounded-xl bg-brand px-6 text-lg font-bold text-white">{tr('去同步中心', 'Open Sync')}</button>
       </div>
     );
   }
@@ -569,18 +577,18 @@ function RegisterGate({ status, isOwner }: { status: string; isOwner: boolean })
     return (
       <div className="mx-auto mt-10 max-w-lg rounded-2xl border border-line bg-card p-6">
         <Icon name="register" size={56} />
-        <h2 className="mt-2 text-2xl font-bold">这台设备不是主收银机</h2>
+        <h2 className="mt-2 text-2xl font-bold">{tr('这台设备不是主收银机', 'This device is not the main register')}</h2>
         <p className="mt-2 text-ink-2">首版只允许一台指定收银设备接单。{isOwner ? '老板可以在「设备」页把这台设备设为主收银机。' : '请老板在这台设备上登录并指定。'}</p>
-        {isOwner && <button type="button" onClick={() => navigate('/device')} className="mt-4 h-14 rounded-xl bg-brand px-6 text-lg font-bold text-white">去设备页</button>}
+        {isOwner && <button type="button" onClick={() => navigate('/device')} className="mt-4 h-14 rounded-xl bg-brand px-6 text-lg font-bold text-white">{tr('去设备页', 'Open Device')}</button>}
       </div>
     );
   }
   return (
     <div className="mx-auto mt-10 max-w-lg rounded-2xl border border-line bg-card p-6">
       <Icon name="cash" size={56} />
-      <h2 className="mt-2 text-2xl font-bold">开班</h2>
-      <p className="mt-1 text-ink-2">点清钱箱里的备用金后开班。开班需要联网；开班后这台收银机断网也能接单（最多 24 小时）。</p>
-      <label className="mt-4 block font-semibold" htmlFor="float">备用金 (RM)</label>
+      <h2 className="mt-2 text-2xl font-bold">{tr('开班', 'Open shift')}</h2>
+      <p className="mt-1 text-ink-2">{tr('点清钱箱里的备用金后开班。开班需要联网；开班后这台收银机断网也能接单（最多 24 小时）。', 'Count the float in the drawer, then open the shift. Needs internet; afterwards this register can take orders offline for up to 24 h.')}</p>
+      <label className="mt-4 block font-semibold" htmlFor="float">{tr('备用金 (RM)', 'Float (RM)')}</label>
       <input id="float" inputMode="decimal" value={floatText} onChange={(e) => setFloatText(e.target.value)} className="mt-1 h-14 w-full rounded-lg border border-control px-3 text-2xl tabular-nums" />
       {err && <p role="alert" className="mt-2 text-danger">{err}</p>}
       <button type="button" disabled={busy || parseRMInput(floatText) === null || !reg.claim}
@@ -595,7 +603,7 @@ function RegisterGate({ status, isOwner }: { status: string; isOwner: boolean })
             setBusy(false);
           }
         }}
-        className="mt-4 h-14 w-full rounded-xl bg-brand text-lg font-bold text-white disabled:bg-control">{busy ? '正在开班…' : '确认开班'}</button>
+        className="mt-4 h-14 w-full rounded-xl bg-brand text-lg font-bold text-white disabled:bg-control">{busy ? tr('正在开班…', 'Opening…') : tr('确认开班', 'Open shift')}</button>
     </div>
   );
 }

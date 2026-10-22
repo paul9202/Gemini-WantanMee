@@ -1,0 +1,102 @@
+[
+  {
+    "name": "设置页显示成员、菜单、成本三部分",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "邀请成员后得到设置密码链接",
+    "ok": true,
+    "detail": "http://127.0.0.1:9099/emulator/action?mode=resetPassword&lan"
+  },
+  {
+    "name": "成员文档：后厨岗位、启用",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "设置密码链接可用",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "新员工登录后进入后厨",
+    "ok": true,
+    "detail": "/kitchen"
+  },
+  {
+    "name": "设备页切换英文",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "发布前：红酱面 RM7 起",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "发布新菜单版本",
+    "ok": true,
+    "detail": "menu-2026-10-v1 → menu-20261022-01"
+  },
+  {
+    "name": "收银机自动显示新价 RM8 起",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "售罄入口显示「已售罄」并不可点",
+    "ok": true,
+    "detail": "{\"price\":true,\"soldOut\":true,\"disabled\":true}"
+  },
+  {
+    "name": "POS 英文：Sold out / from RM8 / Pay",
+    "ok": true,
+    "detail": "{\"sold\":true,\"from\":true,\"pay\":true}"
+  },
+  {
+    "name": "新单按新菜单版本 RM8 成交",
+    "ok": true,
+    "detail": "menu-20261022-01 800"
+  },
+  {
+    "name": "KDS 英文：菜名、待下锅、开始制作",
+    "ok": true,
+    "detail": "{\"start\":true,\"name\":true,\"noodle\":true}"
+  },
+  {
+    "name": "图卡页（英文）显示 6 种餐品与图卡含义",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "图卡页（中文）：面条、当前价格、净面规则",
+    "ok": true,
+    "detail": "{\"noodles\":true,\"price\":true,\"kosong\":true}"
+  },
+  {
+    "name": "打印样式：隐藏顶部导航、保留图卡",
+    "ok": true,
+    "detail": "{\"header\":\"none\",\"sheet\":\"block\"}"
+  },
+  {
+    "name": "A4 打印 PDF 为单页",
+    "ok": true,
+    "detail": "1 页 · 2535823 bytes"
+  },
+  {
+    "name": "手机宽度图卡页无横向溢出",
+    "ok": true,
+    "detail": "0px"
+  },
+  {
+    "name": "停用成员",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "停用后员工不能进入后厨（成员错误页或被登出）",
+    "ok": true,
+    "detail": "豪 豪云吞面 Staff sign-in Account Password Sign in Local test environment (Emulator). No real cloud data. 中文"
+  }
+]

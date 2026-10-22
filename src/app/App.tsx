@@ -12,6 +12,8 @@ import { OverviewPage } from '../features/owner/OverviewPage';
 import { FinancePage } from '../features/owner/FinancePage';
 import { ReviewPage } from '../features/owner/ReviewPage';
 import { ClosePage } from '../features/owner/ClosePage';
+import { SettingsPage } from '../features/owner/SettingsPage';
+import { TrainingPage } from '../features/training/TrainingPage';
 import { IconSprite } from '../ui/visual';
 import { Login } from './Login';
 import { navigate, Route, useRoute } from './router';
@@ -28,6 +30,8 @@ const ALLOWED: Record<Exclude<Route, '/login'>, Role[]> = {
   '/owner/finance': ['owner'],
   '/owner/review': ['owner'],
   '/owner/close': ['owner'],
+  '/owner/settings': ['owner'],
+  '/training': ['owner', 'cashier', 'kitchen'],
 };
 const HOME: Record<Role, Route> = { owner: '/owner', cashier: '/pos', kitchen: '/kitchen' };
 
@@ -59,7 +63,9 @@ function Routes() {
   if (route === '/owner/finance') return <Shell route="/owner"><FinancePage /></Shell>;
   if (route === '/owner/review') return <Shell route="/owner"><ReviewPage /></Shell>;
   if (route === '/owner/close') return <Shell route="/owner"><ClosePage /></Shell>;
+  if (route === '/owner/settings') return <Shell route="/owner"><SettingsPage /></Shell>;
   if (route === '/device') return <Shell route="/device"><DevicePage /></Shell>;
+  if (route === '/training') return <Shell route="/training"><TrainingPage /></Shell>;
   return <Shell route="/pos"><PosPage /></Shell>;
 }
 

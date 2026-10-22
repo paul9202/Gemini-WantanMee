@@ -8,6 +8,7 @@ import { ENTRY_TILES, EntryTile, Level, MenuVersion, NOODLE_TYPE_NAMES, Sauce, S
 import { formatRM } from '../../domain/money';
 import { PictogramId } from '../../domain/pictograms';
 import { Icon, PictoArt, Photo } from '../../ui/visual';
+import { useT } from '../../app/i18n';
 
 function Step({ n, title, hint, children }: { n: string; title: string; hint?: string; children: ReactNode }) {
   return (
@@ -57,6 +58,7 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
   const [showMore, setShowMore] = useState(false);
   const moreOpen = showMore || hasSpecial;
   const price = unitPriceSen(menu, config);
+  const tr = useT();
 
   const toggleAddOn = (id: 'char_siew' | 'wanton_3') =>
     set({ addOns: config.addOns.includes(id) ? config.addOns.filter((a) => a !== id) : [...config.addOns, id] });
@@ -65,7 +67,10 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
       {(['normal', 'extra', 'none'] as Level[]).map((lv) => {
         const id = `${kind}:${lv}` as PictogramId;
-        const zh = { scallion: { normal: '正常葱', extra: '多葱', none: '走青' }, lard: { normal: '正常油渣', extra: '多油渣', none: '无油渣' } }[kind][lv];
+        const zh = tr(
+          { scallion: { normal: '正常葱', extra: '多葱', none: '走青' }, lard: { normal: '正常油渣', extra: '多油渣', none: '无油渣' } }[kind][lv],
+          { scallion: { normal: 'Scallion', extra: 'Extra scallion', none: 'No scallion' }, lard: { normal: 'Lard crisps', extra: 'Extra lard', none: 'No lard' } }[kind][lv],
+        );
         return (
           <Choice key={lv} selected={value === lv} onClick={() => set({ [kind]: lv })} className="flex items-center justify-center gap-2 px-2 py-2">
             <PictoArt id={id} size={30} /><span className="font-semibold">{zh}</span>
@@ -78,19 +83,19 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
   return (
     <div className="flex h-full flex-col">
       <div className="flex-1 overflow-y-auto p-4 pb-2">
-        <Step n="1" title="看图选餐" hint="6张入口 · 4类餐品">
+        <Step n="1" title={tr('看图选餐', 'Pick the dish')} hint={tr('6张入口 · 4类餐品', '6 photos · 4 dishes')}>
           <div className="grid grid-cols-3 gap-2 sm:gap-3 xl:grid-cols-6">
             {ENTRY_TILES.map((t) => {
               const sel = tileSelected(t, config);
               const from = Math.min(...menu.products[t.productKind].sizes.map((s) => s.priceSen));
               const soldOut = menu.soldOut.includes(t.productKind);
               return (
-                <Choice key={t.id} selected={sel} disabled={soldOut} label={t.nameZh}
+                <Choice key={t.id} selected={sel} disabled={soldOut} label={tr(t.nameZh, t.nameEn)}
                   onClick={() => set({ productKind: t.productKind, sauce: t.productKind === 'dry_noodle' ? t.sauce : config.sauce })}
                   className="flex min-w-0 flex-col items-center gap-1 p-1.5 pb-2 sm:p-2 sm:pb-3">
                   <Photo id={t.photoId} size={104} rounded={10} fluid />
-                  <b className="text-base sm:text-lg">{t.nameZh}</b>
-                  <span className="text-sm text-ink-2">{soldOut ? '已售罄' : `${formatRM(from).replace('.00', '')} 起`}</span>
+                  <b className="text-base sm:text-lg">{tr(t.nameZh, t.nameEn)}</b>
+                  <span className="text-sm text-ink-2">{soldOut ? tr('已售罄', 'Sold out') : tr(`${formatRM(from).replace('.00', '')} 起`, `from ${formatRM(from).replace('.00', '')}`)}</span>
                 </Choice>
               );
             })}
@@ -98,12 +103,12 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
         </Step>
 
         {product.hasNoodle && (
-          <Step n="2" title="面条种类">
+          <Step n="2" title={tr('面条种类', 'Noodles')}>
             <div className="grid grid-cols-2 gap-3">
               {(['thin_egg', 'mee_poh'] as const).map((nt) => (
                 <Choice key={nt} selected={config.noodleType === nt} onClick={() => set({ noodleType: nt })} className="flex items-center gap-4 p-2 pr-10">
                   <Photo id={NOODLE_TYPE_NAMES[nt].photoId} size={80} rounded={10} />
-                  <b className="text-xl">{NOODLE_TYPE_NAMES[nt].zh}</b>
+                  <b className="text-xl">{tr(NOODLE_TYPE_NAMES[nt].zh, NOODLE_TYPE_NAMES[nt].en)}</b>
                 </Choice>
               ))}
             </div>
@@ -111,19 +116,19 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
         )}
 
         {config.productKind === 'dry_wanton' && (
-          <Step n="2" title="酱料" hint="干捞云吞依餐牌只有红 / 黑酱">
+          <Step n="2" title={tr('酱料', 'Sauce')} hint={tr('干捞云吞依餐牌只有红 / 黑酱', 'Red or black only')}>
             <div className="grid grid-cols-2 gap-3">
               {product.sauces.map((s: Sauce) => (
                 <Choice key={s} selected={config.sauce === s} onClick={() => set({ sauce: s })} className="flex items-center gap-3 px-4 py-3">
                   <span className={`h-9 w-9 rounded-full border-2 border-white shadow ${s === 'red' ? 'bg-[#c7482c]' : 'bg-[#2b211c]'}`} />
-                  <b className="text-xl">{SAUCE_NAMES[s].zh}</b>
+                  <b className="text-xl">{tr(SAUCE_NAMES[s].zh, SAUCE_NAMES[s].en)}</b>
                 </Choice>
               ))}
             </div>
           </Step>
         )}
 
-        <Step n="3" title="份量" hint={product.hasNoodle ? '用面团图分清 1／1½／2' : '云吞粒数'}>
+        <Step n="3" title={tr('份量', 'Size')} hint={product.hasNoodle ? tr('用面团图分清 1／1½／2', 'Noodle balls 1 / 1½ / 2') : tr('云吞粒数', 'Wantan count')}>
           <div className={`grid gap-3 ${product.sizes.length === 3 ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-2'}`}>
             {product.sizes.map((s: SizeDef) => {
               const p = config.isKosong && s.kosongPriceSen !== null ? s.kosongPriceSen : s.priceSen;
@@ -140,7 +145,7 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
                   </span>
                   <b className="text-2xl">{s.badge}</b>
                   <span className="ml-auto text-right leading-tight">
-                    <span className="block text-sm text-ink-2">{s.nameZh}</span>
+                    <span className="block text-sm text-ink-2">{tr(s.nameZh, s.nameEn)}</span>
                     <b className="text-base">{formatRM(p)}</b>
                   </span>
                 </Choice>
@@ -150,12 +155,12 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
         </Step>
 
         {product.allowsSpiceAndLard && (
-          <Step n="4" title="辣度">
+          <Step n="4" title={tr('辣度', 'Chili')}>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {(['none', 'less', 'normal', 'extra'] as Spice[]).map((sp) => (
                 <Choice key={sp} selected={config.spice === sp} onClick={() => set({ spice: sp })} className="flex flex-col items-center justify-center gap-1 py-2">
                   <PictoArt id={`spice:${sp}`} size={26} />
-                  <span className="font-semibold">{{ none: '不辣', less: '少辣', normal: '普通', extra: '加辣' }[sp]}</span>
+                  <span className="font-semibold">{tr({ none: '不辣', less: '少辣', normal: '普通', extra: '加辣' }[sp], { none: 'No chili', less: 'Less', normal: 'Normal', extra: 'Extra' }[sp])}</span>
                 </Choice>
               ))}
             </div>
@@ -166,30 +171,30 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
           <button type="button" onClick={() => setShowMore(!moreOpen)} aria-expanded={moreOpen}
             className="mb-2 flex w-full items-center gap-2 text-left">
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink text-sm font-bold text-white">＋</span>
-            <h2 className="text-lg font-bold">其他要求</h2>
-            <span className="ml-auto text-sm text-ink-2">{moreOpen ? '收起' : '有需要再点'}</span>
+            <h2 className="text-lg font-bold">{tr('其他要求', 'Special requests')}</h2>
+            <span className="ml-auto text-sm text-ink-2">{moreOpen ? tr('收起', 'Hide') : tr('有需要再点', 'Tap if needed')}</span>
           </button>
           {moreOpen && (
             <div className="space-y-3 rounded-xl border border-line bg-card p-3">
-              <div><div className="mb-1 text-sm font-semibold text-ink-2">葱花</div>{levelRow('scallion', config.scallion)}</div>
-              {config.lard !== null && <div><div className="mb-1 text-sm font-semibold text-ink-2">油渣</div>{levelRow('lard', config.lard)}</div>}
+              <div><div className="mb-1 text-sm font-semibold text-ink-2">{tr('葱花', 'Scallion')}</div>{levelRow('scallion', config.scallion)}</div>
+              {config.lard !== null && <div><div className="mb-1 text-sm font-semibold text-ink-2">{tr('油渣', 'Lard crisps')}</div>{levelRow('lard', config.lard)}</div>}
               <div>
-                <div className="mb-1 text-sm font-semibold text-ink-2">加料 · 每项 RM2</div>
+                <div className="mb-1 text-sm font-semibold text-ink-2">{tr('加料 · 每项 RM2', 'Add-ons · RM2 each')}</div>
                 <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
                   {product.addOns.includes('char_siew') && (
                     <Choice selected={config.addOns.includes('char_siew')} disabled={config.isKosong} onClick={() => toggleAddOn('char_siew')} className="flex items-center gap-2 px-3 py-2">
-                      <PictoArt id="addon:char_siew" size={34} /><span className="font-semibold">加叉烧 +RM2</span>
+                      <PictoArt id="addon:char_siew" size={34} /><span className="font-semibold">{tr('加叉烧 +RM2', '+Char siew RM2')}</span>
                       {config.isKosong && <span className="text-xs text-ink-2">🔒 净面不可加</span>}
                     </Choice>
                   )}
                   <Choice selected={config.addOns.includes('wanton_3')} disabled={config.isKosong} onClick={() => toggleAddOn('wanton_3')} className="flex items-center gap-2 px-3 py-2">
-                    <PictoArt id="addon:wanton_3" size={30} /><span className="font-semibold">加3粒 +RM2</span>
+                    <PictoArt id="addon:wanton_3" size={30} /><span className="font-semibold">{tr('加3粒 +RM2', '+3 wantan RM2')}</span>
                     {config.isKosong && <span className="text-xs text-ink-2">🔒 净面不可加</span>}
                   </Choice>
                   {product.allowsKosong && (
                     <Choice selected={config.isKosong} onClick={() => set({ isKosong: !config.isKosong })} className="flex items-center gap-2 px-3 py-2">
                       <PictoArt id="kosong:on" size={30} />
-                      <span className="text-left font-semibold leading-tight">净面 · 半价<br /><span className="text-xs font-normal text-ink-2">无叉烧、无云吞</span></span>
+                      <span className="text-left font-semibold leading-tight">{tr('净面 · 半价', 'Kosong · half price')}<br /><span className="text-xs font-normal text-ink-2">{tr('无叉烧、无云吞', 'No char siew, no wantan')}</span></span>
                     </Choice>
                   )}
                 </div>
@@ -202,17 +207,17 @@ export function ProductPanel({ menu, config, onChange, editing, onSubmit, onCanc
       <div className="flex items-center gap-3 border-t border-line bg-card px-4 py-3">
         <div className="min-w-0 flex-1">
           <div className="truncate text-lg font-bold">
-            {config.isKosong ? '净面 · ' : ''}{config.productKind === 'dry_noodle' ? `${SAUCE_NAMES[config.sauce!].zh}面` : product.nameZh}
-            {config.noodleType ? ` · ${NOODLE_TYPE_NAMES[config.noodleType].zh}` : ''} · {product.sizes.find((s) => s.id === config.size)?.badge}
+            {config.isKosong ? tr('净面 · ', 'Kosong · ') : ''}{config.productKind === 'dry_noodle' ? tr(`${SAUCE_NAMES[config.sauce!].zh}面`, `${SAUCE_NAMES[config.sauce!].en} Sauce`) : tr(product.nameZh, product.nameEn)}
+            {config.noodleType ? ` · ${tr(NOODLE_TYPE_NAMES[config.noodleType].zh, NOODLE_TYPE_NAMES[config.noodleType].en)}` : ''} · {product.sizes.find((s) => s.id === config.size)?.badge}
           </div>
-          <div className="truncate text-sm text-ink-2">{hasSpecial ? '含特殊要求' : '标准配料'}</div>
+          <div className="truncate text-sm text-ink-2">{hasSpecial ? tr('含特殊要求', 'With special requests') : tr('标准配料', 'Standard')}</div>
         </div>
         {editing && (
-          <button type="button" onClick={onCancelEdit} className="h-14 rounded-xl border border-control px-4 font-semibold">取消修改</button>
+          <button type="button" onClick={onCancelEdit} className="h-14 rounded-xl border border-control px-4 font-semibold">{tr('取消修改', 'Cancel edit')}</button>
         )}
         <button type="button" onClick={onSubmit} className="flex h-14 items-center gap-2 rounded-xl bg-brand px-5 text-lg font-bold text-white hover:bg-brand-pressed">
           <Icon name="bowl" size={24} />
-          {editing ? '保存修改' : '＋ 加入本单'}
+          {editing ? tr('保存修改', 'Save change') : tr('＋ 加入本单', '＋ Add to order')}
           <span className="ml-2 tabular-nums">{formatRM(price)}</span>
         </button>
       </div>

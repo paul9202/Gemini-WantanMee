@@ -21,6 +21,7 @@ import { useRegister } from '../../data/register';
 import { Icon } from '../../ui/visual';
 import { useSession } from '../../app/session';
 import { ReceiptDialog, receiptFromLocal } from '../receipt/ReceiptDialog';
+import { menuForVersion } from '../../data/menu';
 
 const REVIEW_ZH: Record<OfflineReviewReason, string> = {
   REGISTER_REVOKED: '这台设备已不是主收银机（换机）',
@@ -212,7 +213,11 @@ export function SyncPage() {
         const rec = createRecord(receiptOrder);
         return (
           <ReceiptDialog receiptKey={receiptOrder.clientOrderId} menuVersion={receiptOrder.menuVersion} timeZone={config.timeZone} onClose={() => setReceiptOrder(null)}
-            load={async () => receiptFromLocal(receiptOrder, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(events, receiptOrder.clientOrderId).served })} />
+            load={async () => {
+              const soldMenu = await menuForVersion(receiptOrder.menuVersion);
+              if (!soldMenu) throw new Error('本机没有这张单成交时的菜单版本');
+              return receiptFromLocal(receiptOrder, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(events, receiptOrder.clientOrderId).served });
+            }} />
         );
       })()}
 

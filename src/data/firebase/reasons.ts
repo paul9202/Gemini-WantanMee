@@ -1,4 +1,28 @@
-/** 服务器 reasonCode → 员工可读的中文说明（不展示堆栈或技术细节）。 */
+/** 服务器 reasonCode → 员工可读的说明（随本机语言；不展示堆栈或技术细节）。 */
+import { currentLang } from '../../app/i18n';
+
+const REASONS_EN: Record<string, string> = {
+  UNAUTHENTICATED: 'Signed out — please sign in again',
+  NOT_A_MEMBER: 'This account is not a member of the stall or is disabled',
+  FORBIDDEN: 'This account cannot do that',
+  INVALID_ARGUMENT: 'Incomplete request — please retry',
+  INVALID_MODIFIER: 'Item options do not match the menu',
+  TOKEN_OCCUPIED: 'This token is still in use — check the physical token or pick another',
+  TOKEN_NOT_AWAITING_RETURN: 'This order is not served yet — cannot collect the token',
+  STALE_VERSION: 'Updated on another device — please check again',
+  MENU_CHANGED: 'Menu updated — please confirm the price again',
+  PRICE_MISMATCH: 'Total differs from the server — please confirm again',
+  PAYMENT_NOT_CONFIRMED: 'Payment not confirmed',
+  REGISTER_REVOKED: 'This device is not the main register',
+  SEQUENCE_GAP: 'Local records out of order — resolve pending items first',
+  SHIFT_NOT_OPEN: 'Shift not opened',
+  DAY_CLOSED: 'Business day already closed',
+  ORDER_ID_CONFLICT: 'This order already exists — not charged twice',
+  INVALID_TRANSITION: 'The order cannot do that now',
+  UNDO_WINDOW_EXPIRED: 'More than 30 seconds — cannot undo',
+  TOKEN_REASSIGNED: 'Token already collected or reused — cannot undo',
+  UNKNOWN_RESULT: 'Network unstable — result not confirmed',
+};
 const REASONS: Record<string, string> = {
   UNAUTHENTICATED: '登录已失效，请重新登录',
   NOT_A_MEMBER: '当前账号不是本店成员或已停用',
@@ -35,5 +59,6 @@ const REASONS: Record<string, string> = {
 };
 
 export function reasonText(code: string): string {
+  if (currentLang() === 'en') return REASONS_EN[code] ?? REASONS[code] ?? `Failed (${code})`;
   return REASONS[code] ?? `操作失败（${code}）`;
 }

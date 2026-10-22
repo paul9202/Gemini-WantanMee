@@ -48,10 +48,10 @@
   }
 }
 
-/* 收据打印：只输出 #print-root 里的收据，其他内容不参与排版。 */
+/* 收据打印：收据弹窗打开时（#print-root 有内容）只输出收据；其他页面（如培训图卡）正常打印。 */
 #print-root { display: none; }
 @media print {
   html, body { background: #fff !important; margin: 0 !important; }
-  body > :not(#print-root) { display: none !important; }
-  #print-root { display: block !important; }
+  body:has(> #print-root:not(:empty)) > :not(#print-root) { display: none !important; }
+  body:has(> #print-root:not(:empty)) > #print-root { display: block !important; }
 }

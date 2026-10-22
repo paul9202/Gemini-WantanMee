@@ -6,11 +6,10 @@
  * - dismiss：不入账，保留原记录与原因。
  */
 import { Firestore } from 'firebase-admin/firestore';
-import { BOM_VERSIONS } from '../../../src/domain/bom';
 import { businessDateOf } from '../../../src/domain/businessDay';
 import { computeTotals } from '../../../src/domain/cart';
 import { LineConfig, parseLineConfig } from '../../../src/domain/lineItem';
-import { MENU_VERSIONS } from '../../../src/domain/menu';
+import { loadBom, loadMenu } from '../core/catalog';
 import { effectiveTimeMs, OfflineEvent, OfflineReviewReason } from '../../../src/domain/offline';
 import { runCommand } from '../core/command';
 import { CommandError } from '../core/errors';
@@ -66,8 +65,8 @@ export async function resolveOfflineReview(db: Firestore, uid: string | undefine
         if (reasonCode === 'PAYMENT_UNVERIFIED' && !input.confirmPaymentReceived) throw new CommandError('REVIEW_NOT_ALLOWED', '请先确认银行端已经到账');
         if (order) throw new CommandError('REVIEW_NOT_ALLOWED', '订单号已存在');
         const p = e.payload;
-        const menu = MENU_VERSIONS[p.menuVersion];
-        const bom = BOM_VERSIONS[config.activeBomVersion];
+        const menu = await loadMenu(tx, store, p.menuVersion);
+        const bom = await loadBom(tx, store, config.activeBomVersion);
         if (!menu || !bom) throw new CommandError('REVIEW_NOT_ALLOWED', '菜单版本无法核实');
         const lines: { lineId: string; config: LineConfig; quantity: number }[] = [];
         for (const l of p.lines) {

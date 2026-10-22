@@ -13,7 +13,7 @@ export type CommandName =
   | 'startOrder' | 'serveOrder' | 'undoServe' | 'requestCancel' | 'confirmKitchenCancel'
   | 'confirmFullRefund' | 'manageMember' | 'assignRegister' | 'syncOfflineEvents' | 'routeManualOrderToKitchen'
   | 'heartbeatDevice' | 'recordManualHandoff' | 'resolveOfflineReview' | 'recordExpense' | 'voidLedgerEntry' | 'recordWastage'
-  | 'recordCashMovement' | 'closeBusinessDay' | 'restateBusinessDay';
+  | 'recordCashMovement' | 'closeBusinessDay' | 'restateBusinessDay' | 'inviteMember' | 'publishMenu' | 'publishBom';
 
 export class CommandFailure extends Error {
   constructor(

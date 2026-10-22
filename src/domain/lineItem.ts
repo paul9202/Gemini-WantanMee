@@ -5,7 +5,7 @@
  */
 import {
   ADD_ON_IDS, AddOnId, LEVELS, Level, MenuVersion, NOODLE_TYPES, NoodleType, PRODUCT_KINDS,
-  ProductKind, SAUCES, SPICES, Sauce, SizeId, Spice, getSize,
+  ProductKind, SAUCES, SAUCE_NAMES, SPICES, Sauce, SizeId, Spice, getSize,
 } from './menu';
 import type { Sen } from './money';
 
@@ -213,4 +213,14 @@ export function lineNameZh(menu: MenuVersion, cfg: LineConfig): string {
   const size = getSize(menu, cfg.productKind, cfg.size);
   const base = cfg.productKind === 'dry_noodle' ? `${sauceName}面` : menu.products[cfg.productKind].nameZh;
   return `${cfg.isKosong ? '净面 · ' : ''}${base} · ${size?.nameZh ?? cfg.size}`;
+}
+
+export function lineNameEn(menu: MenuVersion, cfg: LineConfig): string {
+  const size = getSize(menu, cfg.productKind, cfg.size);
+  const base = cfg.productKind === 'dry_noodle' ? `${SAUCE_NAMES[cfg.sauce ?? 'black'].en} Sauce Noodles` : menu.products[cfg.productKind].nameEn;
+  return `${cfg.isKosong ? 'Kosong · ' : ''}${base} · ${size?.nameEn ?? cfg.size}`;
+}
+
+export function lineName(menu: MenuVersion, cfg: LineConfig, lang: 'zh' | 'en'): string {
+  return lang === 'en' ? lineNameEn(menu, cfg) : lineNameZh(menu, cfg);
 }

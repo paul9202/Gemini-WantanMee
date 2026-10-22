@@ -2,11 +2,11 @@
  * createOrder：订单、支付、私有成本、餐牌占用、厨房投影、收银机序号、票号、operation、审计——同一事务。
  * 服务器按菜单版本重算价格与配置；前端传入的总价只用于比对，不是权威。
  */
-import { BOM_VERSIONS } from '../../../src/domain/bom';
 import { businessDateOf } from '../../../src/domain/businessDay';
 import { Cart, computeTotals } from '../../../src/domain/cart';
 import { isValidQuantity, parseLineConfig, LineConfig } from '../../../src/domain/lineItem';
-import { MENU_VERSIONS, SERVICE_MODES } from '../../../src/domain/menu';
+import { SERVICE_MODES } from '../../../src/domain/menu';
+import { loadBom, loadMenu } from '../core/catalog';
 import { checkPayment } from '../../../src/domain/payment';
 import { holdToken, isTokenNumber, TokenBoard } from '../../../src/domain/tokens';
 import { CommandContext, runCommand } from '../core/command';
@@ -99,8 +99,8 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   if (o.menuVersion !== config.activeMenuVersion) {
     throw new CommandError('MENU_CHANGED', '菜单已更新，请重新确认价格', { activeMenuVersion: config.activeMenuVersion });
   }
-  const menu = MENU_VERSIONS[o.menuVersion];
-  const bom = BOM_VERSIONS[config.activeBomVersion];
+  const menu = await loadMenu(tx, store, o.menuVersion);
+  const bom = await loadBom(tx, store, config.activeBomVersion);
   if (!menu || !bom) throw new CommandError('STORE_NOT_CONFIGURED', '菜单或 BOM 版本不可用');
 
   const lines: { lineId: string; config: LineConfig; quantity: number }[] = [];

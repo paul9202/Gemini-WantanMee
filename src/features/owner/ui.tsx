@@ -7,9 +7,10 @@ const TABS: { route: Route; label: string }[] = [
   { route: '/owner/finance', label: '收支' },
   { route: '/owner/review', label: '待核对' },
   { route: '/owner/close', label: '日结' },
+  { route: '/owner/settings', label: '设置' },
 ];
 
-/** 桌面为页内标签；手机为底部 4 项导航（64px + 安全区）。 */
+/** 桌面为页内标签；手机为底部导航（64px + 安全区）。 */
 export function OwnerTabs({ current, badge }: { current: Route; badge?: Partial<Record<Route, number>> }) {
   const item = (t: (typeof TABS)[number], mobile: boolean) => (
     <button key={t.route} type="button" onClick={() => navigate(t.route)} aria-current={current === t.route ? 'page' : undefined}

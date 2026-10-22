@@ -16,7 +16,7 @@ import {
 export interface OfflineSnapshot {
   uid: string;
   member: { role: 'owner' | 'cashier' | 'kitchen'; active: boolean; displayName: string };
-  config: { name: string; timeZone: string; cutoverMinutes: number; activeMenuVersion: string; activeRegisterId: string | null; qrPayee: string | null };
+  config: { name: string; timeZone: string; cutoverMinutes: number; activeMenuVersion: string; activeBomVersion: string; activeRegisterId: string | null; qrPayee: string | null };
   deviceId: string;
   claim: { deviceId: string; registerId: string; registerEpoch: number };
   shiftId: string;

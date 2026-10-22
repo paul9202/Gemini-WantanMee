@@ -97,6 +97,10 @@ try {
   const pdf80 = await pos.pdf({ printBackground: true, preferCSSPageSize: true });
   await writeFile(`${OUT}/receipt-80mm.pdf`, pdf80);
   check('O13 打印样式只输出收据（PDF 已生成）', pdf80.length > 1000, `${pdf80.length} bytes`);
+  await pos.send('Emulation.setEmulatedMedia', { media: 'print' });
+  const printView = await pos.page(`return { app: getComputedStyle(document.querySelector('#root')).display, receipt: getComputedStyle(document.querySelector('#print-root')).display };`);
+  await pos.send('Emulation.setEmulatedMedia', { media: '' });
+  check('O13 打印时隐藏应用、只显示收据', printView.app === 'none' && printView.receipt === 'block', JSON.stringify(printView));
   // 打印一次后重开：标「副本」
   await pos.page(`__click('打印'); await __sleep(1500); __click('关闭'); await __sleep(500);
     const rows = [...document.querySelectorAll('button')].filter(b => b.innerText.trim() === '收据'); rows[0].click(); await __waitFor('谢谢光临', 15000);`);

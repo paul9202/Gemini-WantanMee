@@ -20,3 +20,4 @@ export * from './offline';
 export * from './kitchenLink';
 export * from './receipt';
 export * from './ledger';
+export * from './catalog';

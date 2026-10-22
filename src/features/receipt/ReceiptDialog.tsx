@@ -7,7 +7,8 @@ import { ReactNode, useEffect, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { doc, getDoc } from 'firebase/firestore';
 import { LineConfig, unitPriceSen } from '../../domain/lineItem';
-import { MENU_VERSIONS, MENU_V1 } from '../../domain/menu';
+import { MENU_V1, MenuVersion } from '../../domain/menu';
+import { useMenu } from '../../data/menu';
 import { buildReceipt, ReceiptSource } from '../../domain/receipt';
 import { db, storePath } from '../../data/firebase/client';
 import { kvGet, kvSet, LocalOrder } from '../../data/local/idb';
@@ -35,8 +36,8 @@ export async function receiptFromOrder(orderId: string, storeName: string): Prom
 }
 
 /** 本机离线单（补同步前也能打印，标明尚未同步）。 */
-export function receiptFromLocal(o: LocalOrder, storeName: string, sync: { synced: boolean; receiptNumber: string | null; served: boolean }): ReceiptSource {
-  const menu = MENU_VERSIONS[o.menuVersion] ?? MENU_V1;
+/** menu 须为该离线单成交时的菜单版本（单价按它计算）。 */
+export function receiptFromLocal(o: LocalOrder, menu: MenuVersion, storeName: string, sync: { synced: boolean; receiptNumber: string | null; served: boolean }): ReceiptSource {
   return {
     storeName, receiptNumber: sync.receiptNumber, offlineReceiptNumber: o.offlineReceiptNumber, tokenNumber: o.tokenNumber,
     serviceMode: o.serviceMode, source: 'offline', acceptedAtMs: o.createdAtMs, timeQuality: 'device_estimated',
@@ -47,7 +48,7 @@ export function receiptFromLocal(o: LocalOrder, storeName: string, sync: { synce
   };
 }
 
-const priceOf = (menu: typeof MENU_V1, c: LineConfig) => unitPriceSen(menu, c);
+const priceOf = (menu: MenuVersion, c: LineConfig) => unitPriceSen(menu, c);
 
 export function ReceiptDialog({ receiptKey, load, menuVersion, timeZone, onClose }: {
   /** 用于记录打印次数的稳定 ID（订单 UUID）。 */
@@ -71,7 +72,7 @@ export function ReceiptDialog({ receiptKey, load, menuVersion, timeZone, onClose
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receiptKey]);
 
-  const menu = MENU_VERSIONS[menuVersion] ?? MENU_V1;
+  const menu = useMenu(menuVersion) ?? MENU_V1;
   const receipt = src ? buildReceipt(menu, src, { printIndex: printCount, timeZone }) : null;
 
   function print() {

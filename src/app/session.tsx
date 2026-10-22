@@ -22,6 +22,7 @@ export interface StoreConfig {
   timeZone: string;
   cutoverMinutes: number;
   activeMenuVersion: string;
+  activeBomVersion: string;
   activeRegisterId: string | null;
   qrPayee: string | null;
 }
