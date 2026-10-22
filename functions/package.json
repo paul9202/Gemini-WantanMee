@@ -1,0 +1,26 @@
+{
+  "name": "hao-wantan-mee-functions",
+  "private": true,
+  "engines": {
+    "node": "22"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "test:rules": "tsx --test \"test/rules.test.ts\"",
+    "test:commands": "tsx --test \"test/commands.test.ts\""
+  },
+  "dependencies": {
+    "firebase-admin": "^14.5.0",
+    "firebase-functions": "^7.4.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "@types/node": "^22.14.0",
+    "esbuild": "^0.28.2",
+    "firebase": "^12.19.0",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2"
+  }
+}

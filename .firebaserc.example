@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "demo-hao-wantan",
+    "staging": "REPLACE-with-staging-project-id",
+    "prod": "REPLACE-with-prod-project-id"
+  }
+}

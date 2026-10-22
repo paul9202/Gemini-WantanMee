@@ -1,0 +1,101 @@
+rules_version = '2';
+
+// 豪云吞面 OS · Firestore Rules
+// - 默认拒绝；所有交易写入只能经 Cloud Functions（Admin SDK）。
+// - 读取按门店成员角色开放；后厨只能读无金额的厨房投影。
+// - 禁止把原型的 `allow read, write: if true` 用于任何环境。
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function memberDoc(storeId) {
+      return get(/databases/$(database)/documents/stores/$(storeId)/members/$(request.auth.uid));
+    }
+
+    function hasRole(storeId, roles) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/stores/$(storeId)/members/$(request.auth.uid))
+        && memberDoc(storeId).data.active == true
+        && memberDoc(storeId).data.role in roles;
+    }
+
+    function isOwner(storeId) { return hasRole(storeId, ['owner']); }
+    function isFront(storeId) { return hasRole(storeId, ['owner', 'cashier']); }
+    function isAnyMember(storeId) { return hasRole(storeId, ['owner', 'cashier', 'kitchen']); }
+
+    match /stores/{storeId} {
+      allow read, write: if false;
+
+      match /config/public {
+        allow read: if isAnyMember(storeId);
+        allow write: if false;
+      }
+      match /config/{doc} {
+        allow read: if doc != 'public' && isOwner(storeId);
+        allow write: if false;
+      }
+
+      match /members/{uid} {
+        allow get: if request.auth != null && request.auth.uid == uid;
+        allow read: if isOwner(storeId);
+        allow write: if false;
+      }
+
+      match /operationsStatus/{doc} {
+        allow read: if isAnyMember(storeId);
+        allow write: if false;
+      }
+
+      // 厨房投影：无售价、付款、成本字段。
+      match /kitchenTickets/{orderId} {
+        allow read: if isAnyMember(storeId);
+        allow write: if false;
+      }
+
+      // 收银与老板：订单（无 BOM）、餐牌、收银机、班次。
+      match /orders/{orderId} {
+        allow read: if isFront(storeId);
+        allow write: if false;
+      }
+      match /tokens/{tokenId} {
+        allow read: if isFront(storeId);
+        allow write: if false;
+      }
+      match /registers/{registerId} {
+        allow read: if isFront(storeId);
+        allow write: if false;
+      }
+      match /shifts/{shiftId} {
+        allow read: if isFront(storeId);
+        allow write: if false;
+      }
+      match /menuVersions/{version} {
+        allow read: if isFront(storeId);
+        allow write: if false;
+      }
+      match /visualCatalogs/{version} {
+        allow read: if isAnyMember(storeId);
+        allow write: if false;
+      }
+
+      // 仅老板：成本、支付流水、退款、账本、审计、日结、设备、离线收件箱。
+      match /{ownerOnly}/{docId} {
+        allow read: if ownerOnly in [
+            'orderCosts', 'payments', 'refunds', 'expenses', 'wastage', 'cashMovements',
+            'dailyReports', 'dailyStats', 'businessDays', 'auditEvents', 'operations',
+            'bomVersions', 'devices', 'offlineInbox'
+          ] && isOwner(storeId);
+        allow write: if false;
+      }
+
+      match /dailyReports/{date}/versions/{n} {
+        allow read: if isOwner(storeId);
+        allow write: if false;
+      }
+    }
+
+    // 门店之外的任何路径一律拒绝。
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

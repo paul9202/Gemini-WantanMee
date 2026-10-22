@@ -14,7 +14,12 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "functions:build": "npm --prefix functions run build",
+    "functions:typecheck": "npm --prefix functions run typecheck",
+    "emulators": "npm run functions:build && firebase emulators:start --project demo-hao-wantan",
+    "test:rules": "firebase emulators:exec --project demo-hao-wantan --only firestore \"npm --prefix functions run test:rules\"",
+    "test:emulator": "npm run functions:build && firebase emulators:exec --project demo-hao-wantan --only auth,firestore,functions \"npm --prefix functions run test:commands\""
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -30,6 +35,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
+    "firebase-tools": "^15.34.1",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"
