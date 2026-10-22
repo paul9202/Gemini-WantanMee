@@ -1,0 +1,7 @@
+﻿营业日,票号,餐牌,就餐,来源,制作状态,付款状态,付款方式,金额_sen,接单时间,出餐时间,时间质量,餐品
+2026-10-22,261022-003,3,堂食,在线,queued,paid,cash,1100,2026-10-22 17:42:34 (Asia/Kuala_Lumpur),,server,1×白酱面 · 大
+2026-10-22,261022-001,1,堂食,在线,queued,paid,cash,700,2026-10-22 17:42:31 (Asia/Kuala_Lumpur),,server,1×红酱面 · 小
+2026-10-22,261022-005,20,堂食,离线,queued,paid,cash,600,2026-10-22 17:42:34 (Asia/Kuala_Lumpur),,device_estimated,1×黑酱面 · 小
+2026-10-22,261022-006,30,堂食,离线,queued,paid,cash,700,2026-10-22 17:43:41 (Asia/Kuala_Lumpur),,device_estimated,1×黑酱面 · 小
+2026-10-22,261022-004,1,堂食,离线,queued,paid,cash,700,2026-10-22 17:42:34 (Asia/Kuala_Lumpur),,device_estimated,1×黑酱面 · 小
+2026-10-22,261022-002,2,堂食,在线,queued,paid,qr_manual,900,2026-10-22 17:42:32 (Asia/Kuala_Lumpur),,server,1×黑酱面 · 中

@@ -8,6 +8,10 @@ import { OrdersPage } from '../features/orders/OrdersPage';
 import { PosPage } from '../features/pos/PosPage';
 import { DevicePage } from '../features/device/DevicePage';
 import { SyncPage } from '../features/sync/SyncPage';
+import { OverviewPage } from '../features/owner/OverviewPage';
+import { FinancePage } from '../features/owner/FinancePage';
+import { ReviewPage } from '../features/owner/ReviewPage';
+import { ClosePage } from '../features/owner/ClosePage';
 import { IconSprite } from '../ui/visual';
 import { Login } from './Login';
 import { navigate, Route, useRoute } from './router';
@@ -20,8 +24,12 @@ const ALLOWED: Record<Exclude<Route, '/login'>, Role[]> = {
   '/sync': ['cashier', 'owner'],
   '/kitchen': ['kitchen', 'owner'],
   '/device': ['cashier', 'owner', 'kitchen'],
+  '/owner': ['owner'],
+  '/owner/finance': ['owner'],
+  '/owner/review': ['owner'],
+  '/owner/close': ['owner'],
 };
-const HOME: Record<Role, Route> = { owner: '/pos', cashier: '/pos', kitchen: '/kitchen' };
+const HOME: Record<Role, Route> = { owner: '/owner', cashier: '/pos', kitchen: '/kitchen' };
 
 function Routes() {
   const { ready, user, member, memberError, signOut } = useSession();
@@ -47,6 +55,10 @@ function Routes() {
   if (route === '/kitchen') return <KitchenPage />;
   if (route === '/orders') return <Shell route="/orders"><OrdersPage /></Shell>;
   if (route === '/sync') return <Shell route="/sync"><SyncPage /></Shell>;
+  if (route === '/owner') return <Shell route="/owner"><OverviewPage /></Shell>;
+  if (route === '/owner/finance') return <Shell route="/owner"><FinancePage /></Shell>;
+  if (route === '/owner/review') return <Shell route="/owner"><ReviewPage /></Shell>;
+  if (route === '/owner/close') return <Shell route="/owner"><ClosePage /></Shell>;
   if (route === '/device') return <Shell route="/device"><DevicePage /></Shell>;
   return <Shell route="/pos"><PosPage /></Shell>;
 }

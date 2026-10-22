@@ -84,7 +84,7 @@ try {
 
   // ---- 开档准备（联网） ----
   await goto('/login');
-  check('老板登录', (await login('owner')) === '/pos');
+  check('老板登录（进入老板概览）', (await login('owner')) === '/owner');
   await goto('/device');
   await page(`await __waitFor('设为主收银机'); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
   await logout();

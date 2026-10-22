@@ -11,7 +11,7 @@ import { markAwaitingReturn, revertToHeld, TokenBoard, TokenResult } from '../..
 import { CommandContext, Role, runCommand } from '../core/command';
 import { CommandError, ReasonCode } from '../core/errors';
 import { int, obj, oneOf, str, storeId, uuid } from '../core/input';
-import { loadStoreConfig, requireDayOpen } from '../core/store';
+import { loadStoreConfig, markDayActivity, requireDayOpen } from '../core/store';
 
 const LIFECYCLE_FIELDS: (keyof OrderLifecycleState)[] = [
   'fulfillmentStatus', 'paymentState', 'paidSen', 'refundedSen', 'kitchenCancelRequested', 'cancelReason',
@@ -88,7 +88,8 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
   const cost = (await tx.get(costRef)).data();
   const today = businessDateOf(nowMs, config.businessDay);
   // 退款/取消写入今日账本，受今日写入屏障约束。
-  if (name === 'confirmFullRefund' || name === 'requestCancel' || name === 'confirmKitchenCancel') await requireDayOpen(tx, store, today);
+  const writesLedger = name === 'confirmFullRefund' || name === 'requestCancel' || name === 'confirmKitchenCancel';
+  const todayDay = writesLedger ? await requireDayOpen(tx, store, today) : null;
 
   const before = lifecycleOf(order);
   const tokenHeld = Boolean(tokenData && tokenData.orderId === input.orderId && tokenData.state === 'awaiting_return');
@@ -115,6 +116,9 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
     }
     if (effect === 'cost_reverse' && cost) {
       const reverse = -(cost.allocatedCostUnits as number);
+      tx.create(store.costEvent(`${input.operationId}-reverse`), {
+        id: `${input.operationId}-reverse`, orderId: input.orderId, businessDate: today, costUnits: reverse, kind: 'reverse', atMs: nowMs,
+      });
       tx.update(costRef, {
         allocatedCostUnits: 0,
         allocationEvents: FieldValue.arrayUnion({ id: `${input.operationId}-reverse`, type: 'reverse', costUnits: reverse, businessDate: today, atMs: nowMs }),
@@ -138,6 +142,7 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
     }
   }
   tx.update(orderRef, patch);
+  if (todayDay) markDayActivity(tx, store, today, todayDay, nowMs);
 
   return {
     result: { orderId: input.orderId, version: after.version, fulfillmentStatus: after.fulfillmentStatus, paymentState: after.paymentState, effects: r.effects },

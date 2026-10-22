@@ -61,6 +61,11 @@ export function storeRefs(db: Firestore, storeId: string) {
     operation: (id: string) => root.collection('operations').doc(id),
     audit: (id: string) => root.collection('auditEvents').doc(id),
     inbox: (eventId: string) => root.collection('offlineInbox').doc(eventId),
+    costEvent: (id: string) => root.collection('costEvents').doc(id),
+    expense: (id: string) => root.collection('expenses').doc(id),
+    wastage: (id: string) => root.collection('wastage').doc(id),
+    dailyReport: (date: string) => root.collection('dailyReports').doc(date),
+    dailyReportVersion: (date: string, n: number) => root.collection('dailyReports').doc(date).collection('versions').doc(String(n)),
     status: root.collection('operationsStatus').doc('current'),
   };
 }

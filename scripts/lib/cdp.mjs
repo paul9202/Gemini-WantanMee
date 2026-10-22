@@ -85,3 +85,26 @@ export async function fsPatch(path, fields) {
   const r = await fetch(`${FS}/${path}?${mask}`, { method: 'PATCH', headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(`patch ${path}: ${r.status}`);
 }
+
+const AUTH = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-api-key';
+const FN = 'http://127.0.0.1:5001/demo-hao-wantan/asia-southeast1';
+
+/** 以测试账号在 Auth Emulator 登录，取得 ID token。 */
+export async function idToken(role) {
+  const a = await account(role);
+  const r = await (await fetch(AUTH, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: a.email, password: a.password, returnSecureToken: true }) })).json();
+  if (!r.idToken) throw new Error(`登录失败 ${role}`);
+  return r.idToken;
+}
+
+/** 按 Callable 协议直接调用 Functions Emulator（与浏览器 SDK 走同一套认证与校验）。 */
+export async function callable(name, data, token) {
+  const r = await (await fetch(`${FN}/${name}Cmd`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ data: { storeId: 'hao-pontian-main', ...data } }) })).json();
+  if (r.error) throw new Error(JSON.stringify(r.error));
+  return r.result;
+}
+
+export async function fsGet(path) {
+  const r = await (await fetch(`${FS}/${path}`, { headers: { Authorization: 'Bearer owner' } })).json();
+  return r.fields ? Object.fromEntries(Object.entries(r.fields).map(([k, v]) => [k, decode(v)])) : null;
+}

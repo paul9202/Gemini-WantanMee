@@ -9,6 +9,7 @@ import { applyUpdate, useSwState } from './swUpdate';
 import { unsyncedEvents, useOfflineRuntime } from '../data/offline/runtime';
 
 const NAV: { route: Route; label: string; roles: Role[] }[] = [
+  { route: '/owner', label: '老板', roles: ['owner'] },
   { route: '/pos', label: '点单', roles: ['cashier', 'owner'] },
   { route: '/orders', label: '订单', roles: ['cashier', 'owner'] },
   { route: '/sync', label: '同步', roles: ['cashier', 'owner'] },
@@ -37,7 +38,7 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
             <div className="text-xs text-ink-2">{member ? ROLE_ZH[member.role] : ''}</div>
           </div>
         </div>
-        <nav className="flex h-full items-stretch gap-1" aria-label="主要页面">
+        <nav className="flex h-full min-w-0 items-stretch gap-1 overflow-x-auto whitespace-nowrap" aria-label="主要页面">
           {NAV.filter((n) => member && n.roles.includes(member.role)).map((n) => (
             <button key={n.route} onClick={() => navigate(n.route)} aria-current={route === n.route ? 'page' : undefined}
               className={`border-b-[3px] px-2 text-base font-semibold sm:min-w-16 sm:px-3 ${route === n.route ? 'border-brand text-brand' : 'border-transparent text-ink-2 hover:text-ink'}`}>

@@ -29,6 +29,9 @@ const REASONS: Record<string, string> = {
   OFFLINE_REVIEW_REQUIRED: '人工单需要先核对',
   STORE_NOT_CONFIGURED: '门店尚未初始化',
   UNKNOWN_RESULT: '网络不稳定，结果未确认',
+  CLOSE_EXCEPTIONS: '还有未处理事项，请确认并写明原因后再关账',
+  NOT_CLOSED: '该营业日尚未关账',
+  REVIEW_NOT_ALLOWED: '这条记录不能这样处理',
 };
 
 export function reasonText(code: string): string {

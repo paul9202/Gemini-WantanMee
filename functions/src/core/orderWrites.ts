@@ -82,6 +82,10 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     allocationEvents: [{ id: a.allocationEventId, type: 'allocate', costUnits: a.totals.totalCostUnits, businessDate: a.businessDate, atMs: a.cloudReceivedAtMs }],
     pendingCalibration: a.bom.pendingCalibration,
   });
+  // 成本账本：每笔分配/反转一条记录，带自己的营业日，供日结与报表按日查询。
+  tx.create(store.costEvent(a.allocationEventId), {
+    id: a.allocationEventId, orderId: a.orderId, businessDate: a.businessDate, costUnits: a.totals.totalCostUnits, kind: 'allocate', atMs: a.cloudReceivedAtMs,
+  });
   tx.create(store.ticket(a.orderId), {
     ...buildKitchenTicket(a.menu, {
       orderId: a.orderId, tokenNumber: a.tokenNumber, serviceMode: a.serviceMode, kitchenRouting: a.kitchenRouting, fulfillmentStatus: 'queued',

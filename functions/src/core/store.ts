@@ -66,3 +66,12 @@ export async function requireDayOpen(tx: Transaction, store: StoreRefs, date: st
   if (d && d.state !== 'open') throw new CommandError('DAY_CLOSED', `${date} 已${d.state === 'closing' ? '在关账中' : '关账'}`);
   return { exists: snap.exists, receiptSeq: (d?.receiptSeq as number) ?? 0 };
 }
+
+/**
+ * 记录当日账本活动：所有影响某营业日账本的命令都写一次营业日文档，
+ * 与关账在同一文档上串行——关账先提交则本命令重试后被拒绝，本命令先提交则被关账汇总包含。
+ */
+export function markDayActivity(tx: Transaction, store: StoreRefs, date: string, day: { exists: boolean }, nowMs: number) {
+  if (day.exists) tx.update(store.businessDay(date), { lastActivityAtMs: nowMs });
+  else tx.set(store.businessDay(date), { state: 'open', receiptSeq: 0, lastActivityAtMs: nowMs });
+}

@@ -30,7 +30,7 @@ before(async () => {
     await setDoc(doc(db, `stores/${OTHER}/members/outsider`), { role: 'owner', active: true });
     await setDoc(s('config/public'), { name: '豪云吞面' });
     await setDoc(s('config/finance'), { initialCapitalSen: 550000 });
-    for (const c of ['orders', 'kitchenTickets', 'tokens', 'registers', 'shifts', 'orderCosts', 'payments', 'refunds', 'expenses',
+    for (const c of ['orders', 'kitchenTickets', 'tokens', 'registers', 'shifts', 'orderCosts', 'costEvents', 'payments', 'refunds', 'expenses',
       'wastage', 'cashMovements', 'dailyStats', 'businessDays', 'auditEvents', 'operations', 'bomVersions', 'devices', 'offlineInbox', 'operationsStatus']) {
       await setDoc(s(`${c}/x`), { v: 1 });
     }
@@ -58,6 +58,7 @@ const MATRIX: Record<string, Who[]> = {
   'registers/x': ['cashier', 'owner'],
   'shifts/x': ['cashier', 'owner'],
   'orderCosts/x': ['owner'],
+  'costEvents/x': ['owner'],
   'payments/x': ['owner'],
   'refunds/x': ['owner'],
   'expenses/x': ['owner'],
