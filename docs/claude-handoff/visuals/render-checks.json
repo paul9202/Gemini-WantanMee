@@ -1,0 +1,93 @@
+{
+  "type": "static-design-rendering-only",
+  "scenarios": [
+    {
+      "view": "pos",
+      "width": 1456,
+      "scrollWidth": 1456,
+      "pageHeight": 1260,
+      "boardWidth": 1446,
+      "boardLeft": 5,
+      "foodTiles": 13,
+      "unresolvedSymbols": [],
+      "height": 1100
+    },
+    {
+      "view": "kds",
+      "width": 1456,
+      "scrollWidth": 1456,
+      "pageHeight": 1155,
+      "boardWidth": 1446,
+      "boardLeft": 5,
+      "foodTiles": 17,
+      "unresolvedSymbols": [],
+      "height": 1100
+    },
+    {
+      "view": "owner",
+      "width": 1456,
+      "scrollWidth": 1456,
+      "pageHeight": 1197,
+      "boardWidth": 1446,
+      "boardLeft": 5,
+      "foodTiles": 0,
+      "unresolvedSymbols": [],
+      "height": 1100
+    },
+    {
+      "view": "mobile",
+      "width": 390,
+      "scrollWidth": 390,
+      "pageHeight": 1303,
+      "boardWidth": 390,
+      "boardLeft": 0,
+      "foodTiles": 0,
+      "unresolvedSymbols": [],
+      "height": 844
+    },
+    {
+      "view": "cards",
+      "width": 1456,
+      "scrollWidth": 1456,
+      "pageHeight": 1100,
+      "boardWidth": 1446,
+      "boardLeft": 5,
+      "foodTiles": 10,
+      "unresolvedSymbols": [],
+      "height": 1100
+    },
+    {
+      "view": "pos",
+      "width": 1024,
+      "scrollWidth": 1024,
+      "pageHeight": 1448,
+      "boardWidth": 1000,
+      "boardLeft": 12,
+      "foodTiles": 13,
+      "unresolvedSymbols": [],
+      "height": 768
+    },
+    {
+      "view": "pos",
+      "width": 768,
+      "scrollWidth": 768,
+      "pageHeight": 1454,
+      "boardWidth": 744,
+      "boardLeft": 12,
+      "foodTiles": 13,
+      "unresolvedSymbols": [],
+      "height": 1024
+    },
+    {
+      "view": "kds",
+      "width": 1920,
+      "scrollWidth": 1920,
+      "pageHeight": 1163,
+      "boardWidth": 1446,
+      "boardLeft": 237,
+      "foodTiles": 17,
+      "unresolvedSymbols": [],
+      "height": 1080
+    }
+  ]
+}

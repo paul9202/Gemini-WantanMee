@@ -81,8 +81,8 @@ export function calculateItemFinancials(
       bomCost += DEFAULT_BOM.extraCharSiewCost;
     }
 
-    if (modifiers.extraWanton) {
-      unitPrice += 2.0; // +RM 2 for 3 wantons
+    if (modifiers.extraWanton && !isKosong) {
+      unitPrice += 2.0; // +RM 2 for 3 wantons（Kosong 禁止所有肉类加料）
       wantons += 3;
       bomCost += DEFAULT_BOM.extraWantonCost;
     }
@@ -325,9 +325,9 @@ export function calculateAnalytics(
     allTimeRev += o.totalAmount;
     allTimeBom += o.totalBomCost;
   }
-  // Realistic cumulative profit: prior 14 days baseline (RM 1,920.00) + current active net profit
-  const priorAccumulatedProfit = 1920.0;
-  const currentNet = Math.max(0, allTimeRev - allTimeBom - totalWastageCost - DAILY_FIXED_COST);
+  // 期初累计经营结果默认 0（移除演示用 RM1,920）；亏损不被 max(0, …) 吞掉。
+  const priorAccumulatedProfit = 0;
+  const currentNet = allTimeRev - allTimeBom - totalWastageCost - DAILY_FIXED_COST;
   const cumulativeNetProfitAllTime = priorAccumulatedProfit + currentNet;
   const roiPercentage = Math.min(
     100,

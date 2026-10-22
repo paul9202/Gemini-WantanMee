@@ -124,7 +124,7 @@ export const PosView: React.FC<PosViewProps> = ({
     const nextKosong = !isKosong;
     setIsKosong(nextKosong);
     if (nextKosong) {
-      setModifiers((prev) => ({ ...prev, extraCharSiew: false }));
+      setModifiers((prev) => ({ ...prev, extraCharSiew: false, extraWanton: false }));
     }
   };
 
@@ -154,7 +154,7 @@ export const PosView: React.FC<PosViewProps> = ({
       setItemType('dry_wanton');
       if (selectedSauce === 'soup') setSelectedSauce('black');
       setIsKosong(false);
-      setModifiers((prev) => ({ ...prev, extraCharSiew: false }));
+      setModifiers((prev) => ({ ...prev, extraCharSiew: false, extraWanton: false }));
     } else if (cat === 'soup') {
       setItemType('soup');
       setSelectedSauce('soup');
@@ -959,12 +959,15 @@ export const PosView: React.FC<PosViewProps> = ({
               {/* Extra Wantons (+3 pcs RM2.00) */}
               <button
                 type="button"
+                disabled={isKosong}
                 onClick={() => {
                   if (soundEnabled) soundFX.playTap();
                   setModifiers((prev) => ({ ...prev, extraWanton: !prev.extraWanton }));
                 }}
                 className={`flex h-13 items-center justify-between rounded-xl border-2 px-3 text-xs font-bold transition-all active:scale-95 ${
-                  modifiers.extraWanton
+                  isKosong
+                    ? 'opacity-40 cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                    : modifiers.extraWanton
                     ? 'border-amber-600 bg-amber-50 text-amber-900 ring-2 ring-amber-500/20'
                     : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300'
                 }`}

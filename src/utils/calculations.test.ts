@@ -9,7 +9,7 @@ import {
 import { Order } from '../types';
 
 test('加叉烧价格已调整为 2块 (RM 2.00)', () => {
-  // 小碗面基础价格 RM 8.00
+  // 餐牌（2026-10-22 用户确认）：小碗面 RM 7.00，替代原型 RM 8.00
   const regular = calculateItemFinancials('noodle', 'small', undefined, false, {
     extraCharSiew: false,
     extraWanton: false,
@@ -17,9 +17,9 @@ test('加叉烧价格已调整为 2块 (RM 2.00)', () => {
     lard: 'normal',
     scallion: 'normal',
   });
-  assert.equal(regular.unitPrice, 8.0);
+  assert.equal(regular.unitPrice, 7.0);
 
-  // 加叉烧后价格应为 8.0 + 2.0 = 10.0 (不再是 3.0)
+  // 加叉烧后价格应为 7.0 + 2.0 = 9.0
   const withCharSiew = calculateItemFinancials('noodle', 'small', undefined, false, {
     extraCharSiew: true,
     extraWanton: false,
@@ -27,7 +27,7 @@ test('加叉烧价格已调整为 2块 (RM 2.00)', () => {
     lard: 'normal',
     scallion: 'normal',
   });
-  assert.equal(withCharSiew.unitPrice, 10.0, '加叉烧必须严格增加 RM 2.00');
+  assert.equal(withCharSiew.unitPrice, 9.0, '加叉烧必须严格增加 RM 2.00');
 
   // Kosong 净面不能加叉烧
   const kosongWithCharSiew = calculateItemFinancials('noodle', 'small', undefined, true, {
@@ -37,7 +37,18 @@ test('加叉烧价格已调整为 2块 (RM 2.00)', () => {
     lard: 'normal',
     scallion: 'normal',
   });
-  assert.equal(kosongWithCharSiew.unitPrice, 4.0, 'Kosong 净面严格半价且不能加叉烧');
+  assert.equal(kosongWithCharSiew.unitPrice, 3.5, 'Kosong 净面严格半价且不能加叉烧');
+
+  // 新规格：Kosong 同样禁止加云吞（原型会 +RM2 并加 3 粒，与厨房「严禁云吞」冲突）
+  const kosongWithWanton = calculateItemFinancials('noodle', 'small', undefined, true, {
+    extraCharSiew: false,
+    extraWanton: true,
+    spiciness: 'normal',
+    lard: 'normal',
+    scallion: 'normal',
+  });
+  assert.equal(kosongWithWanton.unitPrice, 3.5, 'Kosong 不能加云吞');
+  assert.equal(kosongWithWanton.wantons, 0);
 });
 
 test('时间格式化算法 formatDurationMs', () => {
