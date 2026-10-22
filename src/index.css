@@ -1,38 +1,56 @@
 @import "tailwindcss";
 
+/* 设计 Token（02 §2）。营业时不依赖外部字体，使用系统中文字体回退。 */
 @theme {
-  --font-sans: 'Noto Sans SC', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-sans: Inter, "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+
+  --color-canvas: #f6f3ec;
+  --color-card: #ffffff;
+  --color-subtle: #eeeae1;
+  --color-ink: #202821;
+  --color-ink-2: #566057;
+  --color-line: #d9ded6;
+  --color-control: #7c887e;
+  --color-brand: #b93825;
+  --color-brand-pressed: #922b1d;
+  --color-focus: #176c55;
+  --color-ok: #176c55;
+  --color-ok-bg: #e5f2ea;
+  --color-warn: #80500d;
+  --color-warn-bg: #fff1cc;
+  --color-danger: #b42318;
+  --color-danger-bg: #fde9e5;
+  --color-kds: #131b18;
+  --color-kds-card: #202d26;
+  --color-kds-text: #f4f5e9;
+  --color-kds-muted: #bdcbc0;
+  --color-kds-action: #e8c97a;
 }
 
 @layer base {
-  *, ::before, ::after {
-    font-family: var(--font-sans);
-  }
-  
   html, body {
     margin: 0;
     padding: 0;
     -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
     font-family: var(--font-sans);
+    font-variant-numeric: tabular-nums;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+  }
+  button { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }
   }
 }
 
-/* Custom Scrollbars */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
-  border-radius: 9999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.6);
+/* 收据打印：只输出收据（O13 后续完善）。 */
+@media print {
+  body * { visibility: hidden; }
+  .print-receipt, .print-receipt * { visibility: visible; }
+  .print-receipt { position: absolute; inset: 0 auto auto 0; width: 72mm; }
 }

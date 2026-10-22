@@ -19,11 +19,14 @@
     "functions:typecheck": "npm --prefix functions run typecheck",
     "emulators": "npm run functions:build && firebase emulators:start --project demo-hao-wantan",
     "test:rules": "firebase emulators:exec --project demo-hao-wantan --only firestore \"npm --prefix functions run test:rules\"",
-    "test:emulator": "npm run functions:build && firebase emulators:exec --project demo-hao-wantan --only auth,firestore,functions \"npm --prefix functions run test:commands\""
+    "test:emulator": "npm run functions:build && firebase emulators:exec --project demo-hao-wantan --only auth,firestore,functions \"npm --prefix functions run test:commands\"",
+    "emulators:seed": "npm --prefix functions run seed",
+    "photos": "node scripts/build-photos.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
+    "firebase": "^12.19.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
@@ -36,6 +39,7 @@
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
     "firebase-tools": "^15.34.1",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2"

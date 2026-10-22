@@ -1,0 +1,80 @@
+{
+  "capturedAt": "2026-10-22T06:57:52.495Z",
+  "environment": "本机 Firebase Emulator（demo-hao-wantan）+ Vite 开发服务器，测试数据",
+  "results": [
+    {
+      "step": "cashier-login",
+      "path": "/pos"
+    },
+    {
+      "name": "pos-1366x900",
+      "width": 1366,
+      "height": 900,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "pos-1024x768",
+      "width": 1024,
+      "height": 768,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "pos-768x1024",
+      "width": 768,
+      "height": 1024,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "pos-390x844",
+      "width": 390,
+      "height": 844,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "pos-payment-1366x900",
+      "width": 1366,
+      "height": 900,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "pos-payment-390x844",
+      "width": 390,
+      "height": 844,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "orders-1366x900",
+      "width": 1366,
+      "height": 900,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "orders-390x844",
+      "width": 390,
+      "height": 844,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "step": "kitchen-login",
+      "path": "/kitchen"
+    },
+    {
+      "name": "kds-1920x1080",
+      "width": 1920,
+      "height": 1080,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "kds-1366x900",
+      "width": 1366,
+      "height": 900,
+      "horizontalOverflowPx": 0
+    },
+    {
+      "name": "kds-1024x768",
+      "width": 1024,
+      "height": 768,
+      "horizontalOverflowPx": 0
+    }
+  ]
+}

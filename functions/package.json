@@ -9,7 +9,8 @@
     "build": "node build.mjs",
     "typecheck": "tsc --noEmit -p .",
     "test:rules": "tsx --test \"test/rules.test.ts\"",
-    "test:commands": "tsx --test \"test/commands.test.ts\""
+    "test:commands": "tsx --test \"test/commands.test.ts\"",
+    "seed": "tsx scripts/seed-emulator.ts"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",

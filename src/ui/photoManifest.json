@@ -1,0 +1,113 @@
+{
+  "catalogVersion": "visual-v1",
+  "photos": [
+    {
+      "photoId": "dish.dry_noodle.red",
+      "version": 1,
+      "path": "/photos/dish.dry_noodle.red.v1.webp",
+      "hash": "sha256-7e746e9f011a2c83b3349b66ef625c2c09e8d9e29384b458d395df59022d4e0b",
+      "width": 360,
+      "height": 360,
+      "bytes": 23534,
+      "altZh": "红酱干捞面",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "dish.dry_noodle.black",
+      "version": 1,
+      "path": "/photos/dish.dry_noodle.black.v1.webp",
+      "hash": "sha256-2ea52e19df08b874a4e4119a89bad491010d8642d30d8d12863f3b63298d86b3",
+      "width": 360,
+      "height": 360,
+      "bytes": 23430,
+      "altZh": "黑酱干捞面",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "dish.dry_noodle.white",
+      "version": 1,
+      "path": "/photos/dish.dry_noodle.white.v1.webp",
+      "hash": "sha256-fc522ecf1b9a77c29ec58d42dd6de4e412d4d637ae8a002e354527828c9fd870",
+      "width": 360,
+      "height": 360,
+      "bytes": 21888,
+      "altZh": "白酱干捞面",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "dish.soup_noodle",
+      "version": 1,
+      "path": "/photos/dish.soup_noodle.v1.webp",
+      "hash": "sha256-ac7c6df1ca5d17e2901eaf9b568c30699016d69854801844165e063f13ba3c1d",
+      "width": 360,
+      "height": 360,
+      "bytes": 18582,
+      "altZh": "云吞汤面",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "dish.wanton_soup",
+      "version": 1,
+      "path": "/photos/dish.wanton_soup.v1.webp",
+      "hash": "sha256-48a5dcd0acbfb12f325fbce93732ac0151148c077950013fbe4ba325828f2af7",
+      "width": 360,
+      "height": 360,
+      "bytes": 15356,
+      "altZh": "云吞汤",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "dish.dry_wanton",
+      "version": 1,
+      "path": "/photos/dish.dry_wanton.v1.webp",
+      "hash": "sha256-56f0ae6928ec0a9b31792b30061e9f9b8fb2072e68cf2ddc2fbba5b2e713bfa8",
+      "width": 360,
+      "height": 360,
+      "bytes": 17504,
+      "altZh": "干捞云吞",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "ingredient.char_siew",
+      "version": 1,
+      "path": "/photos/ingredient.char_siew.v1.webp",
+      "hash": "sha256-a37393eceb1492bca68a322ce7c907dbbcbc04722f37faa196dbf5484f51d883",
+      "width": 360,
+      "height": 360,
+      "bytes": 18954,
+      "altZh": "叉烧",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "noodle.thin_egg",
+      "version": 1,
+      "path": "/photos/noodle.thin_egg.v1.webp",
+      "hash": "sha256-c4579502d0d4e6b29aa61e704076168540c00ed8037df401d605bcc351f64407",
+      "width": 360,
+      "height": 360,
+      "bytes": 27976,
+      "altZh": "细面（生面团）",
+      "source": "generated-demo",
+      "reviewedBy": null
+    },
+    {
+      "photoId": "noodle.mee_poh",
+      "version": 1,
+      "path": "/photos/noodle.mee_poh.v1.webp",
+      "hash": "sha256-c572e8c81954c2144ca111583f83424f96b33171280cbe15c04c37c874f80153",
+      "width": 360,
+      "height": 360,
+      "bytes": 15918,
+      "altZh": "面薄（生面团）",
+      "source": "generated-demo",
+      "reviewedBy": null
+    }
+  ]
+}
