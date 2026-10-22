@@ -11,7 +11,8 @@ import { functions, STORE_ID } from './client';
 export type CommandName =
   | 'createOrder' | 'getOperationResult' | 'openShift' | 'releaseToken' | 'ackKitchenTicket'
   | 'startOrder' | 'serveOrder' | 'undoServe' | 'requestCancel' | 'confirmKitchenCancel'
-  | 'confirmFullRefund' | 'manageMember' | 'assignRegister' | 'syncOfflineEvents' | 'routeManualOrderToKitchen';
+  | 'confirmFullRefund' | 'manageMember' | 'assignRegister' | 'syncOfflineEvents' | 'routeManualOrderToKitchen'
+  | 'heartbeatDevice' | 'recordManualHandoff';
 
 export class CommandFailure extends Error {
   constructor(

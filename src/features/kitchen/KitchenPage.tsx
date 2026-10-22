@@ -13,10 +13,11 @@ import { CommandFailure, newOperationId, submit } from '../../data/firebase/comm
 import { useLiveQuery, useNow, useOnline } from '../../data/firebase/live';
 import { reasonText } from '../../data/firebase/reasons';
 import { useSession } from '../../app/session';
+import { useHeartbeat } from '../../data/heartbeat';
 import { navigate } from '../../app/router';
 import { Icon, Photo, Picto, PictoArt } from '../../ui/visual';
 
-type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean };
+type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean; manualHandoffAtMs?: number | null };
 
 export function KitchenPage() {
   const { config, member, deviceId, signOut } = useSession();
@@ -35,6 +36,7 @@ export function KitchenPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [undo, setUndo] = useState<{ orderId: string; token: number; version: number; servedAt: number } | null>(null);
   const acked = useRef(new Set<string>());
+  useHeartbeat(deviceId, true);
 
   const stale = q.fromCache || !online;
   const tickets = sortFifo(q.data);
@@ -118,13 +120,13 @@ export function KitchenPage() {
           {q.loading && <p className="text-kds-muted">正在载入厨单…</p>}
           {!q.loading && queued.length === 0 && <p className="text-xl text-kds-muted">暂无待做的单</p>}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
-            {queued.map((t) => <TicketCard key={t.id} t={t} now={now} disabled={stale || busyId === t.id} onAct={act} />)}
+            {queued.map((t) => <TicketCard key={t.id} t={t} now={now} today={date} disabled={stale || busyId === t.id} onAct={act} />)}
           </div>
         </section>
         <section className="min-w-[280px] flex-[28] border-l border-[#2c3a32] pl-5" aria-label="制作中">
           <h2 className="mb-3 text-2xl font-bold">制作中 <span className="text-base font-normal text-kds-muted">{preparing.length}单</span></h2>
           <div className="space-y-4">
-            {preparing.map((t) => <TicketCard key={t.id} t={t} now={now} disabled={stale || busyId === t.id} onAct={act} />)}
+            {preparing.map((t) => <TicketCard key={t.id} t={t} now={now} today={date} disabled={stale || busyId === t.id} onAct={act} />)}
           </div>
           <p className="mt-6 border-t border-[#2c3a32] pt-3 text-kds-muted">人工单待核对：{manualQ.data.length}单 · 补同步订单不会自动重做</p>
         </section>
@@ -162,8 +164,8 @@ const URGENCY = {
   overdue: { bar: 'bg-[#6a2a20]', label: '超时优先', border: 'border-[#e0735c]' },
 };
 
-function TicketCard({ t, now, disabled, onAct }: {
-  t: Ticket; now: number; disabled: boolean;
+function TicketCard({ t, now, today, disabled, onAct }: {
+  t: Ticket; now: number; today: string; disabled: boolean;
   onAct: (name: 'startOrder' | 'serveOrder' | 'confirmKitchenCancel', t: { id: string; version: number; tokenNumber: number }) => void;
 }) {
   const elapsed = now - t.acceptedAtEffectiveMs;
@@ -179,6 +181,12 @@ function TicketCard({ t, now, disabled, onAct }: {
           <PictoArt id={t.serviceMode === 'dine_in' ? 'service:dine_in' : 'service:takeaway'} size={30} />{t.serviceMode === 'dine_in' ? '堂食' : '打包'}
         </span>
       </div>
+      {today && t.businessDate < today && (
+        <div className="mx-4 mt-2 rounded-lg bg-[#3a3324] px-3 py-1 text-lg font-bold text-kds-action">跨营业日 · {t.businessDate.slice(5)} 的单（仍需完成）</div>
+      )}
+      {t.manualHandoffAtMs && (
+        <div className="mx-4 mt-2 flex items-center gap-2 rounded-lg bg-[#5a2a20] px-3 py-1 text-lg font-bold text-[#ffd9cc]"><PictoArt id="token:return" size={28} />收银已递纸单 · 先核对是否已做，避免做两份</div>
+      )}
       {t.routedFromManual && (
         <div className="mx-4 mt-2 flex items-center gap-2 rounded-lg bg-kds-action px-3 py-1 text-lg font-bold text-kds"><PictoArt id="token:return" size={28} />人工单转入 · 收银已核实厨房未做</div>
       )}

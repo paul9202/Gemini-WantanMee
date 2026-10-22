@@ -48,9 +48,10 @@
   }
 }
 
-/* 收据打印：只输出收据（O13 后续完善）。 */
+/* 收据打印：只输出 #print-root 里的收据，其他内容不参与排版。 */
+#print-root { display: none; }
 @media print {
-  body * { visibility: hidden; }
-  .print-receipt, .print-receipt * { visibility: visible; }
-  .print-receipt { position: absolute; inset: 0 auto auto 0; width: 72mm; }
+  html, body { background: #fff !important; margin: 0 !important; }
+  body > :not(#print-root) { display: none !important; }
+  #print-root { display: block !important; }
 }

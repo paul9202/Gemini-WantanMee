@@ -13,6 +13,8 @@ import { formatRM, parseRMInput } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, TokenStateName } from '../../domain/tokens';
 import { formatClock } from '../../domain/timing';
+import { AckState, ackState, kitchenHealth } from '../../domain/kitchenLink';
+import { useHeartbeat } from '../../data/heartbeat';
 import { db, storePath } from '../../data/firebase/client';
 import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
 import { useLiveDoc, useLiveQuery, useNow, useOnline } from '../../data/firebase/live';
@@ -20,7 +22,7 @@ import { reasonText } from '../../data/firebase/reasons';
 import { commitOfflineOrder, kvGet, kvSet, PendingOp, putPendingOp, seqKey } from '../../data/local/idb';
 import { useWriterLock } from '../../data/local/writerLock';
 import {
-  appendManualEvent, recordServerOffset, reloadLocal, saveSnapshot, setManualOffline, syncNow, unresolvedOps, unsyncedEvents, useOfflineRuntime, voidRejectedSequence,
+  appendManualEvent, recordServerOffset, reloadLocal, serverNow, saveSnapshot, setManualOffline, syncNow, unresolvedOps, unsyncedEvents, useOfflineRuntime, voidRejectedSequence,
 } from '../../data/offline/runtime';
 import { useRegister } from '../../data/register';
 import { navigate } from '../../app/router';
@@ -30,6 +32,8 @@ import { CartPanel } from './CartPanel';
 import { PaymentDrawer, PaymentInput } from './PaymentDrawer';
 import { ProductPanel } from './ProductPanel';
 import { TokenPicker } from './TokenPicker';
+import { ReceiptDialog, receiptFromLocal, receiptFromOrder } from '../receipt/ReceiptDialog';
+import type { ReceiptSource } from '../../domain/receipt';
 
 interface CreateOrderResult {
   orderId: string;
@@ -58,6 +62,8 @@ export function PosPage() {
   const rt = useOfflineRuntime();
   const offlineMode = !browserOnline || rt.manualOffline;
   const writer = useWriterLock(true);
+  useHeartbeat(deviceId, !offlineMode);
+  const opsStatus = useLiveDoc<{ kitchenLastSeenAtMs?: number }>(storePath('operationsStatus/current'));
   const menu = config ? MENU_VERSIONS[config.activeMenuVersion] : undefined;
 
   const tokensQ = useLiveQuery<{ number: number; state: TokenStateName; orderId: string | null; version: number }>(collection(db, storePath('tokens')), 'tokens');
@@ -88,6 +94,7 @@ export function PosPage() {
   const [payOpen, setPayOpen] = useState(false);
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<{ key: string; load: () => Promise<ReceiptSource> } | null>(null);
 
   useEffect(() => {
     if (menu && !draft) setDraft(defaultConfig(menu, 'dry_noodle', 'black'));
@@ -130,7 +137,7 @@ export function PosPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, usingSnapshot, reg.status, reg.serverApplied, reg.shiftId, reg.claim?.registerEpoch, tokensFromServer, tokensQ.data, config, member]);
 
-  const lastOrder = useLiveDoc<{ kitchenAckAtMs: number | null; fulfillmentStatus: string }>(
+  const lastOrder = useLiveDoc<{ kitchenAckAtMs: number | null; fulfillmentStatus: string; manualHandoffAtMs?: number | null }>(
     stage.kind === 'accepted' ? storePath(`orders/${stage.result.orderId}`) : null,
   );
 
@@ -365,7 +372,32 @@ export function PosPage() {
             <CartPanel menu={menu} cart={cart} totals={totals} tokenNumber={token} editingLineId={editingLineId}
               onEdit={(id) => { const l = cart.lines.find((x) => x.lineId === id); if (l) { setEditingLineId(id); setDraft(l.config); setCartOpen(false); } }}
               onQuantity={changeQuantity} onPay={() => setPayOpen(true)} payDisabledReason={payDisabledReason}>
-              <SubmitSteps stage={stage} kitchenAck={Boolean(lastOrder.data?.kitchenAckAtMs)} handedOff={handedOff}
+              <SubmitSteps stage={stage} kitchenAckAtMs={lastOrder.data?.kitchenAckAtMs ?? null} handedOff={handedOff}
+                kitchenLastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} offsetMs={rt.serverOffsetMs ?? rt.snapshot?.serverOffsetMs ?? 0}
+                onlineHandoffAtMs={lastOrder.data?.manualHandoffAtMs ?? null}
+                onReceipt={() => {
+                  if (stage.kind === 'accepted') setReceipt({ key: stage.result.orderId, load: () => receiptFromOrder(stage.result.orderId, config.name) });
+                  if (stage.kind === 'local_accepted') {
+                    const id = stage.clientOrderId;
+                    setReceipt({
+                      key: id,
+                      load: async () => {
+                        const o = rt.localOrders.find((x) => x.clientOrderId === id);
+                        if (!o) throw new Error('找不到本机订单');
+                        const rec = rt.outbox.find((r) => r.event.type === 'offline_order_created' && r.event.payload.clientOrderId === id);
+                        return receiptFromLocal(o, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(rt.outbox.map((r) => r.event), id).served });
+                      },
+                    });
+                  }
+                }}
+                onOnlineHandoff={async () => {
+                  if (stage.kind !== 'accepted') return;
+                  try {
+                    await submit('recordManualHandoff', { operationId: newOperationId(), orderId: stage.result.orderId, reason: '后厨屏未确认，收银已递纸单' });
+                  } catch (e) {
+                    setNotice(e instanceof CommandFailure ? reasonText(e.reasonCode) : String(e));
+                  }
+                }}
                 onHandoff={async () => {
                   if (stage.kind !== 'local_accepted') return;
                   const err = await appendManual('manual_handoff', stage.clientOrderId);
@@ -391,6 +423,7 @@ export function PosPage() {
       <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line bg-card px-4 py-2 text-base">
         <Icon name="clock" size={20} />
         {offlineMode ? <span className="text-warn">断网中：厨房队列无法更新</span> : <span>厨房待做 <b>{queueQ.data.length}</b> 单</span>}
+        {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} />}
         {!offlineMode && Number.isFinite(oldest) && <QueueClock since={oldest} />}
         {undo && (
           <span className="ml-auto flex items-center gap-2 rounded-lg bg-subtle px-3 py-1">
@@ -400,6 +433,7 @@ export function PosPage() {
         )}
       </footer>
 
+      {receipt && <ReceiptDialog receiptKey={receipt.key} load={receipt.load} menuVersion={menu.version} timeZone={config.timeZone} onClose={() => setReceipt(null)} />}
       {pickerOpen && <TokenPicker board={board} current={token} onPick={setToken} onRelease={releaseTokenAction} onClose={() => setPickerOpen(false)} />}
       {payOpen && token !== null && (
         <PaymentDrawer dueSen={totals.totalSen} tokenNumber={token} portions={totals.portionCount} serviceMode={cart.serviceMode}
@@ -417,6 +451,14 @@ export function PosPage() {
   );
 }
 
+function KitchenHealthBadge({ lastSeenMs }: { lastSeenMs: number | null }) {
+  useNow(5000);
+  const rt = useOfflineRuntime();
+  const h = kitchenHealth(lastSeenMs, serverNow(rt));
+  if (h === 'online') return <span className="text-ok">· 后厨屏在线</span>;
+  return <span className="font-semibold text-danger">· {h === 'unknown' ? '后厨屏未连接' : `后厨屏离线（最后 ${formatClock(serverNow(rt) - lastSeenMs!)} 前）`}</span>;
+}
+
 function QueueClock({ since }: { since: number }) {
   const now = useNow();
   return <span>· 最久 <b>{formatClock(now - since)}</b></span>;
@@ -426,8 +468,16 @@ function QueueClock({ since }: { since: number }) {
  * 三个事实分别有依据才点亮：本机已记录（IndexedDB 事务完成）、云端已接单（服务器事务提交）、后厨已收到（KDS 回执）。
  * 断网接单只点亮第一步；后厨一步改为人工传单。
  */
-function SubmitSteps({ stage, kitchenAck, handedOff, onHandoff }: { stage: Stage; kitchenAck: boolean; handedOff: boolean; onHandoff: () => void }) {
+function SubmitSteps({ stage, kitchenAckAtMs, handedOff, onHandoff, kitchenLastSeenMs, offsetMs, onlineHandoffAtMs, onOnlineHandoff, onReceipt }: {
+  stage: Stage; kitchenAckAtMs: number | null; handedOff: boolean; onHandoff: () => void;
+  kitchenLastSeenMs: number | null; offsetMs: number; onlineHandoffAtMs: number | null; onOnlineHandoff: () => void; onReceipt: () => void;
+}) {
+  const now = useNow(1000);
   if (stage.kind === 'idle') return null;
+  const ack: AckState | null = stage.kind === 'accepted'
+    ? ackState({ acceptedAtMs: stage.result.acceptedAtMs, kitchenAckAtMs, nowServerMs: now + offsetMs, kitchenLastSeenMs })
+    : null;
+  const kitchenAck = ack === 'acked';
   const offline = stage.kind === 'local_accepted';
   const local = stage.kind !== 'saving' && stage.kind !== 'local_failed';
   const cloud = stage.kind === 'accepted';
@@ -440,7 +490,10 @@ function SubmitSteps({ stage, kitchenAck, handedOff, onHandoff }: { stage: Stage
     : [
         { label: '本机已记录', done: local, icon: 'register' },
         { label: '云端已接单', done: cloud, icon: 'cloud' },
-        { label: kitchenAck ? '后厨已收到' : '等待厨房确认', done: cloud && kitchenAck, icon: 'cook' },
+        {
+          label: kitchenAck ? '后厨已收到' : ack === 'alarm' ? '后厨屏可能离线' : ack === 'waiting' ? '等待厨房确认' : '正在送到后厨',
+          done: cloud && kitchenAck, icon: 'cook', warn: ack === 'waiting' || ack === 'alarm',
+        },
       ];
   return (
     <div className="mt-3 rounded-xl bg-subtle p-3" aria-live="polite">
@@ -455,6 +508,14 @@ function SubmitSteps({ stage, kitchenAck, handedOff, onHandoff }: { stage: Stage
           </div>
         ))}
       </div>
+      {ack === 'alarm' && (
+        <div role="alert" className="mt-2 rounded-lg border-2 border-danger bg-danger-bg p-2 text-center text-danger">
+          <b>已超过 15 秒没有后厨回执，后厨屏可能离线。请把纸单递给厨师。</b>
+          {onlineHandoffAtMs
+            ? <p className="mt-1 font-semibold">✓ 已登记人工传单；后厨屏恢复后会看到提示，避免做两份。</p>
+            : <button type="button" onClick={onOnlineHandoff} className="mt-2 inline-flex h-12 items-center gap-2 rounded-xl bg-danger px-4 font-bold text-white"><Icon name="handoff" size={28} />我已递纸单给厨师</button>}
+        </div>
+      )}
       {stage.kind === 'accepted' && (
         <p className="mt-2 text-center font-semibold">
           {stage.result.tokenNumber}号 · 票号 {stage.result.receiptNumber} · {formatRM(stage.result.totalSen)}
@@ -473,6 +534,11 @@ function SubmitSteps({ stage, kitchenAck, handedOff, onHandoff }: { stage: Stage
               <Icon name="handoff" size={28} />我已把单交给厨师
             </button>
           )}
+        </div>
+      )}
+      {(stage.kind === 'accepted' || offline) && (
+        <div className="mt-2 text-center">
+          <button type="button" onClick={onReceipt} className="h-11 rounded-lg border border-control bg-card px-4 font-semibold">收据</button>
         </div>
       )}
       {stage.kind === 'submitting' && <p className="mt-2 text-center text-warn">正在提交，请勿重复收钱或重复点击。</p>}

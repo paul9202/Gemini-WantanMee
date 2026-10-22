@@ -13,6 +13,7 @@ import { lifecycleCommand } from './commands/lifecycle';
 import { ackKitchenTicket, openShift, releaseToken } from './commands/front';
 import { assignRegister, getOperationResult, manageMember } from './commands/admin';
 import { routeManualOrderToKitchen, syncOfflineEvents } from './commands/offline';
+import { heartbeatDevice, recordManualHandoff } from './commands/kitchenLink';
 
 export const REGION = 'asia-southeast1';
 const ENFORCE_APP_CHECK = false;
@@ -54,3 +55,5 @@ export const manageMemberCmd = command(manageMember);
 export const assignRegisterCmd = command(assignRegister);
 export const syncOfflineEventsCmd = command(syncOfflineEvents);
 export const routeManualOrderToKitchenCmd = command(routeManualOrderToKitchen);
+export const heartbeatDeviceCmd = command(heartbeatDevice);
+export const recordManualHandoffCmd = command(recordManualHandoff);

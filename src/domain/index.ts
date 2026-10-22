@@ -17,3 +17,5 @@ export * from './finance';
 export * from './csv';
 export * from './idempotency';
 export * from './offline';
+export * from './kitchenLink';
+export * from './receipt';

@@ -1,10 +1,10 @@
 # 实施状态（豪云吞面 OS）
 
-最后更新：2026-10-22 · 会话 1（续 3）· 分支 `claude/phase-a-domain`
+最后更新：2026-10-22 · 会话 1（续 4）· 分支 `claude/phase-a-domain`
 
 ## 当前阶段
 
-**阶段 A、C（服务端）完成；阶段 B 的 POS / KDS / 订单 / 设备页已接入云端；阶段 D 离线营业已实现，并通过真断网端到端验证（20/20）。** 下一步：后厨心跳（O11）、跨日未完成单（O12）、收据打印（O13），然后进入阶段 E 财务与日结。
+**阶段 A、C（服务端）完成；阶段 B 的 POS / KDS / 订单 / 设备页已接入云端；阶段 D 离线营业已实现，并通过真断网端到端验证（20/20）。** O11 后厨心跳与回执告警、O12 跨营业日未完成单、O13 收据打印已完成并经两台浏览器端到端验证（15/15）。下一步：阶段 E 财务与日结。
 
 | 阶段 | 状态 |
 |---|---|
@@ -22,6 +22,39 @@
 - 本地以 `git init + fetch + checkout -t origin/main` 取得源码，没有覆盖已有文件；交接 zip 写进了 `.git/info/exclude`。
 - 原 `package.json` 无法安装（`esbuild@^0.25` 与 vite 8 peer 冲突）；未使用的 `esbuild/express/dotenv/@google/genai` 已移除，并生成 lockfile。
 - 审计列出的原型问题都在代码中确认过。
+
+## O11–O13：后厨连接、跨营业日、收据（本次完成）
+
+- **O11 后厨心跳与回执**
+  - 新命令 `heartbeatDevice`：后厨、收银、老板设备都可以发；同一设备 10 秒内只写一次；返回服务器时间，前台据此测量时间偏移。
+  - 后厨屏只在页面可见且联网时每 20 秒发一次心跳；切到后台或断网就停发，所以前台能看出后厨屏离线。
+  - 判定规则在 `src/domain/kitchenLink.ts`：云端接单后不到 5 秒显示「正在送到后厨」；5 秒仍无回执显示「等待厨房确认」；15 秒仍无回执、且后厨心跳超过 45 秒没更新时，才显示醒目告警「后厨屏可能离线，请把纸单递给厨师」。
+  - 后厨心跳正常时，即使 15 秒没回执也只显示「等待」，不夸大成故障；只有收到回执才显示「后厨已收到」。
+  - POS 底栏常驻显示「后厨屏在线 / 后厨屏离线（最后 xx 前）/ 未连接」。
+  - 新命令 `recordManualHandoff`：收银登记「已递纸单」，不改变制作状态和版本。后厨屏恢复后，卡片上醒目提示「收银已递纸单 · 先核对是否已做，避免做两份」。
+- **O12 跨营业日**
+  - 后厨查询本来就不按日期截断。前一营业日的未完成单在卡片上标「跨营业日 · MM-DD 的单（仍需完成）」。
+  - 订单页顶部单列「跨营业日未完成」。这类单可以照常开始、出餐，营业日保持原日期；即使前一天已关账也不阻止出餐，因为出餐不是记账。
+- **O13 收据**
+  - 内容由 `src/domain/receipt.ts` 生成：只显示已经发生的出餐时间，未出餐显示当前状态。
+  - 离线单标「本机接单 / 人工传单」；未同步时另标「尚未同步云端」，保留临时号；设备估计的时间标「（本机）」。不含成本和利润。
+  - 支持 58mm / 80mm 两种纸宽，系统打印对话框。收据单独渲染到 `#print-root`，打印时只输出收据，纸高按内容测量（`@page size: 宽×实际高`）。
+  - 第一次之后的打印都标「副本」，按本机记录的打印次数判断；打印失败只提示，订单已保存。
+  - 入口：POS 接单后（在线 / 离线）、订单页每一行、同步中心的离线单。
+
+**验证中发现并修复**：第一次导出的收据 PDF 是整张信纸、带米色背景。原因是 `@page size: 58mm auto` 无效，且隐藏的其他内容仍然占着版面。改成专用打印节点 + 实测高度后，PDF 正好是 58mm 宽的收据。
+
+**限制**：「副本」按本机打印次数判断，换一台设备重印不会标副本；没有 ESC/POS 直连或自动切纸，属于后续硬件集成。
+
+新增 / 修改文件：
+```
+A src/domain/kitchenLink.ts  src/domain/receipt.ts  src/domain/link-receipt.test.ts
+A src/data/heartbeat.ts  src/features/receipt/ReceiptDialog.tsx
+M src/data/offline/runtime.ts（serverOffsetMs / serverNow）  src/data/firebase/commands.ts
+M src/features/pos/PosPage.tsx  src/features/kitchen/KitchenPage.tsx  src/features/orders/OrdersPage.tsx  src/features/sync/SyncPage.tsx  src/index.css
+A functions/src/commands/kitchenLink.ts  functions/test/link.test.ts  M functions/src/index.ts  functions/package.json
+A scripts/lib/cdp.mjs  scripts/link-receipt-e2e.mjs  docs/screenshots/link/*
+```
 
 ## 阶段 D：离线营业（本次完成）
 
@@ -178,6 +211,8 @@ M docs/implementation-status.md
 | 本次前端改动后重跑上面全部命令 | ✅ typecheck 0、48/48、build 成功、functions typecheck 0、Rules 27/27、命令 11/11 |
 | 阶段 D 完成后重跑 | ✅ typecheck 0、`npm test` 52/52（含 4 项 IndexedDB）、build 成功（PWA 预缓存 20 项）、functions typecheck 0、Rules 27/27、命令 + 离线 20/20 |
 | `node scripts/offline-e2e.mjs`（正式构建 + Service Worker + 干净的 Emulator，CDP 真断网） | ✅ 20/20，结果在 `docs/screenshots/offline/offline-e2e.json` |
+| O11–O13 完成后重跑 | ✅ typecheck 0、`npm test` 55/55、build 成功、functions typecheck 0、Rules 27/27、命令 + 离线 + 连接 23/23 |
+| `node scripts/link-receipt-e2e.mjs`（两台独立无头 Chrome：收银 localhost / 后厨 127.0.0.1，干净的 Emulator） | ✅ 15/15，结果在 `docs/screenshots/link/link-receipt-e2e.json`；首轮 10/11 是脚本点错卡片且等待短于冷启动，已修正后重跑 |
 
 **真断网 E2E 步骤**：
 1. 老板指定主收银机 → 收银开班 → 离线可用检查全部 ✓（应用壳、9 张照片已缓存、快照）。
@@ -252,7 +287,7 @@ M docs/implementation-status.md
 | 组 | 场景 |
 |---|---|
 | 领域 M01–M13 | ✅D 全部；M02/M11/M13 另有服务端拒绝的 ✅E |
-| 在线 O01–O13 | ✅E O01、O02、O03、O05、O06、O07、O08；O01/O02/O06/O08/O10 另经浏览器验证；🟡 O04（服务端 ✅E；客户端已实现「核对结果」流程，但没有在浏览器中模拟响应丢失）、O09（撤回超时与关账只在领域层验证，牌被重新分配已 ✅E）、O10（✅D 合计 + 浏览器验证 KDS 界面）、O11（POS 显示「等待厨房确认」，后厨心跳未做）；⏳ O12、O13 |
+| 在线 O01–O13 | ✅E O01、O02、O03、O05、O06、O07、O08；O01/O02/O06/O08/O10 另经浏览器验证；🟡 O04（服务端 ✅E；客户端已实现「核对结果」流程，但没有在浏览器中模拟响应丢失）、O09（撤回超时与关账只在领域层验证，牌被重新分配已 ✅E）、O10（✅D 合计 + 浏览器验证 KDS 界面）；✅ O11（领域 + ✅E + 两台浏览器：后厨关闭约 45 秒后 POS 显示离线，新单 5 秒「等待确认」、15 秒醒目告警，登记人工传单后后厨恢复可见提示）、O12（✅E + 浏览器：后厨与订单页都显示前一营业日的单，可出餐、营业日不变）、O13（领域 + 浏览器：收据内容、打印 PDF 只含收据、重印「副本」、打印不产生交易；实际热敏打印机未测） |
 | 离线 D01–D14 | ✅ D01（E2E 真断网刷新 + IndexedDB 测试）、D02（IndexedDB 原子回滚测试）、D03（E2E + ✅E）、D04（✅E 每条重复 10 次 + E2E）、D05（✅E + E2E）、D07（✅E）、D08（✅E）、D11（✅D + ✅E + E2E）、D13（✅E）、D14（✅E 作废序号；客户端处理流程已实现，未在浏览器模拟响应丢失）；🟡 D06（服务端按 eventId 幂等 ✅E；未专门模拟「上传成功但页面在收到响应前关闭」）、D09（未知菜单版本 ✅E；只有一个菜单版本，「旧但有效版本」未测）、D10（未来时间与超出 24 小时资格 ✅E；「回拨 10 分钟」「跨 04:00」未单独测）、D12（同 eventId 导入 ✅；单写端锁已实现，未做双标签自动化测试） |
 | 财务 F01–F12 | ✅D F01–F10、F12；F03 另有 ✅E；🟡 F11（写屏障 ✅E，关账流程未做） |
 
@@ -290,8 +325,7 @@ npm run photos      # 重新从图谱生成照片
 
 ## 下一步入口
 
-1. 后厨心跳命令 + POS「等待厨房确认 5 秒 / 心跳过期 15 秒」提示（O11）；跨营业日未完成单（O12）；58/80mm 收据与重印副本（O13，离线收据标「本机接单 / 人工传单」）。
-2. 阶段 E：老板「离线待核对」处理界面（解决事件，例如餐牌已回收只补历史账、价格差异确认）、关账命令与写屏障流程、迟到离线单的「关账后待调整」与更正版本、进货/损耗/资金往来、报表与 CSV。之后删除 `src/legacy/`。
-3. 离线补测：D06 页面在收到响应前关闭、D09 旧但有效的菜单版本（需要第二个菜单版本）、D10 时钟回拨与跨 04:00、D12 双标签自动化测试；实机拔网线测试。
-4. 英文可选设置、员工培训图卡打印页。
+1. 阶段 E：老板「离线待核对」处理界面（解决事件，例如餐牌已回收只补历史账、价格差异确认）、关账命令与写屏障流程、迟到离线单的「关账后待调整」与更正版本、进货/损耗/资金往来、报表与 CSV。之后删除 `src/legacy/`。
+2. 离线补测：D06 页面在收到响应前关闭、D09 旧但有效的菜单版本（需要第二个菜单版本）、D10 时钟回拨与跨 04:00、D12 双标签自动化测试；实机拔网线测试。
+3. 英文可选设置、员工培训图卡打印页；实际热敏打印机与平板实机测试。
 4. 性能：主包约 855KB（主要是 Firebase SDK），后续按页面拆分代码。

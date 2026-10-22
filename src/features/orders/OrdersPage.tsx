@@ -12,6 +12,7 @@ import { useLiveQuery, useNow } from '../../data/firebase/live';
 import { reasonText } from '../../data/firebase/reasons';
 import { useSession } from '../../app/session';
 import { Photo } from '../../ui/visual';
+import { ReceiptDialog, receiptFromOrder } from '../receipt/ReceiptDialog';
 
 interface OrderRow {
   id: string;
@@ -28,6 +29,10 @@ interface OrderRow {
   acceptedAtEffectiveMs: number;
   kitchenAckAtMs: number | null;
   tokenReturnedAtMs?: number;
+  manualHandoffAtMs?: number | null;
+  source?: 'online' | 'offline';
+  offlineReceiptNumber?: string | null;
+  businessDate: string;
   version: number;
   items: { lineId: string; nameZh: string; quantity: number; photoId: string }[];
 }
@@ -44,6 +49,13 @@ export function OrdersPage() {
     date ? query(collection(db, storePath('orders')), where('businessDate', '==', date), orderBy('acceptedAtEffectiveMs', 'desc')) : null,
     `orders-${date}`,
   );
+  // O12：新营业日仍未完成的旧单单独列出，保持原营业日。
+  const openQ = useLiveQuery<OrderRow>(
+    query(collection(db, storePath('orders')), where('fulfillmentStatus', 'in', ['queued', 'preparing'])),
+    'orders-open',
+  );
+  const carried = openQ.data.filter((o) => date && o.businessDate < date).sort((a, b) => a.acceptedAtEffectiveMs - b.acceptedAtEffectiveMs);
+  const [receiptId, setReceiptId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ kind: 'cancel' | 'refund'; order: OrderRow } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -62,22 +74,16 @@ export function OrdersPage() {
     }
   }
 
-  return (
-    <div className="mx-auto max-w-6xl p-4">
-      <h1 className="mb-1 text-2xl font-bold">今日订单</h1>
-      <p className="mb-4 text-ink-2">营业日 {date} · {q.data.length} 单{q.fromCache ? ' · 画面可能过期' : ''}</p>
-      {msg && <p role="alert" className="mb-3 rounded-lg bg-danger-bg px-3 py-2 text-danger">{msg}</p>}
-      <div className="overflow-hidden rounded-2xl border border-line bg-card">
-        {q.data.length === 0 && <p className="p-6 text-ink-2">{q.loading ? '正在载入…' : '今天还没有订单'}</p>}
-        {q.data.map((o) => (
+  const row = (o: OrderRow) => (
           <div key={o.id} className="flex flex-wrap items-center gap-3 border-b border-line p-3 last:border-0">
             <span className="w-14 text-center text-3xl font-black tabular-nums">{o.tokenNumber}</span>
             <div className="flex -space-x-2">{o.items.slice(0, 3).map((i) => <Photo key={i.lineId} id={i.photoId} size={44} rounded={22} className="border-2 border-white" />)}</div>
             <div className="min-w-0 flex-1">
               <div className="font-semibold">{o.items.map((i) => `${i.quantity}× ${i.nameZh}`).join('，')}</div>
               <div className="text-sm text-ink-2">
-                票号 {o.receiptNumber} · {new Date(o.acceptedAtEffectiveMs).toLocaleTimeString('zh-CN', { hour12: false })} · {o.serviceMode === 'dine_in' ? '堂食' : '打包'} · {o.paymentMethod === 'cash' ? '现金' : 'QR'}
-                {o.kitchenAckAtMs ? ' · 后厨已收到' : ' · 等待厨房确认'}
+                {o.businessDate !== date ? `营业日 ${o.businessDate} · ` : ''}票号 {o.receiptNumber}{o.offlineReceiptNumber ? `（${o.offlineReceiptNumber}）` : ''} · {new Date(o.acceptedAtEffectiveMs).toLocaleTimeString('zh-CN', { hour12: false })} · {o.serviceMode === 'dine_in' ? '堂食' : '打包'} · {o.paymentMethod === 'cash' ? '现金' : 'QR'}
+                {o.source === 'offline' ? ' · 离线单（人工传单）' : o.kitchenAckAtMs ? ' · 后厨已收到' : ' · 等待厨房确认'}
+                {o.manualHandoffAtMs ? ' · 已人工传单' : ''}
                 {o.tokenReturnedAtMs ? ' · 餐牌已收回' : ''}
               </div>
             </div>
@@ -86,6 +92,7 @@ export function OrdersPage() {
             </span>
             <span className={`rounded-lg px-2 py-1 text-sm font-semibold ${o.paymentState === 'refund_due' ? 'bg-danger-bg text-danger' : 'bg-subtle'}`}>{PAY_ZH[o.paymentState]}</span>
             <b className="w-24 text-right tabular-nums">{formatRM(o.totalSen)}</b>
+            <button type="button" onClick={() => setReceiptId(o.id)} className="h-11 rounded-lg border border-control px-3 font-semibold">收据</button>
             {(o.fulfillmentStatus === 'queued' || (o.fulfillmentStatus === 'preparing' && !o.kitchenCancelRequested)) && (
               <button type="button" onClick={() => setDialog({ kind: 'cancel', order: o })} className="h-11 rounded-lg border border-control px-3 font-semibold">取消</button>
             )}
@@ -93,8 +100,27 @@ export function OrdersPage() {
               <button type="button" onClick={() => setDialog({ kind: 'refund', order: o })} className="h-11 rounded-lg border border-danger px-3 font-semibold text-danger">登记退款</button>
             )}
           </div>
-        ))}
+  );
+
+  return (
+    <div className="mx-auto max-w-6xl p-4">
+      {carried.length > 0 && (
+        <section className="mb-5">
+          <h2 className="mb-1 text-xl font-bold text-warn">跨营业日未完成 · {carried.length} 单</h2>
+          <p className="mb-2 text-sm text-ink-2">前一营业日接的单仍在制作，归属原营业日，后厨屏继续显示。</p>
+          <div className="overflow-hidden rounded-2xl border-2 border-warn bg-card">{carried.map(row)}</div>
+        </section>
+      )}
+      <h1 className="mb-1 text-2xl font-bold">今日订单</h1>
+      <p className="mb-4 text-ink-2">营业日 {date} · {q.data.length} 单{q.fromCache ? ' · 画面可能过期' : ''}</p>
+      {msg && <p role="alert" className="mb-3 rounded-lg bg-danger-bg px-3 py-2 text-danger">{msg}</p>}
+      <div className="overflow-hidden rounded-2xl border border-line bg-card">
+        {q.data.length === 0 && <p className="p-6 text-ink-2">{q.loading ? '正在载入…' : '今天还没有订单'}</p>}
+        {q.data.map(row)}
       </div>
+      {receiptId && config && (
+        <ReceiptDialog receiptKey={receiptId} load={() => receiptFromOrder(receiptId, config.name)} menuVersion={config.activeMenuVersion} timeZone={config.timeZone} onClose={() => setReceiptId(null)} />
+      )}
       {dialog && <ActionDialog dialog={dialog} busy={busy} onClose={() => setDialog(null)} onRun={run} />}
     </div>
   );

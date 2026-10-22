@@ -37,11 +37,13 @@ interface RuntimeState {
   lastSyncAtMs: number | null;
   lastSyncError: string | null;
   snapshot: OfflineSnapshot | null;
+  /** 最近一次测得的「服务器时间 − 本机时间」；未测到时为 null。 */
+  serverOffsetMs: number | null;
 }
 
 let state: RuntimeState = {
   loaded: false, outbox: [], localOrders: [], pendingOps: [], manualOffline: false, syncing: false,
-  lastSyncAtMs: null, lastSyncError: null, snapshot: null,
+  lastSyncAtMs: null, lastSyncError: null, snapshot: null, serverOffsetMs: null,
 };
 const listeners = new Set<() => void>();
 const emit = (patch: Partial<RuntimeState>) => {
@@ -74,9 +76,13 @@ export async function saveSnapshot(s: OfflineSnapshot) {
 }
 
 export async function recordServerOffset(offsetMs: number) {
+  emit({ serverOffsetMs: Math.round(offsetMs) });
   if (!state.snapshot) return;
   await saveSnapshot({ ...state.snapshot, serverOffsetMs: Math.round(offsetMs) });
 }
+
+/** 估计的服务器当前时间。 */
+export const serverNow = (s: RuntimeState) => Date.now() + (s.serverOffsetMs ?? s.snapshot?.serverOffsetMs ?? 0);
 
 // ---------- 补同步 ----------
 

@@ -19,6 +19,8 @@ import {
 } from '../../data/offline/runtime';
 import { useRegister } from '../../data/register';
 import { Icon } from '../../ui/visual';
+import { useSession } from '../../app/session';
+import { ReceiptDialog, receiptFromLocal } from '../receipt/ReceiptDialog';
 
 const REVIEW_ZH: Record<OfflineReviewReason, string> = {
   REGISTER_REVOKED: '这台设备已不是主收银机（换机）',
@@ -52,6 +54,8 @@ export function SyncPage() {
   const browserOnline = useOnline();
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [receiptOrder, setReceiptOrder] = useState<LocalOrder | null>(null);
+  const { config } = useSession();
   const offline = !browserOnline || rt.manualOffline;
   const unsynced = unsyncedEvents(rt);
   const decisions = unresolvedOps(rt).filter((o) => o.status === 'not_found');
@@ -166,6 +170,7 @@ export function SyncPage() {
                   onClick={() => run(o.clientOrderId, () => appendManualEvent(ctx!, 'manual_served', o.clientOrderId))} />
                 <Step done={m.tokenReturned} label="实体牌已收回" disabled={!ctx || busy !== null || !m.served}
                   onClick={() => run(o.clientOrderId, () => appendManualEvent(ctx!, 'token_returned', o.clientOrderId, o.tokenNumber))} />
+                <button type="button" onClick={() => setReceiptOrder(o)} className="h-11 rounded-lg border border-control px-3 text-sm font-semibold">收据</button>
                 {accepted && !m.served && !offline && (
                   <button type="button" disabled={busy !== null}
                     onClick={() => run(o.clientOrderId, async () => {
@@ -202,6 +207,14 @@ export function SyncPage() {
           </table>
         </div>
       </section>
+
+      {receiptOrder && config && (() => {
+        const rec = createRecord(receiptOrder);
+        return (
+          <ReceiptDialog receiptKey={receiptOrder.clientOrderId} menuVersion={receiptOrder.menuVersion} timeZone={config.timeZone} onClose={() => setReceiptOrder(null)}
+            load={async () => receiptFromLocal(receiptOrder, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(events, receiptOrder.clientOrderId).served })} />
+        );
+      })()}
 
       <section className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-card p-4">
         <Icon name="list" size={28} />
