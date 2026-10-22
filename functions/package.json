@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit -p .",
     "test:rules": "tsx --test \"test/rules.test.ts\"",
     "test:commands": "tsx --test \"test/commands.test.ts\" \"test/offline.test.ts\"",
-    "seed": "tsx scripts/seed-emulator.ts"
+    "seed": "tsx scripts/seed-emulator.ts",
+    "bootstrap:cloud": "tsx scripts/bootstrap-cloud.ts"
   },
   "dependencies": {
     "firebase-admin": "^14.5.0",
