@@ -16,3 +16,4 @@ export * from './businessDay';
 export * from './finance';
 export * from './csv';
 export * from './idempotency';
+export * from './offline';

@@ -2,18 +2,15 @@
  * createOrder：订单、支付、私有成本、餐牌占用、厨房投影、收银机序号、票号、operation、审计——同一事务。
  * 服务器按菜单版本重算价格与配置；前端传入的总价只用于比对，不是权威。
  */
-import { Timestamp } from 'firebase-admin/firestore';
 import { BOM_VERSIONS } from '../../../src/domain/bom';
 import { businessDateOf } from '../../../src/domain/businessDay';
 import { Cart, computeTotals } from '../../../src/domain/cart';
-import { buildKitchenTicket } from '../../../src/domain/kitchen';
-import { isValidQuantity, lineNameZh, linePhotoId, linePortions, parseLineConfig, LineConfig } from '../../../src/domain/lineItem';
+import { isValidQuantity, parseLineConfig, LineConfig } from '../../../src/domain/lineItem';
 import { MENU_VERSIONS, SERVICE_MODES } from '../../../src/domain/menu';
-import { newAcceptedState } from '../../../src/domain/orderLifecycle';
 import { checkPayment } from '../../../src/domain/payment';
-import { linePictograms } from '../../../src/domain/pictograms';
 import { holdToken, isTokenNumber, TokenBoard } from '../../../src/domain/tokens';
 import { CommandContext, runCommand } from '../core/command';
+import { receiptNumberFor, writeAcceptedOrder } from '../core/orderWrites';
 import { CommandError } from '../core/errors';
 import { bool, int, obj, oneOf, optInt, str, storeId, uuid, bad } from '../core/input';
 import { loadStoreConfig, parseRegisterClaim, REGISTER_CLAIM_FIELDS, requireActiveRegister, requireDayOpen, requireNextSequence } from '../core/store';
@@ -69,9 +66,6 @@ export function parseCreateOrder(raw: unknown) {
 
 export type CreateOrderInput = ReturnType<typeof parseCreateOrder>;
 
-function receiptNumberFor(businessDate: string, seq: number): string {
-  return `${businessDate.replace(/-/g, '').slice(2)}-${String(seq).padStart(3, '0')}`;
-}
 
 export async function createOrder(db: Firestore, uid: string | undefined, raw: unknown) {
   const input = parseCreateOrder(raw);
@@ -136,56 +130,17 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
 
   // ---- 写入 ----
   const orderId = o.clientOrderId;
-  const paymentId = `${orderId}-p1`;
   const receiptSeq = day.receiptSeq + 1;
   const receiptNumber = receiptNumberFor(businessDate, receiptSeq);
-  const life = newAcceptedState(totals.totalSen);
-  const acceptedAt = Timestamp.fromMillis(nowMs);
-  const items = lines.map((l, i) => {
-    const p = linePortions(menu, l.config);
-    return {
-      lineId: l.lineId, ...l.config, quantity: l.quantity,
-      unitPriceSen: totals.lines[i].unitPriceSen, lineTotalSen: totals.lines[i].lineTotalSen,
-      noodleHalfUnits: p.noodleHalfUnits, wantonCount: p.wantonCount,
-      nameZh: lineNameZh(menu, l.config), photoId: linePhotoId(l.config),
-      pictogramIds: linePictograms(menu, l.config, o.serviceMode).map((x) => x.id),
-    };
-  });
-
-  tx.create(store.order(orderId), {
-    schemaVersion: 2, storeId: ctx.storeId, id: orderId, receiptNumber, offlineReceiptNumber: null,
-    tokenNumber: o.tokenNumber, serviceMode: o.serviceMode, source: 'online', kitchenRouting: 'digital',
-    ...life,
-    items, totalSen: totals.totalSen, portionCount: totals.portionCount,
-    paymentMethod: input.payment.method, cashTenderedSen: input.payment.method === 'cash' ? input.payment.tenderedSen : null, changeSen: pay.changeSen,
-    acceptedAtEffective: acceptedAt, acceptedAtEffectiveMs: nowMs, deviceAcceptedAtMs: o.deviceAcceptedAtMs, cloudReceivedAtMs: nowMs,
-    kitchenAckAtMs: null, timeQuality: 'server', businessDate, menuVersion: menu.version,
+  const { paymentId } = writeAcceptedOrder(tx, store, {
+    storeId: ctx.storeId, orderId, receiptNumber, offlineReceiptNumber: null, tokenNumber: o.tokenNumber, serviceMode: o.serviceMode,
+    source: 'online', kitchenRouting: 'digital', menu, bom, lines, totals,
+    payment: { method: input.payment.method, tenderedSen: input.payment.tenderedSen, changeSen: pay.changeSen, qrExternalVerificationNote: null },
+    acceptedAtEffectiveMs: nowMs, deviceAcceptedAtMs: o.deviceAcceptedAtMs, cloudReceivedAtMs: nowMs, timeQuality: 'server', businessDate,
     registerId: input.claim.registerId, registerEpoch: input.claim.registerEpoch, shiftId: input.shiftId, sequence: input.sequence,
-    createdBy: actor.uid, updatedAtMs: nowMs,
-  });
-  tx.create(store.payment(paymentId), {
-    id: paymentId, orderId, method: input.payment.method, amountSen: totals.totalSen,
-    tenderedSen: input.payment.method === 'cash' ? input.payment.tenderedSen : null, changeSen: pay.changeSen,
-    confirmedBy: actor.uid, businessDate, occurredAtMs: nowMs, registerId: input.claim.registerId, shiftId: input.shiftId,
-  });
-  tx.create(store.orderCost(orderId), {
-    orderId, bomVersion: bom.version, businessDate,
-    lines: totals.lines.map((l) => ({ lineId: l.lineId, unitCostUnits: l.unitCostUnits, lineCostUnits: l.lineCostUnits })),
-    ingredientCostUnits: totals.ingredientCostUnits, packagingCostUnits: totals.packagingCostUnits, totalCostUnits: totals.totalCostUnits,
-    allocatedCostUnits: totals.totalCostUnits,
-    allocationEvents: [{ id: `${input.operationId}-alloc`, type: 'allocate', costUnits: totals.totalCostUnits, businessDate, atMs: nowMs }],
-    pendingCalibration: bom.pendingCalibration,
+    createdBy: actor.uid, allocationEventId: `${input.operationId}-alloc`,
   });
   tx.set(store.token(o.tokenNumber), { ...held.token, updatedAtMs: nowMs });
-  tx.create(store.ticket(orderId), {
-    ...buildKitchenTicket(menu, {
-      orderId, tokenNumber: o.tokenNumber, serviceMode: o.serviceMode, kitchenRouting: 'digital', fulfillmentStatus: 'queued',
-      kitchenCancelRequested: false, acceptedAtEffectiveMs: nowMs, startedAtMs: null, servedAtMs: null, timeQuality: 'server',
-      businessDate, version: life.version, lines,
-    }),
-    kitchenAckAtMs: null,
-    receiptNumber,
-  });
   tx.update(store.register(input.claim.registerId), { lastAppliedSequence: input.sequence, lastSeenAtMs: nowMs });
   tx.set(store.businessDay(businessDate), { state: 'open', receiptSeq, updatedAtMs: nowMs }, { merge: true });
 

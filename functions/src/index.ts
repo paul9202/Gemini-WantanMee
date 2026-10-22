@@ -12,6 +12,7 @@ import { createOrder } from './commands/createOrder';
 import { lifecycleCommand } from './commands/lifecycle';
 import { ackKitchenTicket, openShift, releaseToken } from './commands/front';
 import { assignRegister, getOperationResult, manageMember } from './commands/admin';
+import { routeManualOrderToKitchen, syncOfflineEvents } from './commands/offline';
 
 export const REGION = 'asia-southeast1';
 const ENFORCE_APP_CHECK = false;
@@ -51,3 +52,5 @@ export const confirmKitchenCancelCmd = command((d, u, x) => lifecycleCommand(d, 
 export const confirmFullRefundCmd = command((d, u, x) => lifecycleCommand(d, 'confirmFullRefund', u, x));
 export const manageMemberCmd = command(manageMember);
 export const assignRegisterCmd = command(assignRegister);
+export const syncOfflineEventsCmd = command(syncOfflineEvents);
+export const routeManualOrderToKitchenCmd = command(routeManualOrderToKitchen);

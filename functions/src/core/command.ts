@@ -60,6 +60,7 @@ export function storeRefs(db: Firestore, storeId: string) {
     businessDay: (date: string) => root.collection('businessDays').doc(date),
     operation: (id: string) => root.collection('operations').doc(id),
     audit: (id: string) => root.collection('auditEvents').doc(id),
+    inbox: (eventId: string) => root.collection('offlineInbox').doc(eventId),
     status: root.collection('operationsStatus').doc('current'),
   };
 }
