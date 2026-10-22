@@ -1,6 +1,7 @@
 /**
- * POS 点单页：同一画布完成常规点单（02 §4）。
- * 接单进度只显示有依据的事实：本机已记录 → 云端已接单 → 后厨已收到。
+ * POS 点单页：同一画布完成常规点单（02 §4）；指定主收银机断网时本机接单（01 §7）。
+ * 接单进度只显示有依据的事实：本机已记录 → 云端已接单 → 后厨已收到；
+ * 断网时只完成第一步，后两步明确显示「未同步」与「请人工传单」。
  */
 import { useEffect, useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
@@ -9,13 +10,18 @@ import { addLine, Cart, computeTotals, emptyCart, setLineQuantity, setServiceMod
 import { defaultConfig, LineConfig } from '../../domain/lineItem';
 import { MENU_VERSIONS } from '../../domain/menu';
 import { formatRM, parseRMInput } from '../../domain/money';
+import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, TokenStateName } from '../../domain/tokens';
 import { formatClock } from '../../domain/timing';
 import { db, storePath } from '../../data/firebase/client';
-import { CommandFailure, newOperationId, reconcile, submit } from '../../data/firebase/commands';
+import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
 import { useLiveDoc, useLiveQuery, useNow, useOnline } from '../../data/firebase/live';
 import { reasonText } from '../../data/firebase/reasons';
-import { kvGet, kvSet, listPendingOps, PendingOp, putPendingOp } from '../../data/local/idb';
+import { commitOfflineOrder, kvGet, kvSet, PendingOp, putPendingOp, seqKey } from '../../data/local/idb';
+import { useWriterLock } from '../../data/local/writerLock';
+import {
+  appendManualEvent, recordServerOffset, reloadLocal, saveSnapshot, setManualOffline, syncNow, unresolvedOps, unsyncedEvents, useOfflineRuntime, voidRejectedSequence,
+} from '../../data/offline/runtime';
 import { useRegister } from '../../data/register';
 import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
@@ -31,6 +37,7 @@ interface CreateOrderResult {
   tokenNumber: number;
   totalSen: number;
   changeSen: number | null;
+  acceptedAtMs: number;
   replayed?: boolean;
 }
 
@@ -39,22 +46,31 @@ type Stage =
   | { kind: 'saving' }
   | { kind: 'submitting' }
   | { kind: 'accepted'; result: CreateOrderResult; method: string }
+  | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: number; changeSen: number | null }
   | { kind: 'rejected'; reason: string; code: string }
   | { kind: 'unknown'; operationId: string }
   | { kind: 'local_failed'; message: string };
 
 export function PosPage() {
-  const { config, member } = useSession();
+  const { config, member, user, deviceId, usingSnapshot } = useSession();
   const reg = useRegister();
-  const online = useOnline();
+  const browserOnline = useOnline();
+  const rt = useOfflineRuntime();
+  const offlineMode = !browserOnline || rt.manualOffline;
+  const writer = useWriterLock(true);
   const menu = config ? MENU_VERSIONS[config.activeMenuVersion] : undefined;
 
   const tokensQ = useLiveQuery<{ number: number; state: TokenStateName; orderId: string | null; version: number }>(collection(db, storePath('tokens')), 'tokens');
+  const tokensFromServer = !tokensQ.fromCache && tokensQ.data.length > 0;
+  const unsynced = unsyncedEvents(rt);
+  const unresolved = unresolvedOps(rt);
+  // 本机餐牌视图：服务器餐牌（断网时用最后快照）+ 尚未被服务器接纳的本机事件。
   const board: TokenBoard = useMemo(() => {
-    const b = createTokenBoard();
-    for (const t of tokensQ.data) b[t.number] = { number: t.number, state: t.state, orderId: t.orderId, version: t.version };
-    return b;
-  }, [tokensQ.data]);
+    let base = createTokenBoard();
+    if (tokensFromServer || !rt.snapshot) for (const t of tokensQ.data) base[t.number] = { number: t.number, state: t.state, orderId: t.orderId, version: t.version };
+    else base = { ...rt.snapshot.tokens };
+    return overlayLocalTokens(base, unsynced.map((r) => r.event));
+  }, [tokensQ.data, tokensFromServer, rt.snapshot, unsynced]);
   const queueQ = useLiveQuery<{ fulfillmentStatus: string; acceptedAtEffectiveMs: number }>(
     query(collection(db, storePath('kitchenTickets')), where('kitchenRouting', '==', 'digital'), where('fulfillmentStatus', 'in', ['queued', 'preparing'])),
     'pos-queue',
@@ -71,20 +87,17 @@ export function PosPage() {
   const [cartOpen, setCartOpen] = useState(false);
   const [payOpen, setPayOpen] = useState(false);
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
-  const [pending, setPending] = useState<PendingOp[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (menu && !draft) setDraft(defaultConfig(menu, 'dry_noodle', 'black'));
   }, [menu, draft]);
-  const refreshPending = () => listPendingOps().then((ops) => setPending(ops.filter((o) => o.status === 'submitting' || o.status === 'unknown_result')));
-  useEffect(() => void refreshPending(), []);
   // 上一次发出的牌号存本机，页面切换或刷新后仍按顺序循环建议。
   useEffect(() => {
     void kvGet<number>('lastIssuedToken').then((n) => {
       if (!n) return;
       setLastIssued(n);
-      setToken(null); // 重新按上次牌号之后建议
+      setToken(null);
     });
   }, []);
   const rememberIssued = (n: number) => {
@@ -99,9 +112,23 @@ export function PosPage() {
 
   // 当前牌失效（被占用）或未选时，循环建议下一个可用牌；只建议，不抢占。
   useEffect(() => {
-    if (tokensQ.loading) return;
+    if (tokensQ.loading && !rt.snapshot) return;
     if (token === null || board[token]?.state !== 'available') setToken(suggestNextToken(board, lastIssued));
-  }, [board, token, lastIssued, tokensQ.loading]);
+  }, [board, token, lastIssued, tokensQ.loading, rt.snapshot]);
+
+  // 联网且数据来自服务器时，持续保存离线营业快照（开档时的「离线可用」准备）。
+  useEffect(() => {
+    if (offlineMode || usingSnapshot || reg.fromSnapshot || reg.status !== 'ready' || !tokensFromServer) return;
+    if (!user || !member || !config || !deviceId || !reg.claim || !reg.shiftId || !reg.shift) return;
+    const tokens: TokenBoard = {};
+    for (const t of tokensQ.data) tokens[t.number] = { number: t.number, state: t.state, orderId: t.orderId, version: t.version };
+    void saveSnapshot({
+      uid: user.uid, member, config, deviceId, claim: reg.claim, shiftId: reg.shiftId, shift: reg.shift, serverApplied: reg.serverApplied,
+      tokens, serverOffsetMs: rt.snapshot?.serverOffsetMs ?? 0, savedAtMs: Date.now(),
+    });
+    // 只在服务器数据变化时保存。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offlineMode, usingSnapshot, reg.status, reg.serverApplied, reg.shiftId, reg.claim?.registerEpoch, tokensFromServer, tokensQ.data, config, member]);
 
   const lastOrder = useLiveDoc<{ kitchenAckAtMs: number | null; fulfillmentStatus: string }>(
     stage.kind === 'accepted' ? storePath(`orders/${stage.result.orderId}`) : null,
@@ -112,13 +139,13 @@ export function PosPage() {
 
   const totals = computeTotals(menu, BOM_V1, cart);
   const counts = countTokens(board);
-  const unresolved = pending.length > 0;
   const busy = stage.kind === 'saving' || stage.kind === 'submitting';
+  const blockingOnline = unresolved.filter((o) => o.status === 'not_found');
 
-  const payDisabledReason = cart.lines.length === 0 ? '先加入餐品'
+  const payDisabledReason = writer !== 'held' ? '另一个标签页正在收银，这里只能查看'
+    : cart.lines.length === 0 ? '先加入餐品'
     : token === null ? '没有可用餐牌，请先回收餐牌'
-    : unresolved ? '有收款结果待核对，请先处理上方提示'
-    : !online ? '已断网：离线接单尚未开放'
+    : !offlineMode && blockingOnline.length > 0 ? '有收款待你决定处理方式，请先到「同步」页处理'
     : null;
 
   function addOrSave() {
@@ -143,17 +170,66 @@ export function PosPage() {
     if (q === 0 && editingLineId === lineId) setEditingLineId(null);
   }
 
-  async function confirmPayment(p: PaymentInput) {
+  function clearAfterAccept(tokenNumber: number) {
+    rememberIssued(tokenNumber);
+    setToken(null);
+    setCart(emptyCart(cart.serviceMode));
+    setEditingLineId(null);
+    setUndo(null);
+    setPayOpen(false);
+  }
+
+  const lines = () => cart.lines.map((l) => ({ lineId: l.lineId, config: l.config, quantity: l.quantity }));
+
+  /** 断网：订单、收款事实、占牌、日志、序号在同一个 IndexedDB 事务里提交。 */
+  async function confirmOffline(p: PaymentInput) {
     if (!menu || !reg.claim || !reg.shiftId || token === null) return;
-    const sequence = reg.nextSequence();
+    const claim = reg.claim;
+    const clientOrderId = crypto.randomUUID();
+    const changeSen = p.method === 'cash' && p.tenderedSen !== null ? p.tenderedSen - totals.totalSen : null;
+    setStage({ kind: 'saving' });
+    try {
+      const { order } = await commitOfflineOrder(seqKey(claim.registerId, claim.registerEpoch), reg.serverApplied, (sequence) => {
+        const payload = {
+          clientOrderId, offlineReceiptNumber: offlineReceiptNumber(claim.registerId, sequence), tokenNumber: token, serviceMode: cart.serviceMode,
+          menuVersion: menu.version, lines: lines(), totalSen: totals.totalSen,
+          payment: { method: p.method, tenderedSen: p.tenderedSen, qrExternalVerificationNote: p.qrExternalVerificationNote },
+        };
+        const event: OfflineEvent = {
+          eventId: crypto.randomUUID(), ...claim, sequence, shiftId: reg.shiftId!, occurredAtDeviceMs: Date.now(),
+          lastServerOffsetMs: rt.snapshot?.serverOffsetMs ?? 0, type: 'offline_order_created', payload,
+        };
+        return { event, order: { ...payload, sequence, createdAtMs: Date.now(), changeSen } };
+      });
+      await reloadLocal();
+      setStage({ kind: 'local_accepted', clientOrderId, offlineReceiptNumber: order.offlineReceiptNumber, tokenNumber: token, totalSen: totals.totalSen, changeSen });
+      clearAfterAccept(token);
+    } catch (e) {
+      setStage({ kind: 'local_failed', message: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** 人工交接 / 人工出餐 / 餐牌回收：追加不可变本机事件。 */
+  const appendManual = (type: 'manual_handoff' | 'manual_served' | 'token_returned', clientOrderId: string, tokenNumber?: number) =>
+    reg.claim && reg.shiftId
+      ? appendManualEvent({ claim: reg.claim, shiftId: reg.shiftId, serverApplied: reg.serverApplied }, type, clientOrderId, tokenNumber)
+      : Promise.resolve('收银机未就绪');
+
+  async function confirmOnline(p: PaymentInput) {
+    if (!menu || !reg.claim || !reg.shiftId || token === null) return;
+    // 先补传离线日志，保证序号连续。
+    if (unsynced.length) {
+      setStage({ kind: 'submitting' });
+      await syncNow();
+      await reloadLocal();
+    }
+    const claim = reg.claim;
+    const sequence = await reg.allocate();
     const operationId = newOperationId();
+    const clientOrderId = crypto.randomUUID();
     const payload = {
-      operationId, ...reg.claim, sequence, shiftId: reg.shiftId,
-      order: {
-        clientOrderId: crypto.randomUUID(), tokenNumber: token, serviceMode: cart.serviceMode, menuVersion: menu.version,
-        lines: cart.lines.map((l) => ({ lineId: l.lineId, config: l.config, quantity: l.quantity })),
-        expectedTotalSen: totals.totalSen, deviceAcceptedAtMs: Date.now(),
-      },
+      operationId, ...claim, sequence, shiftId: reg.shiftId,
+      order: { clientOrderId, tokenNumber: token, serviceMode: cart.serviceMode, menuVersion: menu.version, lines: lines(), expectedTotalSen: totals.totalSen, deviceAcceptedAtMs: Date.now() },
       payment: { method: p.method, tenderedSen: p.tenderedSen, qrConfirmed: p.qrConfirmed },
     };
     const op: PendingOp = {
@@ -168,71 +244,76 @@ export function PosPage() {
       return; // 不清空购物车，不声称成功
     }
     setStage({ kind: 'submitting' });
+    const sentAt = Date.now();
     try {
       const result = await submit<CreateOrderResult>('createOrder', payload);
       await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
-      await reg.markApplied(sequence);
+      if (!result.replayed) void recordServerOffset(result.acceptedAtMs - (sentAt + Date.now()) / 2);
       setStage({ kind: 'accepted', result, method: p.method });
-      rememberIssued(result.tokenNumber);
-      setToken(null);
-      setCart(emptyCart(cart.serviceMode));
-      setEditingLineId(null);
-      setUndo(null);
-      setPayOpen(false);
+      clearAfterAccept(result.tokenNumber);
     } catch (e) {
       const f = e instanceof CommandFailure ? e : new CommandFailure('unknown', 'UNKNOWN_RESULT', String(e));
       if (f.kind === 'rejected') {
         await putPendingOp({ ...op, status: 'rejected', reasonCode: f.reasonCode, updatedAtMs: Date.now() });
+        await voidRejectedSequence({ operationId, clientOrderId, sequence }, claim, reg.shiftId);
         setStage({ kind: 'rejected', code: f.reasonCode, reason: reasonText(f.reasonCode) });
       } else {
+        // 结果不明：保留原 ID，等待核对；绝不改成新的人工单。
         await putPendingOp({ ...op, status: 'unknown_result', updatedAtMs: Date.now() });
         setStage({ kind: 'unknown', operationId });
         setPayOpen(false);
       }
     }
-    void refreshPending();
+    await reloadLocal();
   }
 
-  async function reconcileOp(op: PendingOp) {
+  async function releaseTokenAction(n: number, orderId: string): Promise<string | null> {
+    if (!reg.claim || !reg.shiftId) return '收银机未就绪';
+    const localUnsynced = rt.localOrders.some((o) => o.clientOrderId === orderId)
+      && !rt.outbox.some((r) => r.event.type === 'offline_order_created' && r.event.payload.clientOrderId === orderId && r.status === 'accepted');
+    if (offlineMode || localUnsynced) return appendManual('token_returned', orderId, n);
+    if (unsynced.length) await syncNow();
+    const sequence = await reg.allocate();
+    const operationId = newOperationId();
     try {
-      const result = await reconcile<CreateOrderResult>('createOrder', op.payload);
-      await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
-      await reg.markApplied(op.payload.sequence as number);
-      setNotice(`已核对：${result.tokenNumber}号 ${formatRM(result.totalSen)} 云端已接单（票号 ${result.receiptNumber}）。未重复收款。`);
-      if (stage.kind === 'unknown' && stage.operationId === op.operationId) {
-        setStage({ kind: 'accepted', result, method: String(op.summary.method) });
-        setCart(emptyCart(cart.serviceMode));
-        setToken(null);
-        rememberIssued(result.tokenNumber);
-      }
-    } catch (e) {
-      const f = e instanceof CommandFailure ? e : null;
-      if (f?.kind === 'rejected') {
-        await putPendingOp({ ...op, status: 'rejected', reasonCode: f.reasonCode, updatedAtMs: Date.now() });
-        setNotice(`${op.summary.tokenNumber}号 ${formatRM(op.summary.totalSen)}：云端未接单（${reasonText(f.reasonCode)}）。钱已收时请勿再次收钱，修正后用这笔钱重新提交，或按退款处理。`);
-      } else {
-        setNotice('仍无法连接云端核对，请稍后再试。请勿再次收钱。');
-      }
-    }
-    void refreshPending();
-  }
-
-  async function releaseTokenCmd(n: number, orderId: string): Promise<string | null> {
-    if (!reg.claim) return '收银机未就绪';
-    const sequence = reg.nextSequence();
-    try {
-      await submit('releaseToken', { operationId: newOperationId(), ...reg.claim, sequence, tokenNumber: n, orderId });
-      await reg.markApplied(sequence);
+      await submit('releaseToken', { operationId, ...reg.claim, sequence, tokenNumber: n, orderId });
       return null;
     } catch (e) {
+      if (e instanceof CommandFailure && e.kind === 'rejected') await voidRejectedSequence({ operationId, clientOrderId: orderId, sequence }, reg.claim, reg.shiftId);
       return e instanceof CommandFailure ? reasonText(e.reasonCode) : String(e);
+    } finally {
+      await reloadLocal();
     }
   }
 
   const oldest = queueQ.data.reduce((m, t) => Math.min(m, t.acceptedAtEffectiveMs), Infinity);
+  const unknownOps = unresolved.filter((o) => o.status !== 'not_found');
+  const reviewCount = rt.outbox.filter((r) => r.status === 'needs_review' || r.status === 'rejected').length;
+  const handedOff = stage.kind === 'local_accepted' && manualStatus(rt.outbox.map((r) => r.event), stage.clientOrderId).handedOff;
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col">
+      {offlineMode && (
+        <div role="alert" className="flex flex-wrap items-center gap-3 border-b-2 border-warn bg-warn-bg px-4 py-2 text-warn">
+          <Icon name="handoff" size={36} />
+          <div className="min-w-0 flex-1">
+            <b className="text-lg">离线营业 · 仅本机保存 · 未同步 {unsynced.length} 条</b>
+            <div className="text-sm">后厨屏不会自动收到，请把纸单递给厨师（人工传单）。{reg.fromSnapshot ? `离线营业资格到 ${new Date(reg.shift!.offlineCapabilityExpiresAtMs).toLocaleString('zh-CN', { hour12: false })}` : ''}</div>
+          </div>
+          {rt.manualOffline && browserOnline && (
+            <button type="button" onClick={() => void setManualOffline(false).then(() => syncNow())} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">恢复在线</button>
+          )}
+          <button type="button" onClick={() => navigate('/sync')} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">同步中心</button>
+        </div>
+      )}
+      {!offlineMode && (unsynced.length > 0 || reviewCount > 0 || rt.syncing) && (
+        <div role="status" className="flex flex-wrap items-center gap-3 border-b border-warn bg-warn-bg px-4 py-2 text-warn">
+          <b>{rt.syncing ? '正在补同步本机记录…' : `本机还有 ${unsynced.length} 条未同步`}{reviewCount ? ` · ${reviewCount} 条待老板核对` : ''}</b>
+          <button type="button" onClick={() => navigate('/sync')} className="ml-auto h-10 rounded-lg border border-warn bg-card px-3 font-semibold">同步中心</button>
+        </div>
+      )}
+      {writer === 'busy' && <div role="alert" className="border-b border-danger bg-danger-bg px-4 py-2 font-semibold text-danger">另一个标签页正在收银。为避免重复记录，这个标签页只能查看。</div>}
+
       <div className="flex flex-wrap items-center gap-3 border-b border-line bg-canvas px-4 py-2">
         <div className="flex rounded-xl bg-subtle p-1" role="group" aria-label="就餐方式">
           {(['dine_in', 'takeaway'] as const).map((m) => (
@@ -251,15 +332,16 @@ export function PosPage() {
             {counts.awaiting_return}个待回收
           </button>
         )}
-        {tokensQ.fromCache && <span className="text-sm text-warn">餐牌状态可能过期</span>}
+        {!tokensFromServer && <span className="text-sm text-warn">餐牌为本机记录{rt.snapshot ? `（快照 ${new Date(rt.snapshot.savedAtMs).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}</span>}
       </div>
 
-      {(pending.length > 0 || notice) && (
+      {(unknownOps.length > 0 || notice) && (
         <div className="space-y-2 border-b border-warn bg-warn-bg px-4 py-2" role="alert">
-          {pending.map((op) => (
+          {unknownOps.map((op) => (
             <div key={op.operationId} className="flex flex-wrap items-center gap-3 text-warn">
-              <b>{op.summary.tokenNumber}号 · {formatRM(op.summary.totalSen)}：已记录收款，正在核对订单；请勿再次收钱。</b>
-              <button type="button" onClick={() => void reconcileOp(op)} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">核对结果</button>
+              <b>{op.summary.tokenNumber}号 · {formatRM(op.summary.totalSen)}：已记录收款，正在核对订单；请勿再次收钱。请问厨房是否收到这张单。</b>
+              {!offlineMode && <button type="button" onClick={() => void syncNow()} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">核对结果</button>}
+              {!offlineMode && <button type="button" onClick={() => void setManualOffline(true)} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">云端连不上？改为离线营业</button>}
             </div>
           ))}
           {notice && (
@@ -283,7 +365,12 @@ export function PosPage() {
             <CartPanel menu={menu} cart={cart} totals={totals} tokenNumber={token} editingLineId={editingLineId}
               onEdit={(id) => { const l = cart.lines.find((x) => x.lineId === id); if (l) { setEditingLineId(id); setDraft(l.config); setCartOpen(false); } }}
               onQuantity={changeQuantity} onPay={() => setPayOpen(true)} payDisabledReason={payDisabledReason}>
-              <SubmitSteps stage={stage} kitchenAck={Boolean(lastOrder.data?.kitchenAckAtMs)} />
+              <SubmitSteps stage={stage} kitchenAck={Boolean(lastOrder.data?.kitchenAckAtMs)} handedOff={handedOff}
+                onHandoff={async () => {
+                  if (stage.kind !== 'local_accepted') return;
+                  const err = await appendManual('manual_handoff', stage.clientOrderId);
+                  if (err) setNotice(err);
+                }} />
             </CartPanel>
           </div>
         </aside>
@@ -294,6 +381,7 @@ export function PosPage() {
           <span className="text-lg font-bold">本单 · {token ?? '—'}</span>
           <span className="text-ink-2">{totals.portionCount}份</span>
           {stage.kind === 'accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-ok">✓ {stage.result.tokenNumber}号已接单</span>}
+          {stage.kind === 'local_accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-warn">本机已接单 · 请人工传单</span>}
           <span className="ml-auto text-sm text-ink-2">查看 ▲</span>
         </button>
         <button type="button" onClick={() => setPayOpen(true)} disabled={Boolean(payDisabledReason)}
@@ -302,8 +390,8 @@ export function PosPage() {
 
       <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line bg-card px-4 py-2 text-base">
         <Icon name="clock" size={20} />
-        <span>厨房待做 <b>{queueQ.data.length}</b> 单</span>
-        {Number.isFinite(oldest) && <QueueClock since={oldest} />}
+        {offlineMode ? <span className="text-warn">断网中：厨房队列无法更新</span> : <span>厨房待做 <b>{queueQ.data.length}</b> 单</span>}
+        {!offlineMode && Number.isFinite(oldest) && <QueueClock since={oldest} />}
         {undo && (
           <span className="ml-auto flex items-center gap-2 rounded-lg bg-subtle px-3 py-1">
             {undo.label}
@@ -312,11 +400,12 @@ export function PosPage() {
         )}
       </footer>
 
-      {pickerOpen && <TokenPicker board={board} current={token} onPick={setToken} onRelease={releaseTokenCmd} onClose={() => setPickerOpen(false)} />}
+      {pickerOpen && <TokenPicker board={board} current={token} onPick={setToken} onRelease={releaseTokenAction} onClose={() => setPickerOpen(false)} />}
       {payOpen && token !== null && (
         <PaymentDrawer dueSen={totals.totalSen} tokenNumber={token} portions={totals.portionCount} serviceMode={cart.serviceMode}
-          qrPayee={config.qrPayee} online={online} busy={busy}
-          onConfirm={(p) => void confirmPayment(p)} onClose={() => { setPayOpen(false); if (stage.kind === 'rejected') setStage({ kind: 'idle' }); }} />
+          qrPayee={config.qrPayee} online={!offlineMode} busy={busy}
+          onConfirm={(p) => void (offlineMode ? confirmOffline(p) : confirmOnline(p))}
+          onClose={() => { setPayOpen(false); if (stage.kind === 'rejected') setStage({ kind: 'idle' }); }} />
       )}
       {payOpen && stage.kind === 'rejected' && (
         <div role="alert" className="fixed bottom-28 right-4 z-50 max-w-[440px] rounded-xl border-2 border-danger bg-danger-bg p-4 text-danger shadow-xl">
@@ -333,26 +422,36 @@ function QueueClock({ since }: { since: number }) {
   return <span>· 最久 <b>{formatClock(now - since)}</b></span>;
 }
 
-/** 三个事实分别有依据才点亮：本机已记录（IndexedDB 写入完成）、云端已接单（事务提交）、后厨已收到（KDS 回执）。 */
-function SubmitSteps({ stage, kitchenAck }: { stage: Stage; kitchenAck: boolean }) {
+/**
+ * 三个事实分别有依据才点亮：本机已记录（IndexedDB 事务完成）、云端已接单（服务器事务提交）、后厨已收到（KDS 回执）。
+ * 断网接单只点亮第一步；后厨一步改为人工传单。
+ */
+function SubmitSteps({ stage, kitchenAck, handedOff, onHandoff }: { stage: Stage; kitchenAck: boolean; handedOff: boolean; onHandoff: () => void }) {
   if (stage.kind === 'idle') return null;
+  const offline = stage.kind === 'local_accepted';
   const local = stage.kind !== 'saving' && stage.kind !== 'local_failed';
   const cloud = stage.kind === 'accepted';
-  const steps: { label: string; done: boolean; icon: 'register' | 'cloud' | 'cook' }[] = [
-    { label: '本机已记录', done: local, icon: 'register' },
-    { label: '云端已接单', done: cloud, icon: 'cloud' },
-    { label: kitchenAck ? '后厨已收到' : '等待厨房确认', done: cloud && kitchenAck, icon: 'cook' },
-  ];
+  const steps: { label: string; done: boolean; icon: 'register' | 'cloud' | 'cook' | 'handoff'; warn?: boolean }[] = offline
+    ? [
+        { label: '本机已接单', done: true, icon: 'register' },
+        { label: '云端未同步（断网）', done: false, icon: 'cloud', warn: true },
+        { label: handedOff ? '已人工交接' : '请人工传单', done: handedOff, icon: 'handoff', warn: !handedOff },
+      ]
+    : [
+        { label: '本机已记录', done: local, icon: 'register' },
+        { label: '云端已接单', done: cloud, icon: 'cloud' },
+        { label: kitchenAck ? '后厨已收到' : '等待厨房确认', done: cloud && kitchenAck, icon: 'cook' },
+      ];
   return (
     <div className="mt-3 rounded-xl bg-subtle p-3" aria-live="polite">
       <div className="flex items-center justify-between">
         {steps.map((s, i) => (
           <div key={s.label} className="flex flex-1 items-center">
-            <div className={`flex flex-col items-center text-center text-sm ${s.done ? 'text-ok' : 'text-ink-2 opacity-60'}`}>
+            <div className={`flex flex-col items-center text-center text-sm ${s.done ? 'text-ok' : s.warn ? 'text-warn' : 'text-ink-2 opacity-60'}`}>
               <Icon name={s.icon} size={34} />
               <span className="font-semibold">{s.done ? '✓ ' : ''}{s.label}</span>
             </div>
-            {i < 2 && <span className="mx-1 flex-1 text-center text-ink-2">→</span>}
+            {i < 2 && <span className={`mx-1 flex-1 text-center ${offline && i === 0 ? 'text-warn' : 'text-ink-2'}`}>{offline && i === 0 ? '✕' : '→'}</span>}
           </div>
         ))}
       </div>
@@ -362,6 +461,20 @@ function SubmitSteps({ stage, kitchenAck }: { stage: Stage; kitchenAck: boolean 
           {stage.result.changeSen !== null && stage.result.changeSen > 0 && <> · 找零 <span className="text-xl">{formatRM(stage.result.changeSen)}</span></>}
         </p>
       )}
+      {offline && (
+        <div className="mt-2 text-center">
+          <p className="font-semibold">
+            {stage.tokenNumber}号 · 临时号 {stage.offlineReceiptNumber} · {formatRM(stage.totalSen)}
+            {stage.changeSen !== null && stage.changeSen > 0 && <> · 找零 <span className="text-xl">{formatRM(stage.changeSen)}</span></>}
+          </p>
+          <p className="text-sm text-warn">已保存在本机；后厨屏不会收到。请把纸单递给厨师。</p>
+          {!handedOff && (
+            <button type="button" onClick={onHandoff} className="mt-2 inline-flex h-12 items-center gap-2 rounded-xl bg-warn px-4 font-bold text-white">
+              <Icon name="handoff" size={28} />我已把单交给厨师
+            </button>
+          )}
+        </div>
+      )}
       {stage.kind === 'submitting' && <p className="mt-2 text-center text-warn">正在提交，请勿重复收钱或重复点击。</p>}
       {stage.kind === 'unknown' && <p className="mt-2 text-center font-semibold text-warn">已记录收款，正在核对订单；请勿再次收钱。</p>}
       {stage.kind === 'local_failed' && <p className="mt-2 text-center font-semibold text-danger">本机保存失败，订单尚未确认（{stage.message}）。购物车已保留。</p>}
@@ -370,13 +483,22 @@ function SubmitSteps({ stage, kitchenAck }: { stage: Stage; kitchenAck: boolean 
   );
 }
 
-/** 不是主收银机 / 未开班时的说明页。 */
+/** 不是主收银机 / 未开班 / 离线资格过期时的说明页。 */
 function RegisterGate({ status, isOwner }: { status: string; isOwner: boolean }) {
   const reg = useRegister();
   const [floatText, setFloatText] = useState('100');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (status === 'loading') return <p className="p-6">正在检查收银机…</p>;
+  if (status === 'offline_expired') {
+    return (
+      <div className="mx-auto mt-10 max-w-lg rounded-2xl border-2 border-danger bg-card p-6">
+        <h2 className="text-2xl font-bold text-danger">离线营业资格已过期（超过 24 小时）</h2>
+        <p className="mt-2">请改用纸单营业，并通知老板。已有的本机记录仍可在「同步」页查看和导出。</p>
+        <button type="button" onClick={() => navigate('/sync')} className="mt-4 h-14 rounded-xl bg-brand px-6 text-lg font-bold text-white">去同步中心</button>
+      </div>
+    );
+  }
   if (status === 'not_configured' || status === 'not_this_device') {
     return (
       <div className="mx-auto mt-10 max-w-lg rounded-2xl border border-line bg-card p-6">
@@ -391,7 +513,7 @@ function RegisterGate({ status, isOwner }: { status: string; isOwner: boolean })
     <div className="mx-auto mt-10 max-w-lg rounded-2xl border border-line bg-card p-6">
       <Icon name="cash" size={56} />
       <h2 className="mt-2 text-2xl font-bold">开班</h2>
-      <p className="mt-1 text-ink-2">点清钱箱里的备用金后开班。</p>
+      <p className="mt-1 text-ink-2">点清钱箱里的备用金后开班。开班需要联网；开班后这台收银机断网也能接单（最多 24 小时）。</p>
       <label className="mt-4 block font-semibold" htmlFor="float">备用金 (RM)</label>
       <input id="float" inputMode="decimal" value={floatText} onChange={(e) => setFloatText(e.target.value)} className="mt-1 h-14 w-full rounded-lg border border-control px-3 text-2xl tabular-nums" />
       {err && <p role="alert" className="mt-2 text-danger">{err}</p>}

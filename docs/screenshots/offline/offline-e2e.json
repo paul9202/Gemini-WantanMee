@@ -1,0 +1,107 @@
+{
+  "ranAt": "2026-10-22T08:09:25.266Z",
+  "origin": "http://localhost:4173",
+  "environment": "正式构建（Service Worker）+ 本机 Firebase Emulator，CDP 断网",
+  "results": [
+    {
+      "name": "老板登录",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "收银登录",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "离线可用检查：应用壳、照片、快照",
+      "ok": true,
+      "detail": "✓ 离线应用壳已就绪 · ✓ 营业照片 9 张已缓存 · ✓ 离线营业快照 2026/10/22 16:08:25"
+    },
+    {
+      "name": "断网后显示离线营业横条",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "D01 断网现金接单：本机已接单、显示临时号与人工传单",
+      "ok": true,
+      "detail": "餐牌 1"
+    },
+    {
+      "name": "人工交接已记录",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "D01 断网刷新：应用从 Service Worker 载入，仍为离线营业",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "D01 刷新后本机订单与日志都在",
+      "ok": true,
+      "detail": "未同步 2 条"
+    },
+    {
+      "name": "D03 回收后同一张牌可再离线接单",
+      "ok": true,
+      "detail": "1号 可用"
+    },
+    {
+      "name": "第三张离线单（尚未制作）",
+      "ok": true,
+      "detail": "餐牌 2"
+    },
+    {
+      "name": "D11 断网 QR 无外部核实说明不能确认",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "断网期间云端没有任何订单",
+      "ok": true,
+      "detail": "0 单"
+    },
+    {
+      "name": "联网后补同步完成（逐条云端已接纳）",
+      "ok": true,
+      "detail": "未同步 0 条"
+    },
+    {
+      "name": "D04 云端 3 张离线单、无重复",
+      "ok": true,
+      "detail": "3 单"
+    },
+    {
+      "name": "补同步不送厨：电子厨单为 0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "已人工出餐的单导入为已出餐",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "离线日志全部接纳（3 单 + 交接 + 出餐 + 回收 = 6 条）",
+      "ok": true,
+      "detail": "accepted,accepted,accepted,accepted,accepted,accepted"
+    },
+    {
+      "name": "同一张牌最终属于第二张离线单",
+      "ok": true,
+      "detail": "{\"state\":\"held\"}"
+    },
+    {
+      "name": "D05 收银核实后才转电子厨单（1 张）",
+      "ok": true,
+      "detail": "2号已转为电子厨单，后厨屏会显示「人工单转入」。"
+    },
+    {
+      "name": "补同步后在线接单正常（序号连续）",
+      "ok": true,
+      "detail": ""
+    }
+  ]
+}

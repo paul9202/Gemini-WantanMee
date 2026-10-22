@@ -46,3 +46,13 @@ for (const [i, [photoId, altZh]] of CELLS.entries()) {
 }
 await writeFile(MANIFEST, JSON.stringify({ catalogVersion: `visual-v${VERSION}`, photos: manifest }, null, 2) + '\n');
 console.log(`wrote ${manifest.length} photos, ${manifest.reduce((s, p) => s + p.bytes, 0)} bytes`);
+
+// PWA 图标：番茄红底「豪」字印章（系统中文字体渲染）。
+const iconSvg = (size) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#b93825"/>
+  <text x="256" y="350" font-size="300" font-weight="900" text-anchor="middle" fill="#ffffff" font-family="Microsoft YaHei, Noto Sans SC, PingFang SC, sans-serif">豪</text>
+</svg>`);
+await mkdir('public/icons', { recursive: true });
+for (const size of [192, 512]) await sharp(iconSvg(size)).png().toFile(`public/icons/icon-${size}.png`);
+await sharp(iconSvg(180)).png().toFile('public/icons/apple-touch-icon.png');
+console.log('wrote PWA icons');

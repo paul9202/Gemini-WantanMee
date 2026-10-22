@@ -10,16 +10,30 @@ import { useOnline } from '../../data/firebase/live';
 import { useRegister } from '../../data/register';
 import { useSession } from '../../app/session';
 import { PHOTO_CATALOG_VERSION } from '../../ui/visual';
+import manifest from '../../ui/photoManifest.json';
+import { useOfflineRuntime } from '../../data/offline/runtime';
 
 export function DevicePage() {
   const { member, deviceId, config } = useSession();
   const reg = useRegister();
   const online = useOnline();
   const [pending, setPending] = useState<number | null>(null);
+  const rt = useOfflineRuntime();
+  const [check, setCheck] = useState<{ sw: boolean; photos: number; total: number } | null>(null);
+  useEffect(() => {
+    // 离线可用检查：Service Worker 已接管页面、营业照片全部在缓存里。
+    void (async () => {
+      const sw = Boolean(navigator.serviceWorker?.controller);
+      let photos = 0;
+      // Workbox 预缓存的 URL 带版本参数，匹配时忽略查询串。
+      if ('caches' in window) for (const p of manifest.photos) if (await caches.match(p.path, { ignoreSearch: true })) photos++;
+      setCheck({ sw, photos, total: manifest.photos.length });
+    })();
+  }, []);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => {
-    listPendingOps().then((ops) => setPending(ops.filter((o) => o.status === 'submitting' || o.status === 'unknown_result').length)).catch(() => setPending(null));
+    listPendingOps().then((ops) => setPending(ops.filter((o) => o.status === 'submitting' || o.status === 'unknown_result' || o.status === 'not_found').length)).catch(() => setPending(null));
   }, []);
 
   const isThisRegister = reg.status === 'ready' || reg.status === 'no_shift';
@@ -33,6 +47,11 @@ export function DevicePage() {
     ['本机待核对收款', pending === null ? '无法读取本机存储' : `${pending} 单`],
     ['菜单版本', config?.activeMenuVersion ?? '—'],
     ['图片素材', `${PHOTO_CATALOG_VERSION}（演示生成图，未经实店审核）`],
+    ['离线可用检查', !check ? '检查中…' : [
+      check.sw ? '✓ 离线应用壳已就绪' : '✕ 离线应用壳未就绪（需联网打开一次正式版本）',
+      check.photos === check.total ? `✓ 营业照片 ${check.total} 张已缓存` : `✕ 营业照片只缓存了 ${check.photos}/${check.total} 张`,
+      rt.snapshot ? `✓ 离线营业快照 ${new Date(rt.snapshot.savedAtMs).toLocaleString('zh-CN', { hour12: false })}` : '✕ 尚无离线营业快照（开班并在点单页联网一次）',
+    ].join(' · ')],
   ];
 
   return (

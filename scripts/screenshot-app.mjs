@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const OUT = 'docs/screenshots/app';
+const OUT = process.env.SHOT_OUT || 'docs/screenshots/app';
+const PORT = process.env.APP_PORT || '3000';
 const DEVICE_ID = process.env.REGISTER_DEVICE_ID;
 if (!DEVICE_ID) throw new Error('需要 REGISTER_DEVICE_ID（设备页显示的主收银机设备 ID）');
 
@@ -79,8 +80,9 @@ const LOGIN = (a) => `(async () => {
 const CLICK = `window.__click = (t, n = 0) => { const bs = [...document.querySelectorAll('button')].filter(b => b.innerText.replace(/\\s+/g,'').includes(t)); if (!bs[n]) throw new Error('no button ' + t); bs[n].click(); };
 window.__sleep = (ms) => new Promise(r => setTimeout(r, ms));`;
 
+// 先让应用打开一次以完成数据库升级，再写入测试用的主收银设备 ID。
 const SET_DEVICE = `(async () => {
-  const db = await new Promise((r, j) => { const q = indexedDB.open('hao-pos', 1); q.onupgradeneeded = () => { q.result.createObjectStore('kv'); q.result.createObjectStore('pendingOps', { keyPath: 'operationId' }); }; q.onsuccess = () => r(q.result); q.onerror = () => j(q.error); });
+  const db = await new Promise((r, j) => { const q = indexedDB.open('hao-pos'); q.onsuccess = () => r(q.result); q.onerror = () => j(q.error); });
   await new Promise((r, j) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(${JSON.stringify(DEVICE_ID)}, 'deviceId'); tx.oncomplete = r; tx.onerror = () => j(tx.error); });
   db.close();
   return true;
@@ -89,7 +91,7 @@ const SET_DEVICE = `(async () => {
 await mkdir(OUT, { recursive: true });
 const results = [];
 
-await session('http://localhost:3000', async ({ evaluate, goto, shot }) => {
+await session(`http://localhost:${PORT}`, async ({ evaluate, goto, shot }) => {
   await goto('/login');
   await evaluate(SET_DEVICE); // 测试用：让无头浏览器使用已指定的主收银设备 ID
   await goto('/login');
@@ -113,7 +115,7 @@ await session('http://localhost:3000', async ({ evaluate, goto, shot }) => {
   results.push(await shot('orders-390x844', 390, 844));
 });
 
-await session('http://127.0.0.1:3000', async ({ evaluate, goto, shot }) => {
+await session(`http://127.0.0.1:${PORT}`, async ({ evaluate, goto, shot }) => {
   await goto('/login');
   results.push({ step: 'kitchen-login', path: await evaluate(LOGIN(account('kitchen'))) });
   await goto('/kitchen');

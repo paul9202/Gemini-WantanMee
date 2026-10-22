@@ -1,8 +1,8 @@
 /** 极简路由：只用 History API，避免为几个固定页面引入路由框架。 */
 import { useEffect, useState } from 'react';
 
-export type Route = '/login' | '/pos' | '/orders' | '/kitchen' | '/device';
-const ROUTES: Route[] = ['/login', '/pos', '/orders', '/kitchen', '/device'];
+export type Route = '/login' | '/pos' | '/orders' | '/sync' | '/kitchen' | '/device';
+const ROUTES: Route[] = ['/login', '/pos', '/orders', '/sync', '/kitchen', '/device'];
 
 function current(): Route | null {
   const p = location.pathname.replace(/\/+$/, '') || '/';

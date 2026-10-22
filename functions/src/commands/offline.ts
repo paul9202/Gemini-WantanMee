@@ -195,6 +195,8 @@ async function decide(
 
   if (e.type === 'manual_served') {
     if (order.fulfillmentStatus === 'served') return { status: 'accepted', orderId, advance: true };
+    // 已转为电子厨单：由后厨屏负责出餐，人工出餐记录需老板核对，避免人工与后厨各做一份。
+    if (order.kitchenRouting !== 'manual') return review('ORDER_STATE', orderId);
     if (order.fulfillmentStatus !== 'queued' && order.fulfillmentStatus !== 'preparing') return review('ORDER_STATE', orderId);
     let tokenWrite: ((w: Transaction) => void) | null = null;
     if (order.tokenLock !== 'history_only' && token) {

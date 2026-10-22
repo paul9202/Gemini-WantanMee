@@ -5,10 +5,13 @@ import { USE_EMULATORS } from '../data/firebase/client';
 import { Icon } from '../ui/visual';
 import { navigate, Route } from './router';
 import { Role, useSession } from './session';
+import { applyUpdate, useSwState } from './swUpdate';
+import { unsyncedEvents, useOfflineRuntime } from '../data/offline/runtime';
 
 const NAV: { route: Route; label: string; roles: Role[] }[] = [
   { route: '/pos', label: '点单', roles: ['cashier', 'owner'] },
   { route: '/orders', label: '订单', roles: ['cashier', 'owner'] },
+  { route: '/sync', label: '同步', roles: ['cashier', 'owner'] },
   { route: '/kitchen', label: '后厨', roles: ['kitchen', 'owner'] },
   { route: '/device', label: '设备', roles: ['cashier', 'owner', 'kitchen'] },
 ];
@@ -20,6 +23,9 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
   const { member, config, user, signOut } = useSession();
   const online = useOnline();
   const now = useNow(30_000);
+  const sw = useSwState();
+  const rt = useOfflineRuntime();
+  const unsynced = unsyncedEvents(rt).length;
   const date = config ? businessDateOf(now, { timeZone: config.timeZone, cutoverMinutes: config.cutoverMinutes }) : '';
   return (
     <div className="flex min-h-screen flex-col bg-canvas">
@@ -53,7 +59,13 @@ export function Shell({ route, children }: { route: Route; children: ReactNode }
       </header>
       {!online && (
         <div role="status" className="border-b border-warn bg-warn-bg px-4 py-2 font-semibold text-warn">
-          网络已断开 · 离线接单功能尚在开发中，当前不能保证接单；请改用纸单并人工传单。
+          网络已断开 · 只有指定主收银机可以离线接单（仅本机保存），后厨屏不会自动收到，请人工传单。
+        </div>
+      )}
+      {sw === 'update' && (
+        <div role="status" className="flex flex-wrap items-center gap-3 border-b border-line bg-subtle px-4 py-2">
+          <span>有新版本可用。{unsynced ? `本机还有 ${unsynced} 条未同步，请先完成同步再更新。` : '方便时（不忙时）再更新。'}</span>
+          <button type="button" disabled={unsynced > 0} onClick={() => void applyUpdate()} className="ml-auto h-10 rounded-lg border border-control px-3 font-semibold disabled:opacity-40">更新并重新载入</button>
         </div>
       )}
       <main className="flex-1">{children}</main>

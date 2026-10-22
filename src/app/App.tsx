@@ -7,6 +7,7 @@ import { KitchenPage } from '../features/kitchen/KitchenPage';
 import { OrdersPage } from '../features/orders/OrdersPage';
 import { PosPage } from '../features/pos/PosPage';
 import { DevicePage } from '../features/device/DevicePage';
+import { SyncPage } from '../features/sync/SyncPage';
 import { IconSprite } from '../ui/visual';
 import { Login } from './Login';
 import { navigate, Route, useRoute } from './router';
@@ -16,6 +17,7 @@ import { Shell } from './Shell';
 const ALLOWED: Record<Exclude<Route, '/login'>, Role[]> = {
   '/pos': ['cashier', 'owner'],
   '/orders': ['cashier', 'owner'],
+  '/sync': ['cashier', 'owner'],
   '/kitchen': ['kitchen', 'owner'],
   '/device': ['cashier', 'owner', 'kitchen'],
 };
@@ -44,6 +46,7 @@ function Routes() {
   }
   if (route === '/kitchen') return <KitchenPage />;
   if (route === '/orders') return <Shell route="/orders"><OrdersPage /></Shell>;
+  if (route === '/sync') return <Shell route="/sync"><SyncPage /></Shell>;
   if (route === '/device') return <Shell route="/device"><DevicePage /></Shell>;
   return <Shell route="/pos"><PosPage /></Shell>;
 }

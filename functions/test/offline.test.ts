@@ -96,6 +96,9 @@ test('D05 尚未制作的离线单：保持人工单；收银核实后才转电�
   assert.equal(t2.kitchenRouting, 'digital');
   assert.equal(t2.routedFromManual, true);
   await f.kitchen.call('startOrder', { storeId: f.storeId, operationId: uuid(), orderId: a, expectedVersion: 2 });
+  // 转电子厨单后，本机再补登「人工出餐」不会被自动接纳
+  const lateServe = await sync(f, [makeEvents(f).served(a)]);
+  assert.deepEqual(lateServe.map((x) => [x.status, x.reasonCode]), [['needs_review', 'ORDER_STATE']]);
   // 已出餐的人工单不能转电子
   const b = uuid();
   const ev2 = makeEvents(f);

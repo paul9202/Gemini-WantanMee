@@ -16,7 +16,7 @@ import { useSession } from '../../app/session';
 import { navigate } from '../../app/router';
 import { Icon, Photo, Picto, PictoArt } from '../../ui/visual';
 
-type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null };
+type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean };
 
 export function KitchenPage() {
   const { config, member, deviceId, signOut } = useSession();
@@ -25,6 +25,11 @@ export function KitchenPage() {
   const q = useLiveQuery<Ticket>(
     query(collection(db, storePath('kitchenTickets')), where('kitchenRouting', '==', 'digital'), where('fulfillmentStatus', 'in', ['queued', 'preparing'])),
     'kds',
+  );
+  // 离线补同步的人工单：只显示数量，不混入待下锅合计，也不自动重做。
+  const manualQ = useLiveQuery<{ fulfillmentStatus: string }>(
+    query(collection(db, storePath('kitchenTickets')), where('kitchenRouting', '==', 'manual'), where('fulfillmentStatus', 'in', ['queued', 'preparing'])),
+    'kds-manual',
   );
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -121,7 +126,7 @@ export function KitchenPage() {
           <div className="space-y-4">
             {preparing.map((t) => <TicketCard key={t.id} t={t} now={now} disabled={stale || busyId === t.id} onAct={act} />)}
           </div>
-          <p className="mt-6 border-t border-[#2c3a32] pt-3 text-kds-muted">人工单待核对：{sum.manualPending}单 · 补同步订单不会自动重做</p>
+          <p className="mt-6 border-t border-[#2c3a32] pt-3 text-kds-muted">人工单待核对：{manualQ.data.length}单 · 补同步订单不会自动重做</p>
         </section>
       </div>
 
@@ -174,7 +179,10 @@ function TicketCard({ t, now, disabled, onAct }: {
           <PictoArt id={t.serviceMode === 'dine_in' ? 'service:dine_in' : 'service:takeaway'} size={30} />{t.serviceMode === 'dine_in' ? '堂食' : '打包'}
         </span>
       </div>
-      <div className={`mt-3 px-4 py-2 text-xl font-semibold ${u.bar}`}>{formatClock(elapsed)} · {u.label}</div>
+      {t.routedFromManual && (
+        <div className="mx-4 mt-2 flex items-center gap-2 rounded-lg bg-kds-action px-3 py-1 text-lg font-bold text-kds"><PictoArt id="token:return" size={28} />人工单转入 · 收银已核实厨房未做</div>
+      )}
+      <div className={`mt-3 px-4 py-2 text-xl font-semibold ${u.bar}`}>{formatClock(elapsed)} · {u.label}{t.timeQuality === 'device_estimated' ? '（离线时间）' : ''}</div>
       <div className="px-4 pt-2 text-lg text-kds-muted">{portions}份 · {formatNoodleBalls(noodle)}面球 · {wantons}云吞</div>
       <ul className="flex-1 space-y-3 px-4 py-3">
         {t.lines.map((l) => <KitchenLineRow key={l.lineId} l={l} />)}

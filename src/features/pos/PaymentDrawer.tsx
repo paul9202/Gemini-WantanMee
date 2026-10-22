@@ -11,6 +11,8 @@ export interface PaymentInput {
   method: PaymentMethod;
   tenderedSen: Sen | null;
   qrConfirmed: boolean;
+  /** 断网时 QR 的外部核实说明（另一台已联网的收款端）。 */
+  qrExternalVerificationNote: string | null;
 }
 
 const BLOCK_ZH: Record<string, string> = {
@@ -38,9 +40,10 @@ export function PaymentDrawer({ dueSen, tokenNumber, portions, serviceMode, qrPa
   const [digits, setDigits] = useState('');
   const [presetSen, setPresetSen] = useState<Sen | null>(null);
   const [qrConfirmed, setQrConfirmed] = useState(false);
+  const [qrNote, setQrNote] = useState('');
   const tenderedSen = presetSen ?? (digits === '' ? null : Number(digits) * 100);
   const check = checkPayment(
-    { method, dueSen, tenderedSen: method === 'cash' ? tenderedSen : null, qrConfirmed, qrExternalVerificationNote: null },
+    { method, dueSen, tenderedSen: method === 'cash' ? tenderedSen : null, qrConfirmed, qrExternalVerificationNote: online ? null : qrNote.trim() || null },
     { online, qrConfigured: Boolean(qrPayee) },
   );
 
@@ -119,15 +122,23 @@ export function PaymentDrawer({ dueSen, tokenNumber, portions, serviceMode, qrPa
               <input type="checkbox" className="h-7 w-7" checked={qrConfirmed} disabled={!qrPayee} onChange={(e) => setQrConfirmed(e.target.checked)} />
               我已在收款端看到 {formatRM(dueSen)} 到账
             </label>
+            {!online && (
+              <div className="mt-3 rounded-xl border-2 border-warn bg-warn-bg p-3">
+                <label htmlFor="qr-note" className="font-semibold text-warn">断网中：在哪台已联网的收款端核实到账？（必填）</label>
+                <input id="qr-note" value={qrNote} maxLength={200} onChange={(e) => setQrNote(e.target.value)} placeholder="例如：老板手机银行 App 已看到"
+                  className="mt-2 h-12 w-full rounded-lg border border-control bg-card px-3" />
+                <p className="mt-1 text-sm text-warn">没有另一台联网设备核实时，请改收现金。扫码本身不等于到账。</p>
+              </div>
+            )}
           </div>
         )}
 
         <div className="mt-auto p-4">
           {!check.ok && <p className="mb-2 text-warn">{check.blocks.map((b) => BLOCK_ZH[b] ?? b).join('；')}</p>}
           <button type="button" disabled={!check.ok || busy}
-            onClick={() => onConfirm({ method, tenderedSen: method === 'cash' ? tenderedSen : null, qrConfirmed })}
+            onClick={() => onConfirm({ method, tenderedSen: method === 'cash' ? tenderedSen : null, qrConfirmed, qrExternalVerificationNote: !online && method === 'qr_manual' ? qrNote.trim() : null })}
             className="flex h-16 w-full items-center justify-center gap-2 rounded-xl bg-brand text-xl font-bold text-white disabled:bg-control">
-            <Icon name="check" size={28} />{busy ? '正在提交，请勿重复点击…' : '确认收款并接单'}
+            <Icon name="check" size={28} />{busy ? '正在提交，请勿重复点击…' : online ? '确认收款并接单' : '确认收款 · 本机接单'}
           </button>
         </div>
       </div>

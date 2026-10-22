@@ -7,6 +7,7 @@ import { onAuthStateChanged, signOut as fbSignOut, User } from 'firebase/auth';
 import { auth, storePath } from '../data/firebase/client';
 import { useLiveDoc } from '../data/firebase/live';
 import { getDeviceId, requestPersistence } from '../data/local/idb';
+import { startAutoSync, useOfflineRuntime } from '../data/offline/runtime';
 
 export type Role = 'owner' | 'cashier' | 'kitchen';
 
@@ -32,6 +33,8 @@ interface Session {
   memberError: string | null;
   config: StoreConfig | null;
   deviceId: string | null;
+  /** 断网重开时使用的是最后一次联网保存的本机快照（不是服务器实时数据）。 */
+  usingSnapshot: boolean;
   signOut: () => Promise<void>;
 }
 
@@ -49,19 +52,27 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     getDeviceId().then(setDeviceId).catch(() => setDeviceId(null));
     void requestPersistence();
+    startAutoSync();
   }, []);
 
+  const rt = useOfflineRuntime();
+  const snap = rt.snapshot && user && rt.snapshot.uid === user.uid ? rt.snapshot : null;
   const member = useLiveDoc<Member>(user ? storePath(`members/${user.uid}`) : null);
-  const activeMember = member.data && member.data.active ? member.data : null;
+  // 服务器明确返回（非缓存）才算权威；只有拿不到服务器数据时才退回本机快照。
+  const liveMember = member.data && member.data.active ? member.data : null;
+  const memberFromSnap = !liveMember && member.fromCache && snap ? snap.member : null;
+  const activeMember = liveMember ?? memberFromSnap;
   const config = useLiveDoc<StoreConfig>(activeMember ? storePath('config/public') : null);
+  const configData = config.data ?? (config.fromCache && snap ? snap.config : null);
 
   const value: Session = {
-    ready: authReady && (!user || !member.loading) && (!activeMember || !config.loading),
+    ready: authReady && rt.loaded && (!user || !member.loading) && (!activeMember || !config.loading || Boolean(configData)),
     user,
     member: activeMember,
     memberError: user && !member.loading && !activeMember ? member.error ?? 'NOT_A_MEMBER' : null,
-    config: config.data,
+    config: configData,
     deviceId,
+    usingSnapshot: Boolean(memberFromSnap || (!config.data && configData)),
     signOut: () => fbSignOut(auth),
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
