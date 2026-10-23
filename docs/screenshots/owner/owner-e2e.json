@@ -1,5 +1,5 @@
 {
-  "ranAt": "2026-10-23T11:22:49.884Z",
+  "ranAt": "2026-10-23T13:36:04.699Z",
   "environment": "正式构建 + 本机 Firebase Emulator；收银与老板为两台独立无头 Chrome；离线记录经真实补同步接口产生",
   "results": [
     {

@@ -19,6 +19,7 @@ import type { IconName } from '../../ui/iconSymbols';
 import manifest from '../../ui/photoManifest.json';
 import { serverNow, unsyncedEvents, useOfflineRuntime } from '../../data/offline/runtime';
 import { setLang, useLang, useT } from '../../app/i18n';
+import { measureViewport, useViewportProfile } from '../../data/viewportProfile';
 
 type Tone = 'ok' | 'warn' | 'bad' | 'idle';
 const TONE: Record<Tone, string> = { ok: 'bg-ok-bg text-ok', warn: 'bg-warn-bg text-warn', bad: 'bg-danger-bg text-danger', idle: 'bg-subtle text-ink-2' };
@@ -132,7 +133,7 @@ export function DevicePage() {
                   <h3 className="font-bold">{tr('断网时怎么做？', 'What to do when offline?')}</h3>
                   <p className="text-[13px] text-ink-2">{tr('主收银机的订单保存在本机，改用纸单交给厨房。恢复后在同步中心核对人工单，避免重复做餐。', 'The main register keeps orders locally; hand paper tickets to the kitchen. After reconnecting, check paper tickets in Sync to avoid cooking twice.')}</p>
                 </div>
-                <button type="button" onClick={() => navigate('/sync')} className="flex h-12 items-center gap-2 rounded-xl border border-line px-4 font-bold">{tr('打开同步中心', 'Open Sync')}<Icon name="arrow" size={18} /></button>
+                <button type="button" onClick={() => navigate('/sync')} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{tr('打开同步中心', 'Open Sync')}<Icon name="arrow" size={18} /></button>
               </div>
             </Card>
           )}
@@ -150,13 +151,13 @@ export function DevicePage() {
                   const a = Object.assign(document.createElement('a'), { href: url, download: `hao-pos-recovery-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.json` });
                   a.click();
                   setTimeout(() => URL.revokeObjectURL(url), 1000);
-                }} className="flex h-12 items-center gap-2 rounded-xl border border-line px-4 font-bold"><Icon name="download" size={18} />{tr('导出恢复包', 'Export package')}</button>
+                }} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold"><Icon name="download" size={18} />{tr('导出恢复包', 'Export package')}</button>
               </div>
             </Card>
           )}
 
           <details className="group px-1">
-            <summary className="flex min-h-10 cursor-pointer list-none items-center gap-1.5 text-sm text-ink-2"><Icon name="chevron-right" size={16} className="transition-transform group-open:rotate-90" />{tr('高级设备信息', 'Advanced device info')}</summary>
+            <summary className="flex min-h-14 cursor-pointer list-none items-center gap-1.5 text-sm text-ink-2"><Icon name="chevron-right" size={16} className="transition-transform group-open:rotate-90" />{tr('高级设备信息', 'Advanced device info')}</summary>
             <dl className="mt-2 overflow-hidden rounded-2xl border border-line bg-card">
               {advanced.map(([k, v]) => (
                 <div key={k} className="flex gap-4 border-b border-line px-4 py-3 text-sm last:border-0">
@@ -164,6 +165,7 @@ export function DevicePage() {
                 </div>
               ))}
             </dl>
+            <ScreenMeasure />
           </details>
         </div>
 
@@ -173,7 +175,7 @@ export function DevicePage() {
               <div role="radiogroup" aria-label={tr('界面语言', 'Language')} className="flex rounded-xl bg-subtle p-1">
                 {(['zh', 'en'] as const).map((l) => (
                   <button key={l} type="button" role="radio" aria-checked={lang === l} onClick={() => setLang(l)}
-                    className={`h-10 rounded-lg px-4 font-semibold ${lang === l ? 'bg-card shadow' : 'text-ink-2'}`}>{l === 'zh' ? '中文' : 'English'}</button>
+                    className={`h-14 rounded-lg px-4 font-semibold ${lang === l ? 'bg-card shadow' : 'text-ink-2'}`}>{l === 'zh' ? '中文' : 'English'}</button>
                 ))}
               </div>
             </Row>
@@ -185,7 +187,7 @@ export function DevicePage() {
             </Row>
             {(role === 'owner' || role === 'kitchen') && (
               <Row title={tr('后厨显示', 'Kitchen display')} sub={tr('大字与高对比，方便远距离查看', 'Large, high-contrast text for distance viewing')}>
-                <button type="button" onClick={() => navigate('/kitchen')} className="flex h-11 items-center gap-2 rounded-xl border border-line px-4 font-bold">{tr('打开', 'Open')}<Icon name="arrow" size={18} /></button>
+                <button type="button" onClick={() => navigate('/kitchen')} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{tr('打开', 'Open')}<Icon name="arrow" size={18} /></button>
               </Row>
             )}
             <Row title={tr('菜单与图片', 'Menu & photos')} sub={`${tr('菜单版本', 'Menu version')} ${config?.activeMenuVersion ?? '—'}`}>
@@ -201,7 +203,7 @@ export function DevicePage() {
               <div className="min-w-0 flex-1">
                 <h3 className="font-bold">{tr('新员工快速上手', 'New staff quick start')}</h3>
                 <p className="text-[13px] text-ink-2">{tr('餐品、配料和操作图卡，在前台与后厨使用相同图示。', 'Dish, topping and action cards use the same pictures at the counter and in the kitchen.')}</p>
-                <button type="button" onClick={() => navigate('/training')} className="mt-3 h-12 rounded-xl border border-line px-4 font-bold">{tr('查看操作图卡', 'Open training cards')}</button>
+                <button type="button" onClick={() => navigate('/training')} className="mt-3 h-14 rounded-xl border border-line px-4 font-bold">{tr('查看操作图卡', 'Open training cards')}</button>
               </div>
             </div>
           </Card>
@@ -265,5 +267,54 @@ function Link({ tone }: { tone: Tone }) {
       <span className={`h-2 w-2 rounded-full ${tone === 'ok' ? 'bg-ok' : tone === 'bad' ? 'bg-danger' : tone === 'warn' ? 'bg-warn' : 'bg-control'}`} />
       <span className={`h-0.5 flex-1 ${c}`} />
     </div>
+  );
+}
+
+/**
+ * 平板验收用的屏幕测量：显示浏览器实际报告的视口与 DPR，可复制或下载 JSON。
+ * 到货后在 Chrome 与已安装 PWA、横竖屏、收款键盘展开时各测一次，作为固定测试 profile。
+ */
+function ScreenMeasure() {
+  const tr = useT();
+  const p = useViewportProfile();
+  const [saved, setSaved] = useState<string | null>(null);
+  const json = () => JSON.stringify(measureViewport(), null, 2);
+  const rows: [string, string][] = [
+    [tr('CSS 视口', 'CSS viewport'), `${p.viewport.width} × ${p.viewport.height}`],
+    [tr('可视视口', 'Visual viewport'), p.visualViewport ? `${p.visualViewport.width} × ${p.visualViewport.height} · ${tr('缩放', 'scale')} ${p.visualViewport.scale}` : '—'],
+    ['DPR', String(p.dpr)],
+    [tr('屏幕（CSS）', 'Screen (CSS)'), `${p.screen.width} × ${p.screen.height} · ${tr('可用', 'avail')} ${p.screen.availWidth} × ${p.screen.availHeight}`],
+    [tr('方向', 'Orientation'), p.orientation ?? '—'],
+    [tr('PWA 独立窗口', 'PWA standalone'), p.standalone ? tr('是', 'yes') : tr('否（浏览器）', 'no (browser)')],
+    [tr('触控', 'Touch'), `${p.pointerCoarse ? tr('粗指针', 'coarse') : tr('细指针', 'fine')} · ${p.maxTouchPoints}`],
+  ];
+  return (
+    <section className="mt-3 rounded-2xl border border-line bg-card p-4" aria-label={tr('本机屏幕测量', 'Screen measurement')}>
+      <h4 className="font-bold">{tr('本机屏幕测量（平板验收用）', 'Screen measurement (tablet acceptance)')}</h4>
+      <p className="text-[13px] text-ink-2">{tr('硬件分辨率不等于网页视口。请在 Chrome 与桌面 PWA、横屏与竖屏、收款键盘展开时分别记录。', 'Hardware resolution is not the CSS viewport. Record in Chrome and the installed PWA, landscape and portrait, and with the keyboard open.')}</p>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+        {rows.map(([k, v]) => <div key={k} className="contents"><dt className="text-ink-2">{k}</dt><dd className="font-semibold tabular-nums">{v}</dd></div>)}
+      </dl>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className="h-14 rounded-xl border border-line px-4 font-semibold"
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(json());
+              setSaved(tr('已复制', 'Copied'));
+            } catch {
+              setSaved(tr('无法复制，请用下载', 'Copy failed — use download'));
+            }
+          }}>{tr('复制测量结果', 'Copy measurement')}</button>
+        <button type="button" className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-semibold"
+          onClick={() => {
+            const m = measureViewport();
+            const url = URL.createObjectURL(new Blob([JSON.stringify(m, null, 2)], { type: 'application/json' }));
+            const a = Object.assign(document.createElement('a'), { href: url, download: `viewport-${m.standalone ? 'pwa' : 'chrome'}-${m.orientation ?? 'unknown'}-${m.viewport.width}x${m.viewport.height}.json` });
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}><Icon name="download" size={18} />{tr('下载 JSON', 'Download JSON')}</button>
+        {saved && <span role="status" className="self-center text-sm text-ink-2">{saved}</span>}
+      </div>
+    </section>
   );
 }

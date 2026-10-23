@@ -70,7 +70,7 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 px-5 pt-5 lg:px-6">
+      <div className="flex-1 px-4 pt-4 xl:px-6 xl:pt-5">
         <div className="flex items-start gap-3 border-b border-line pb-4">
           <div className="min-w-0 flex-1">
             <Eyebrow>02 / CUSTOMIZE</Eyebrow>
@@ -144,7 +144,7 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
             {product.addOns.includes('char_siew') && quick('cs', config.addOns.includes('char_siew'), () => toggleAddOn('char_siew'), <Photo id="ingredient.char_siew" size={30} rounded={6} />, tr('加叉烧', '+Char siew'), `+${addOnPrice('char_siew')}`, config.isKosong)}
           </div>
           <button type="button" onClick={() => setShowMore(!moreOpen)} aria-expanded={moreOpen} disabled={deep && moreOpen}
-            className="mt-3 inline-flex min-h-10 items-center gap-1.5 text-sm text-ink-2 underline underline-offset-4 hover:text-ink disabled:no-underline disabled:opacity-100">
+            className="mt-2 inline-flex min-h-14 items-center gap-1.5 text-sm text-ink-2 underline underline-offset-4 hover:text-ink disabled:no-underline disabled:opacity-100">
             <Icon name="sliders" size={16} />{product.allowsKosong ? tr('更多配料 / 净面', 'More options / Kosong') : tr('更多配料', 'More options')}
           </button>
           {moreOpen && (
@@ -162,18 +162,18 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
         </Group>
       </div>
 
-      <div className="sticky bottom-0 border-t border-line bg-card px-5 py-3 lg:px-6">
+      <div className="sticky bottom-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line bg-card px-4 py-3 xl:px-6">
         {!editing && (
-          <div className="mb-3 flex items-center justify-between">
-            <span className="font-bold">{tr('数量', 'Quantity')}</span>
-            <Stepper value={quantity} onChange={onQuantity} labelLess={tr('减一份', 'One less')} labelMore={tr('加一份', 'One more')} />
+          <div className="flex w-full items-center justify-between md:w-auto md:shrink-0">
+            <span className="font-bold md:sr-only">{tr('数量', 'Quantity')}</span>
+            <Stepper size="sm" value={quantity} onChange={onQuantity} labelLess={tr('减一份', 'One less')} labelMore={tr('加一份', 'One more')} />
           </div>
         )}
-        <div className="flex gap-2">
+        <div className="flex min-w-0 flex-1 gap-2">
           {editing && <button type="button" onClick={onCancelEdit} className="h-14 shrink-0 rounded-xl border border-control px-4 font-semibold">{tr('取消修改', 'Cancel edit')}</button>}
-          <button type="button" onClick={onSubmit} className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-xl bg-brand px-5 text-lg font-bold text-white hover:bg-brand-pressed">
-            <Icon name={editing ? 'check' : 'plus'} size={22} />
-            <span className="truncate">{editing ? tr('保存修改', 'Save change') : tr('加入本单', 'Add to order')}</span>
+          <button type="button" onClick={onSubmit} className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-xl bg-brand px-4 text-lg font-bold text-white hover:bg-brand-pressed xl:px-5">
+            <Icon name={editing ? 'check' : 'plus'} size={22} className="hidden shrink-0 xl:block" />
+            <span className="whitespace-nowrap">{editing ? tr('保存修改', 'Save') : tr('加入本单', 'Add')}<span className="hidden xl:inline">{editing ? tr('', ' change') : tr('', ' to order')}</span></span>
             <span className="ml-auto tabular-nums">{formatRM(price * (editing ? 1 : quantity))}</span>
           </button>
         </div>

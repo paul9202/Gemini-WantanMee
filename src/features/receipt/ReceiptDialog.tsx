@@ -96,7 +96,7 @@ export function ReceiptDialog({ receiptKey, load, menuVersion, timeZone, onClose
           <div className="ml-auto flex rounded-lg bg-subtle p-1" role="group" aria-label="纸宽">
             {([58, 80] as Width[]).map((w) => (
               <button key={w} type="button" aria-pressed={width === w} onClick={() => { setWidth(w); void kvSet('receiptWidth', w); }}
-                className={`h-10 rounded-md px-3 font-semibold ${width === w ? 'bg-card shadow' : 'text-ink-2'}`}>{w}mm</button>
+                className={`h-12 rounded-md px-4 font-semibold ${width === w ? 'bg-card shadow' : 'text-ink-2'}`}>{w}mm</button>
             ))}
           </div>
         </div>
@@ -108,8 +108,8 @@ export function ReceiptDialog({ receiptKey, load, menuVersion, timeZone, onClose
         {msg && <p role="alert" className="mt-2 text-warn">{msg}</p>}
         <p className="mt-2 text-xs text-ink-2">使用系统打印对话框；热敏机能否自动切纸取决于打印机设置。已打印 {printCount} 次{printCount > 0 ? '，再次打印将标「副本」' : ''}。</p>
         <div className="mt-3 flex gap-2">
-          <button type="button" onClick={onClose} className="h-12 flex-1 rounded-lg border border-control font-semibold" autoFocus>关闭</button>
-          <button type="button" disabled={!receipt} onClick={print} className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-brand font-bold text-white disabled:bg-control">
+          <button type="button" onClick={onClose} className="h-14 flex-1 rounded-xl border border-control font-semibold" autoFocus>关闭</button>
+          <button type="button" disabled={!receipt} onClick={print} className="flex h-14 flex-1 items-center justify-center gap-2 rounded-xl bg-brand font-bold text-white disabled:bg-control">
             <Icon name="list" size={22} />{printCount > 0 ? '打印副本' : '打印'}
           </button>
         </div>

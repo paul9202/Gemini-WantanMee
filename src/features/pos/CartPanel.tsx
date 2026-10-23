@@ -44,7 +44,7 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
   const text = useLineText(menu);
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-start gap-2 px-5 pt-5 pb-3">
+      <div className="flex items-start gap-2 px-4 pt-4 pb-2 xl:px-5 xl:pt-5 xl:pb-3">
         <div>
           <Eyebrow>03 / CHECKOUT</Eyebrow>
           <h2 className="mt-1 text-xl font-bold">{tr('本单明细', 'This order')}</h2>
@@ -53,7 +53,7 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
           {tr('餐牌', 'Token')} <b className="text-base tabular-nums">{tokenNumber ?? '—'}</b>
         </span>
       </div>
-      <ul className="min-h-0 flex-1 overflow-y-auto px-5" aria-label={tr('本单餐品', 'Order items')}>
+      <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 xl:px-5" aria-label={tr('本单餐品', 'Order items')}>
         {cart.lines.length === 0 && (
           <li className="flex flex-col items-center gap-2 py-12 text-center text-ink-2">
             <Icon name="bowl" size={40} />{tr('还没有餐品。选好后点「加入本单」。', 'No items yet. Choose a dish, then “Add to order”.')}
@@ -66,7 +66,7 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
           return (
             <li key={l.lineId} className={`border-b border-dashed border-line py-4 ${editing ? '-mx-2 rounded-xl border-transparent bg-brand-soft px-2' : ''}`}>
               <div className="flex items-start gap-3">
-                <Photo id={linePhotoId(l.config)} size={52} rounded={26} />
+                <Photo id={linePhotoId(l.config)} size={48} rounded={24} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start gap-2">
                     <b className="leading-tight">{x.name}</b>
@@ -74,26 +74,27 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
                   </div>
                   {x.detail && <p className="text-[13px] text-ink-2">{x.detail}</p>}
                   {x.special && <p className="mt-0.5 text-[13px] font-semibold text-brand">{x.special}</p>}
-                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <Stepper size="sm" min={0} value={l.quantity} onChange={(q) => onQuantity(l.lineId, q)} labelLess={tr('减一份', 'One less')} labelMore={tr('加一份', 'One more')} />
-                    {editing
-                      ? <span className="text-sm font-semibold text-brand">{tr('正在修改…', 'Editing…')}</span>
-                      : <button type="button" onClick={() => onEdit(l.lineId)} className="min-h-11 px-1 text-sm underline underline-offset-4">{tr('编辑', 'Edit')}</button>}
-                    <button type="button" onClick={() => onQuantity(l.lineId, 0)} className="min-h-11 px-1 text-sm text-ink-2 underline underline-offset-4">{tr('删除', 'Remove')}</button>
-                    {l.quantity > 1 && <span className="ml-auto text-xs text-ink-2">{tr(`单价 ${formatRM(t.unitPriceSen)}`, `${formatRM(t.unitPriceSen)} each`)}</span>}
-                  </div>
                 </div>
+              </div>
+              {/* 操作行占满整行宽度：窄本单栏（平板约 300px）里数量、编辑、删除也排在同一行。 */}
+              <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <Stepper size="sm" min={0} value={l.quantity} onChange={(q) => onQuantity(l.lineId, q)} labelLess={tr('减一份', 'One less')} labelMore={tr('加一份', 'One more')} />
+                {editing
+                  ? <span className="px-1 text-sm font-semibold text-brand">{tr('正在修改…', 'Editing…')}</span>
+                  : <button type="button" onClick={() => onEdit(l.lineId)} className="min-h-14 rounded-xl border border-line bg-card px-3 text-sm font-semibold">{tr('编辑', 'Edit')}</button>}
+                <button type="button" onClick={() => onQuantity(l.lineId, 0)} className="min-h-14 rounded-xl px-2 text-sm text-ink-2 underline underline-offset-4">{tr('删除', 'Remove')}</button>
+                {l.quantity > 1 && <span className="ml-auto text-xs text-ink-2">{tr(`单价 ${formatRM(t.unitPriceSen)}`, `${formatRM(t.unitPriceSen)} each`)}</span>}
               </div>
             </li>
           );
         })}
       </ul>
-      <div className="border-t border-line px-5 py-4">
+      <div className="border-t border-line px-4 py-3 xl:px-5 xl:py-4">
         <div className="flex items-center text-sm text-ink-2">
           <span>{cart.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')} · {tr(`${totals.portionCount} 份餐品`, `${totals.portionCount} item(s)`)}</span>
-          {cart.lines.length > 0 && <button type="button" onClick={onClear} className="ml-auto min-h-10 underline underline-offset-4">{tr('清空本单', 'Clear order')}</button>}
+          {cart.lines.length > 0 && <button type="button" onClick={onClear} className="ml-auto min-h-14 px-2 underline underline-offset-4">{tr('清空本单', 'Clear order')}</button>}
         </div>
-        <div className="my-3 flex items-baseline justify-between">
+        <div className="my-2 flex items-baseline justify-between xl:my-3">
           <span className="font-semibold">{tr('应收合计', 'Total')}</span>
           <span className="text-4xl font-black tabular-nums"><span className="mr-1 text-base font-bold">RM</span>{formatRM(totals.totalSen).replace('RM', '')}</span>
         </div>

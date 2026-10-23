@@ -111,7 +111,7 @@ export function KitchenPage() {
   const dateLabel = date ? new Intl.DateTimeFormat(lang === 'en' ? 'en-MY' : 'zh-CN', { month: 'long', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) : '';
   // now 每秒刷新一次，可能略早于出餐时刻；显示不超过 30 秒。实际时限由服务器判断。
   const undoLeft = undo ? Math.min(UNDO_SERVE_WINDOW_MS, UNDO_SERVE_WINDOW_MS - (now - undo.servedAt)) : 0;
-  const iconBtn = 'flex h-12 w-12 items-center justify-center rounded-xl border border-kds-line text-kds-text hover:bg-kds-soft';
+  const iconBtn = 'flex h-14 w-14 items-center justify-center rounded-xl border border-kds-line text-kds-text hover:bg-kds-soft';
 
   return (
     <div className={`flex min-h-[100dvh] flex-col bg-kds text-kds-text ${theme === 'light' ? 'kds-light' : ''}`}>
@@ -137,11 +137,11 @@ export function KitchenPage() {
           <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={22} />
         </button>
         {member?.role === 'owner' && (
-          <button type="button" onClick={() => navigate('/pos')} className="flex h-12 items-center gap-2 rounded-xl border border-kds-line px-4 font-bold hover:bg-kds-soft">
+          <button type="button" onClick={() => navigate('/pos')} className="flex h-14 items-center gap-2 rounded-xl border border-kds-line px-4 font-bold hover:bg-kds-soft">
             <Icon name="arrow-left" size={20} />{tr('返回前台', 'Front')}
           </button>
         )}
-        <button type="button" onClick={() => void signOut()} className="h-12 rounded-xl px-3 text-sm text-kds-muted hover:text-kds-text">{tr('退出', 'Sign out')}</button>
+        <button type="button" onClick={() => void signOut()} className="h-14 rounded-xl px-3 text-sm text-kds-muted hover:text-kds-text">{tr('退出', 'Sign out')}</button>
       </header>
 
       {stale && (
@@ -152,7 +152,7 @@ export function KitchenPage() {
             <p className="text-sm">{tr('画面可能已过期。请与收银核对，以人工纸单交接。', 'The screen may be out of date. Check with the cashier and use paper tickets.')}</p>
           </div>
           <button type="button" onClick={() => void reconnect()} disabled={reconnecting}
-            className="flex h-12 items-center gap-2 rounded-xl bg-[#fff3ea] px-5 font-bold text-[#5a2a20] disabled:opacity-60">
+            className="flex h-14 items-center gap-2 rounded-xl bg-[#fff3ea] px-5 font-bold text-[#5a2a20] disabled:opacity-60">
             <Icon name="refresh" size={20} />{reconnecting ? tr('正在连接…', 'Connecting…') : tr('重新连接', 'Reconnect')}
           </button>
         </div>
@@ -208,7 +208,7 @@ export function KitchenPage() {
             <span className="text-lg"><b className="text-2xl">{undo.token}</b> {tr('号已出餐', 'served')}</span>
             <button type="button" disabled={stale || busyId !== null}
               onClick={() => void act('undoServe', { id: undo.orderId, version: undo.version, tokenNumber: undo.token })}
-              className="h-12 rounded-xl border-2 border-kds-action px-5 font-bold text-kds-action disabled:opacity-50">
+              className="h-14 rounded-xl border-2 border-kds-action px-5 font-bold text-kds-action disabled:opacity-50">
               ↶ {tr(`撤回（${Math.ceil(undoLeft / 1000)}秒）`, `Undo (${Math.ceil(undoLeft / 1000)} s)`)}
             </button>
           </div>

@@ -37,7 +37,8 @@ export function Eyebrow({ children }: { children: ReactNode }) {
 export function Stepper({ value, onChange, min = 1, max = 50, labelLess, labelMore, size = 'md' }: {
   value: number; onChange: (n: number) => void; min?: number; max?: number; labelLess: string; labelMore: string; size?: 'sm' | 'md';
 }) {
-  const h = size === 'sm' ? 'h-11 w-11' : 'h-12 w-12';
+  // 平板触控：按钮高度不少于 56 CSS px。
+  const h = size === 'sm' ? 'h-14 w-12' : 'h-14 w-14';
   return (
     <div className="inline-flex items-center rounded-xl border border-line bg-card">
       <button type="button" aria-label={labelLess} disabled={value <= min} onClick={() => onChange(value - 1)} className={`${h} text-2xl text-ink-2 disabled:opacity-35`}>−</button>

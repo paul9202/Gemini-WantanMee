@@ -90,7 +90,7 @@ export function OrdersPage() {
   const counts: Record<Filter, number> = { all: q.data.length, queued: 0, preparing: 0, served: 0, cancelled: 0 };
   for (const o of q.data) counts[o.fulfillmentStatus]++;
   const shown = q.data.filter(matches);
-  const cols = 'lg:grid-cols-[5.5rem_minmax(0,2.2fr)_5rem_minmax(0,1.1fr)_minmax(0,1.1fr)_14rem]';
+  const cols = 'lg:grid-cols-[5.5rem_minmax(0,2.2fr)_5rem_minmax(0,1.1fr)_minmax(0,1.1fr)_15rem]';
 
   const row = (o: OrderRow) => {
     const t = new Date(o.acceptedAtEffectiveMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -122,12 +122,12 @@ export function OrdersPage() {
           <div className={`text-xs ${o.paymentState === 'refund_due' ? 'font-semibold text-danger' : 'text-ink-2'}`}>{PAY_ZH[o.paymentState]} · {o.paymentMethod === 'cash' ? '现金' : 'QR'}</div>
         </div>
         <div className="col-start-2 flex flex-wrap gap-2 lg:col-start-auto lg:justify-end">
-          <button type="button" onClick={() => setReceiptId(o.id)} className="flex h-11 items-center gap-1.5 rounded-xl border border-line bg-card px-3 font-semibold"><Icon name="list" size={18} />收据</button>
+          <button type="button" onClick={() => setReceiptId(o.id)} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold"><Icon name="list" size={18} />收据</button>
           {(o.fulfillmentStatus === 'queued' || (o.fulfillmentStatus === 'preparing' && !o.kitchenCancelRequested)) && (
-            <button type="button" onClick={() => setDialog({ kind: 'cancel', order: o })} className="h-11 rounded-xl border border-line bg-card px-3 font-semibold">取消</button>
+            <button type="button" onClick={() => setDialog({ kind: 'cancel', order: o })} className="h-14 rounded-xl border border-line bg-card px-4 font-semibold">取消</button>
           )}
           {isOwner && o.paymentState !== 'refunded' && (o.fulfillmentStatus === 'served' || o.fulfillmentStatus === 'cancelled') && (
-            <button type="button" onClick={() => setDialog({ kind: 'refund', order: o })} className="h-11 rounded-xl border border-danger/50 bg-card px-3 font-semibold text-danger">登记退款</button>
+            <button type="button" onClick={() => setDialog({ kind: 'refund', order: o })} className="h-14 rounded-xl border border-danger/50 bg-card px-4 font-semibold text-danger">登记退款</button>
           )}
         </div>
       </div>
@@ -158,16 +158,16 @@ export function OrdersPage() {
           <h2 className="text-2xl font-bold lg:text-[28px]">掌握每一单的进度</h2>
           <p className="text-sm text-ink-2">营业日 {date} · {q.data.length} 单 · 收款与后厨状态分开显示{q.fromCache ? ' · 画面可能过期' : ''}</p>
         </div>
-        <button type="button" onClick={exportCsv} disabled={!shown.length} className="ml-auto flex h-12 items-center gap-2 rounded-xl border border-line bg-card px-4 font-bold disabled:opacity-40"><Icon name="download" size={20} />导出订单</button>
+        <button type="button" onClick={exportCsv} disabled={!shown.length} className="ml-auto flex h-14 items-center gap-2 rounded-xl border border-line bg-card px-4 font-bold disabled:opacity-40"><Icon name="download" size={20} />导出订单</button>
       </div>
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {(Object.keys(FILTER_ZH) as Filter[]).map((f) => (
           <button key={f} type="button" aria-pressed={filter === f} onClick={() => setFilter(f)}
-            className={`h-12 rounded-xl border px-4 font-semibold ${filter === f ? 'border-ink bg-ink text-white' : 'border-line bg-card text-ink-2'}`}>
+            className={`h-14 rounded-xl border px-4 font-semibold ${filter === f ? 'border-ink bg-ink text-white' : 'border-line bg-card text-ink-2'}`}>
             {FILTER_ZH[f]} <span className="ml-1 text-sm opacity-70">{counts[f]}</span>
           </button>
         ))}
-        <label className="flex h-12 w-full items-center gap-2 rounded-xl border border-line bg-card px-3 sm:ml-auto sm:w-72">
+        <label className="flex h-14 w-full items-center gap-2 rounded-xl border border-line bg-card px-3 sm:ml-auto sm:w-72">
           <Icon name="search" size={18} className="text-ink-2" />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="搜索餐牌号 / 票号 / 餐品" aria-label="搜索订单" className="min-w-0 flex-1 bg-transparent outline-none" />
         </label>
@@ -202,8 +202,8 @@ function ActionDialog({ dialog, busy, onClose, onRun }: {
   const [method, setMethod] = useState<'cash' | 'qr_manual'>(o.paymentMethod);
   const [actuallyRefunded, setActuallyRefunded] = useState(false);
   return (
-    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-card p-5">
+    <div role="dialog" aria-modal="true" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4" onKeyDown={(e) => e.key === 'Escape' && !busy && onClose()}>
+      <div className="max-h-full w-full max-w-md overflow-y-auto overscroll-contain rounded-2xl bg-card p-5">
         {dialog.kind === 'cancel' ? (
           <>
             <h2 className="text-xl font-bold">取消 {o.tokenNumber}号</h2>
@@ -211,7 +211,7 @@ function ActionDialog({ dialog, busy, onClose, onRun }: {
             <div className="mt-3 grid grid-cols-2 gap-2">
               {CANCEL_REASONS.map((r) => (
                 <button key={r} type="button" aria-pressed={reason === r} onClick={() => setReason(r)}
-                  className={`h-12 rounded-lg border-2 font-semibold ${reason === r ? 'border-ink bg-ok-bg' : 'border-line'}`}>{r}</button>
+                  className={`h-14 rounded-xl border-2 font-semibold ${reason === r ? 'border-ink bg-ok-bg' : 'border-line'}`}>{r}</button>
               ))}
             </div>
           </>
@@ -222,11 +222,11 @@ function ActionDialog({ dialog, busy, onClose, onRun }: {
             <div className="mt-3 grid grid-cols-2 gap-2">
               {(['cash', 'qr_manual'] as const).map((m) => (
                 <button key={m} type="button" aria-pressed={method === m} onClick={() => setMethod(m)}
-                  className={`h-12 rounded-lg border-2 font-semibold ${method === m ? 'border-ink bg-ok-bg' : 'border-line'}`}>{m === 'cash' ? '现金退回' : '转账退回'}</button>
+                  className={`h-14 rounded-xl border-2 font-semibold ${method === m ? 'border-ink bg-ok-bg' : 'border-line'}`}>{m === 'cash' ? '现金退回' : '转账退回'}</button>
               ))}
             </div>
             <input placeholder="退款原因（必填）" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={200}
-              className="mt-3 h-12 w-full rounded-lg border border-control px-3" />
+              className="mt-3 h-14 w-full rounded-xl border border-control px-3 text-base" onFocus={(e) => { const el = e.currentTarget; setTimeout(() => el.scrollIntoView({ block: 'center' }), 300); }} />
             <label className="mt-3 flex items-center gap-2 font-semibold">
               <input type="checkbox" className="h-6 w-6" checked={actuallyRefunded} onChange={(e) => setActuallyRefunded(e.target.checked)} />
               钱已经实际退给顾客
@@ -234,13 +234,13 @@ function ActionDialog({ dialog, busy, onClose, onRun }: {
           </>
         )}
         <div className="mt-5 flex gap-2">
-          <button type="button" onClick={onClose} className="h-12 flex-1 rounded-lg border border-control font-semibold">返回</button>
+          <button type="button" onClick={onClose} className="h-14 flex-1 rounded-xl border border-control font-semibold">返回</button>
           <button type="button"
             disabled={busy || reason.trim().length < 2 || (dialog.kind === 'refund' && !actuallyRefunded)}
             onClick={() => dialog.kind === 'cancel'
               ? onRun('requestCancel', o, { reason })
               : onRun('confirmFullRefund', o, { amountSen: o.paidSen - o.refundedSen, refundMethod: method, reason })}
-            className="h-12 flex-1 rounded-lg bg-brand font-bold text-white disabled:bg-control">{busy ? '处理中…' : '确认'}</button>
+            className="h-14 flex-1 rounded-xl bg-brand font-bold text-white disabled:bg-control">{busy ? '处理中…' : '确认'}</button>
         </div>
       </div>
     </div>

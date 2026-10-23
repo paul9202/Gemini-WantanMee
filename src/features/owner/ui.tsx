@@ -16,7 +16,7 @@ export function OwnerTabs({ current, badge }: { current: Route; badge?: Partial<
     <nav aria-label="老板页面" className="-mx-4 mb-5 flex gap-2 overflow-x-auto px-4 pb-1 lg:mx-0 lg:px-0">
       {TABS.map((t) => (
         <button key={t.route} type="button" onClick={() => navigate(t.route)} aria-current={current === t.route ? 'page' : undefined}
-          className={`relative h-11 shrink-0 rounded-xl border px-4 font-semibold ${current === t.route ? 'border-ink bg-ink text-white' : 'border-line bg-card text-ink-2 hover:text-ink'}`}>
+          className={`relative h-14 shrink-0 rounded-xl border px-4 font-semibold ${current === t.route ? 'border-ink bg-ink text-white' : 'border-line bg-card text-ink-2 hover:text-ink'}`}>
           {t.label}
           {badge?.[t.route] ? <span className="ml-1.5 rounded-full bg-danger px-1.5 text-xs text-white">{badge[t.route]}</span> : null}
         </button>

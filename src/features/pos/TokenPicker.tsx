@@ -20,11 +20,11 @@ export function TokenPicker({ board, current, onPick, onRelease, onClose }: {
   const tr = useT();
 
   return (
-    <div role="dialog" aria-modal="true" aria-label={tr('选择餐牌', 'Choose token')} className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
-      <div className="w-full max-w-2xl rounded-2xl bg-card p-5 shadow-xl">
+    <div role="dialog" aria-modal="true" aria-label={tr('选择餐牌', 'Choose token')} className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4" onKeyDown={(e) => e.key === 'Escape' && onClose()}>
+      <div className="max-h-full w-full max-w-3xl overflow-y-auto overscroll-contain rounded-2xl bg-card p-4 shadow-xl sm:p-5">
         <div className="mb-3 flex items-center">
           <h2 className="text-2xl font-bold">{tr('选择餐牌', 'Choose token')}</h2>
-          <button type="button" onClick={onClose} className="ml-auto h-12 rounded-lg border border-line px-4 font-semibold" autoFocus>{tr('关闭', 'Close')}</button>
+          <button type="button" onClick={onClose} className="ml-auto h-14 rounded-xl border border-line px-5 font-semibold" autoFocus>{tr('关闭', 'Close')}</button>
         </div>
         <div className="mb-3 flex flex-wrap gap-3 text-sm">
           <span className="inline-flex items-center gap-1"><i className="h-4 w-4 rounded border-2 border-line bg-card" />{tr('可用', 'Free')}</span>
@@ -50,7 +50,7 @@ export function TokenPicker({ board, current, onPick, onRelease, onClose }: {
                   else if (state === 'awaiting_return' && t.orderId) setConfirm({ n, orderId: t.orderId });
                   else setInfo(tr(`${n}号仍被订单 …${t?.orderId?.slice(-6) ?? ''} 占用，出餐并回收实体牌后才能再用。`, `No. ${n} is still used by order …${t?.orderId?.slice(-6) ?? ''}. Serve it and collect the token first.`));
                 }}
-                className={`h-12 rounded-lg border-2 text-lg font-bold tabular-nums ${cls}`}>
+                className={`h-14 rounded-xl border-2 text-lg font-bold tabular-nums ${cls}`}>
                 {n}
               </button>
             );
@@ -64,7 +64,7 @@ export function TokenPicker({ board, current, onPick, onRelease, onClose }: {
               <b className="text-lg">{tr(`${confirm.n}号实体牌已经收回？`, `Token ${confirm.n} is back with you?`)}</b>
               <p className="text-sm text-warn">{tr('只有真的拿回牌才确认；确认后这张牌可以给新客人。', 'Only confirm when you hold the token. It can then go to a new customer.')}</p>
             </div>
-            <button type="button" onClick={() => setConfirm(null)} className="h-12 rounded-lg border border-control bg-card px-4 font-semibold">{tr('不是', 'No')}</button>
+            <button type="button" onClick={() => setConfirm(null)} className="h-14 rounded-xl border border-control bg-card px-4 font-semibold">{tr('不是', 'No')}</button>
             <button type="button" disabled={busy}
               onClick={async () => {
                 setBusy(true);
@@ -73,7 +73,7 @@ export function TokenPicker({ board, current, onPick, onRelease, onClose }: {
                 if (err) setInfo(err);
                 setConfirm(null);
               }}
-              className="h-12 rounded-lg bg-ok px-4 font-bold text-white disabled:opacity-60">{busy ? tr('处理中…', 'Working…') : tr('已收回', 'Token back')}</button>
+              className="h-14 rounded-xl bg-ok px-4 font-bold text-white disabled:opacity-60">{busy ? tr('处理中…', 'Working…') : tr('已收回', 'Token back')}</button>
           </div>
         )}
       </div>

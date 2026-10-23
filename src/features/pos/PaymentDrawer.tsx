@@ -73,24 +73,31 @@ export function PaymentDrawer({ menu, cart, totals, tokenNumber, qrPayee, online
       return /^\d{0,4}(\.\d{0,2})?$/.test(next) ? next : d;
     });
   };
+  // 触屏设备用弹窗里的数字键，不弹出系统键盘挡住找零和确认；接实体键盘时仍可直接输入。
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  // 软键盘弹出后（页面高度按 interactive-widget=resizes-content 缩小），把正在输入的框滚到可见处。
+  const revealOnFocus = (e: React.FocusEvent<HTMLElement>) => {
+    const el = e.currentTarget;
+    setTimeout(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300);
+  };
   const service = cart.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway');
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#1d2420]/55 sm:items-center sm:p-4" role="dialog" aria-modal="true" aria-label={tr('收款', 'Payment')}
       onKeyDown={(e) => e.key === 'Escape' && !busy && onClose()}>
       <div className="flex max-h-[100dvh] w-full max-w-[940px] flex-col overflow-hidden bg-card shadow-2xl sm:max-h-[94dvh] sm:rounded-3xl">
-        <div className="flex items-start gap-3 border-b border-line px-6 py-4 sm:px-7">
+        <div className="flex shrink-0 items-start gap-3 border-b border-line px-5 py-3 sm:px-7 sm:py-4">
           <div>
-            <h2 className="text-2xl font-bold">{tr('核对本单 · 收款', 'Check order · Payment')}</h2>
+            <h2 className="text-xl font-bold sm:text-2xl">{tr('核对本单 · 收款', 'Check order · Payment')}</h2>
             <p className="text-[13px] text-ink-2">{online ? tr('确认到账后，订单才会发送到后厨。', 'The order goes to the kitchen only after payment is confirmed.') : tr('断网中：确认后只保存在本机，请把纸单递给厨师。', 'Offline: saved on this device only — hand the ticket to the cook.')}</p>
           </div>
-          <button type="button" onClick={onClose} disabled={busy} autoFocus className="ml-auto flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-line disabled:opacity-40">
+          <button type="button" onClick={onClose} disabled={busy} autoFocus className="ml-auto flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-line disabled:opacity-40">
             <Icon name="close" size={22} /><span className="sr-only">{tr('返回', 'Back')}</span>
           </button>
         </div>
 
-        <div className="grid min-h-0 flex-1 overflow-y-auto md:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)]">
-          <section className="bg-canvas px-6 py-5 sm:px-7" aria-label={tr('本单', 'Order')}>
+        <div className="grid min-h-0 flex-1 overflow-y-auto overscroll-contain md:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)]">
+          <section className="bg-canvas px-5 py-4 sm:px-7 sm:py-5" aria-label={tr('本单', 'Order')}>
             <div className="flex items-center">
               <span className="text-sm text-ink-2">{tr('应收金额', 'Amount due')}</span>
               <span className="ml-auto rounded-lg bg-subtle px-2.5 py-1 text-sm font-semibold">{service} · {tr('餐牌', 'Token')} {tokenNumber}</span>
@@ -118,7 +125,7 @@ export function PaymentDrawer({ menu, cart, totals, tokenNumber, qrPayee, online
             </p>
           </section>
 
-          <section className="flex flex-col px-6 py-5 sm:px-7">
+          <section className="flex flex-col px-5 py-4 sm:px-7 sm:py-5">
             <div className="grid grid-cols-2 gap-1 rounded-2xl bg-subtle p-1" role="group" aria-label={tr('付款方式', 'Payment method')}>
               {(['cash', 'qr_manual'] as const).map((m) => (
                 <button key={m} type="button" aria-pressed={method === m} onClick={() => setMethod(m)}
@@ -133,20 +140,20 @@ export function PaymentDrawer({ menu, cart, totals, tokenNumber, qrPayee, online
                 <label htmlFor="tendered" className="text-sm font-semibold">{tr('实收现金', 'Cash received')}</label>
                 <div className={`mt-1.5 flex items-baseline gap-2 rounded-2xl border-2 px-4 py-2 ${invalidText ? 'border-danger' : 'border-ok'}`}>
                   <span className="text-ink-2">RM</span>
-                  <input id="tendered" inputMode="decimal" autoComplete="off" value={text} placeholder="0.00"
+                  <input id="tendered" inputMode={coarse ? 'none' : 'decimal'} autoComplete="off" onFocus={revealOnFocus} value={text} placeholder="0.00"
                     onChange={(e) => setText(e.target.value.replace(/[^\d.]/g, '').slice(0, 7))}
                     className="min-w-0 flex-1 bg-transparent text-4xl font-bold tabular-nums outline-none" aria-describedby="change-box" />
                 </div>
                 <div className="mt-2 grid grid-cols-4 gap-2">
                   {quickTenderOptions(dueSen).slice(0, 4).map((v, i) => (
                     <button key={v} type="button" onClick={() => setText((v / 100).toFixed(2))}
-                      className="h-12 rounded-xl border border-line bg-canvas font-semibold">{i === 0 ? tr('刚好', 'Exact') : formatRM(v).replace('.00', '').replace('RM', 'RM ')}</button>
+                      className="h-14 rounded-xl border border-line bg-canvas font-semibold">{i === 0 ? tr('刚好', 'Exact') : formatRM(v).replace('.00', '').replace('RM', 'RM ')}</button>
                   ))}
                 </div>
                 <div className="mt-2 grid grid-cols-6 gap-1.5 sm:grid-cols-6">
                   {['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', '⌫'].map((k) => (
                     <button key={k} type="button" onClick={() => press(k)} aria-label={k === '⌫' ? tr('删除', 'Delete') : k}
-                      className="h-11 rounded-lg border border-line text-xl font-bold active:bg-subtle">{k}</button>
+                      className="h-14 rounded-xl border border-line text-xl font-bold active:bg-subtle">{k}</button>
                   ))}
                 </div>
                 <div id="change-box" className={`mt-3 flex items-center justify-between rounded-2xl px-5 py-4 ${check.changeSen !== null ? 'bg-ok-bg text-ok' : 'bg-subtle text-ink-2'}`} aria-live="polite">
@@ -176,27 +183,41 @@ export function PaymentDrawer({ menu, cart, totals, tokenNumber, qrPayee, online
                 {!online && (
                   <div className="mt-3 rounded-2xl border-2 border-warn bg-warn-bg p-3">
                     <label htmlFor="qr-note" className="font-semibold text-warn">{tr('断网中：在哪台已联网的收款端核实到账？（必填）', 'Offline: which online device confirmed the payment? (required)')}</label>
-                    <input id="qr-note" value={qrNote} maxLength={200} onChange={(e) => setQrNote(e.target.value)} placeholder={tr('例如：老板手机银行 App 已看到', 'e.g. owner saw it in the bank app')}
-                      className="mt-2 h-12 w-full rounded-lg border border-control bg-card px-3" />
+                    <input id="qr-note" onFocus={revealOnFocus} value={qrNote} maxLength={200} onChange={(e) => setQrNote(e.target.value)} placeholder={tr('例如：老板手机银行 App 已看到', 'e.g. owner saw it in the bank app')}
+                      className="mt-2 h-14 w-full rounded-lg border border-control bg-card px-3 text-base" />
                     <p className="mt-1 text-sm text-warn">{tr('没有另一台联网设备核实时，请改收现金。扫码本身不等于到账。', 'Without another online device to check, take cash. Scanning is not proof of payment.')}</p>
                   </div>
                 )}
               </div>
             )}
 
-            <div className="mt-auto pt-4">
-              {error && <p role="alert" className="mb-2 rounded-lg bg-danger-bg px-3 py-2 font-semibold text-danger">{error}</p>}
-              <p className={`mb-2 text-sm ${check.ok ? 'text-ink-2' : 'text-warn'}`}>
-                {check.ok ? (method === 'cash' ? tr('核对实收金额和找零，再确认收款。', 'Check cash and change, then confirm.') : tr('已核对到账，可以确认。', 'Payment checked — you can confirm.')) : check.blocks.map((b) => tr(BLOCK_ZH[b] ?? b, BLOCK_EN[b] ?? b)).join(tr('；', '; '))}
-              </p>
-              <button type="button" disabled={!check.ok || busy}
-                onClick={() => onConfirm({ method, tenderedSen: method === 'cash' ? tenderedSen : null, qrConfirmed, qrExternalVerificationNote: !online && method === 'qr_manual' ? qrNote.trim() : null })}
-                className="flex h-16 w-full items-center justify-center gap-2 rounded-xl bg-ok text-xl font-bold text-white hover:bg-ok-pressed disabled:bg-control">
-                <Icon name="check" size={24} />{busy ? tr('正在提交，请勿重复点击…', 'Submitting — do not tap again…') : online ? tr('确认收款并接单', 'Confirm payment & send') : tr('确认收款 · 本机接单', 'Confirm payment · save on this device')}
-              </button>
-              <p className="mt-2 flex items-center gap-2 text-[13px] text-ink-2"><Icon name="list" size={16} />{tr('完成后可在订单页查看收据。', 'The receipt is available on the Orders page afterwards.')}</p>
-            </div>
           </section>
+        </div>
+
+        {/* 固定在弹窗底部：软键盘弹出或浏览器工具栏变化时，实收 / 找零 / 确认始终可见。 */}
+        <div className="shrink-0 border-t border-line bg-card px-5 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-7">
+          {error && <p role="alert" className="mb-2 rounded-lg bg-danger-bg px-3 py-2 font-semibold text-danger">{error}</p>}
+          <p className={`mb-2 text-sm ${check.ok ? 'text-ink-2' : 'text-warn'}`}>
+            {check.ok ? (method === 'cash' ? tr('核对实收金额和找零，再确认收款。', 'Check cash and change, then confirm.') : tr('已核对到账，可以确认。', 'Payment checked — you can confirm.')) : check.blocks.map((b) => tr(BLOCK_ZH[b] ?? b, BLOCK_EN[b] ?? b)).join(tr('；', '; '))}
+          </p>
+          <div className="flex flex-wrap items-stretch gap-3">
+            <div className="flex min-h-16 min-w-0 flex-1 basis-56 items-center justify-between gap-3 rounded-xl bg-subtle px-4" aria-live="polite" data-testid="pay-summary">
+              <span className="text-sm text-ink-2">{tr('应收', 'Due')} <b className="block text-lg text-ink tabular-nums">{formatRM(dueSen)}</b></span>
+              {method === 'cash' ? (
+                <>
+                  <span className="text-sm text-ink-2">{tr('实收', 'Received')} <b className="block text-lg text-ink tabular-nums">{tenderedSen !== null ? formatRM(tenderedSen) : '—'}</b></span>
+                  <span className={`text-sm ${check.changeSen !== null ? 'text-ok' : 'text-ink-2'}`}>{tr('找零', 'Change')} <b className="block text-lg tabular-nums">{check.changeSen !== null ? formatRM(check.changeSen) : '—'}</b></span>
+                </>
+              ) : (
+                <span className={`text-sm font-semibold ${qrConfirmed ? 'text-ok' : 'text-warn'}`}>{qrConfirmed ? tr('已核对到账', 'Payment checked') : tr('未核对到账', 'Not checked')}</span>
+              )}
+            </div>
+            <button type="button" disabled={!check.ok || busy}
+              onClick={() => onConfirm({ method, tenderedSen: method === 'cash' ? tenderedSen : null, qrConfirmed, qrExternalVerificationNote: !online && method === 'qr_manual' ? qrNote.trim() : null })}
+              className="flex min-h-16 flex-1 basis-64 items-center justify-center gap-2 rounded-xl bg-ok px-4 text-xl font-bold text-white hover:bg-ok-pressed disabled:bg-control">
+              <Icon name="check" size={24} />{busy ? tr('正在提交，请勿重复点击…', 'Submitting — do not tap again…') : online ? tr('确认收款并接单', 'Confirm payment & send') : tr('确认收款 · 本机接单', 'Confirm payment · save on this device')}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -383,17 +383,18 @@ export function PosPage() {
         <div className="flex rounded-2xl bg-subtle p-1" role="group" aria-label={tr('就餐方式', 'Service')}>
           {(['dine_in', 'takeaway'] as const).map((m) => (
             <button key={m} type="button" aria-pressed={cart.serviceMode === m} onClick={() => setCart(setServiceMode(cart, m))}
-              className={`flex h-12 items-center gap-2 rounded-xl px-4 text-lg font-bold ${cart.serviceMode === m ? 'bg-card shadow' : 'text-ink-2'}`}>
+              className={`flex h-14 items-center gap-2 rounded-xl px-3 text-lg font-bold xl:px-4 ${cart.serviceMode === m ? 'bg-card shadow' : 'text-ink-2'}`}>
               <Icon name={m === 'dine_in' ? 'table' : 'bag'} size={28} />{m === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
             </button>
           ))}
         </div>
-        <button type="button" onClick={() => setPickerOpen(true)} aria-haspopup="dialog" className="flex h-14 items-center gap-3 rounded-2xl border border-line bg-card px-4">
-          <span className="text-sm text-ink-2">{tr('餐牌', 'Token')}</span><b className="text-3xl tabular-nums">{token ?? tr('满', 'Full')}</b><Icon name="chevron-down" size={18} />
+        <button type="button" onClick={() => setPickerOpen(true)} aria-haspopup="dialog" className="flex h-14 shrink-0 items-center gap-2.5 rounded-2xl border border-line bg-card px-3 xl:gap-3 xl:px-4">
+          <span className="text-sm text-ink-2">{tr('餐牌', 'Token')}</span><b className="text-3xl tabular-nums">{token ?? tr('满', 'Full')}</b>
+          <span className="text-left text-[11px] leading-tight text-ink-2"><b className="block text-[13px] text-ink">{counts.available}</b>{tr('个可用', 'free')}</span>
+          <Icon name="chevron-down" size={18} />
         </button>
-        <span className="text-[13px] text-ink-2">{tr(`${counts.available} 个可用`, `${counts.available} free`)}</span>
         {counts.awaiting_return > 0 && (
-          <button type="button" onClick={() => setPickerOpen(true)} className="min-h-10 rounded-lg bg-warn-bg px-2.5 text-sm font-semibold text-warn">
+          <button type="button" onClick={() => setPickerOpen(true)} className="min-h-14 shrink-0 rounded-xl bg-warn-bg px-3 text-sm font-semibold text-warn">
             {tr(`${counts.awaiting_return} 个待回收`, `${counts.awaiting_return} to collect`)}
           </button>
         )}
@@ -439,15 +440,15 @@ export function PosPage() {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto xl:flex-row xl:overflow-hidden">
-          <section className="border-line bg-canvas px-4 pt-5 pb-4 lg:px-6 xl:w-[38%] xl:max-w-[600px] xl:shrink-0 xl:overflow-y-auto xl:border-r" aria-label={tr('选餐', 'Dishes')}>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto md:landscape:flex-row md:landscape:overflow-hidden">
+          <section className="@container border-line bg-canvas px-4 pt-4 pb-4 md:landscape:w-[clamp(200px,24vw,280px)] md:landscape:shrink-0 md:landscape:overflow-y-auto md:landscape:border-r md:landscape:px-3 2xl:landscape:w-[38%] 2xl:landscape:max-w-[600px] 2xl:landscape:px-6 2xl:landscape:pt-5" aria-label={tr('选餐', 'Dishes')}>
             <div className="mb-3 flex items-baseline">
               <h2 className="text-xl font-bold">{tr('看图选餐', 'Pick the dish')}</h2>
               <span className="ml-auto text-[11px] font-semibold tracking-[0.16em] text-ink-2">01 / SELECT</span>
             </div>
             <ProductGrid menu={menu} config={draft}
               onPick={(t) => setDraft(normalizeConfig(menu, { ...draft, productKind: t.productKind, sauce: t.productKind === 'dry_noodle' ? t.sauce : draft.sauce }))} />
-            <p className="mt-4 hidden items-start gap-2 rounded-2xl border border-line bg-subtle/70 px-4 py-3 text-[13px] text-ink-2 sm:flex">
+            <p className="mt-4 hidden items-start gap-2 rounded-2xl border border-line bg-subtle/70 px-4 py-3 text-[13px] text-ink-2 2xl:flex">
               <Icon name="help" size={18} />{tr('选餐后调整面种和份量。普通配料已预设，有特别要求再更改。', 'After picking a dish, choose noodles and size. Standard toppings are preset — change only for special requests.')}
             </p>
             {resultProps && <RecentOrder {...resultProps} onOpen={() => setResultOpen(true)} />}
@@ -458,15 +459,15 @@ export function PosPage() {
               </p>
             )}
           </section>
-          <section className="min-w-0 flex-1 bg-card xl:overflow-y-auto" aria-label={tr('当前配置', 'Customize')}>
+          <section className="min-w-0 flex-1 bg-card md:landscape:overflow-y-auto" aria-label={tr('当前配置', 'Customize')}>
             <Customizer menu={menu} config={draft} onChange={setDraft} quantity={draftQty} onQuantity={setDraftQty}
               editing={Boolean(editingLineId)} onSubmit={addOrSave}
               onCancelEdit={() => { setEditingLineId(null); setDraft(defaultConfig(menu, draft.productKind, draft.sauce)); }} />
           </section>
         </div>
-        <aside className={`${cartOpen ? 'fixed inset-0 z-40 flex' : 'hidden'} min-h-0 flex-col border-l border-line bg-[#fdfcf8] lg:static lg:z-auto lg:flex lg:w-[380px] lg:shrink-0 xl:w-[400px]`} aria-label={tr('本单', 'Order')}>
+        <aside className={`${cartOpen ? 'fixed inset-0 z-40 flex' : 'hidden'} min-h-0 flex-col border-l border-line bg-[#fdfcf8] md:static md:z-auto md:flex md:w-[clamp(300px,30vw,400px)] md:shrink-0`} aria-label={tr('本单', 'Order')}>
           {cartOpen && (
-            <button type="button" onClick={() => setCartOpen(false)} className="flex h-14 shrink-0 items-center justify-center gap-2 border-b border-line font-semibold text-ink-2 lg:hidden">
+            <button type="button" onClick={() => setCartOpen(false)} className="flex h-14 shrink-0 items-center justify-center gap-2 border-b border-line font-semibold text-ink-2 md:hidden">
               <Icon name="chevron-down" size={18} />{tr('收起本单，继续点餐', 'Hide order, keep ordering')}
             </button>
           )}
@@ -482,13 +483,13 @@ export function PosPage() {
       </div>
 
       {undo && (
-        <div role="status" className="fixed bottom-40 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-ink px-4 py-2 whitespace-nowrap text-white shadow-xl lg:bottom-6">
+        <div role="status" className="fixed bottom-40 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-ink px-4 py-2 whitespace-nowrap text-white shadow-xl md:top-2 md:right-4 md:bottom-auto md:left-auto md:translate-x-0">
           {undo.label}
-          <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); setEditingLineId(null); }} className="h-10 rounded-lg border border-white/40 px-3 font-semibold">{tr('撤销', 'Undo')}</button>
+          <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); setEditingLineId(null); }} className="h-14 rounded-xl border border-white/40 px-5 font-semibold">{tr('撤销', 'Undo')}</button>
         </div>
       )}
 
-      <div className="flex shrink-0 items-stretch gap-2 border-t border-line bg-card p-2 lg:hidden">
+      <div className="flex shrink-0 items-stretch gap-2 border-t border-line bg-card p-2 md:hidden">
         <button type="button" onClick={() => setCartOpen(true)} aria-expanded={cartOpen} className="flex min-h-14 min-w-0 flex-1 items-center gap-2 rounded-xl border border-line px-3 text-left">
           <span className="font-bold">{tr('本单', 'Order')} {totals.portionCount} {tr('份', 'pcs')} · {formatRM(totals.totalSen)}</span>
           <span className="ml-auto text-sm text-ink-2">{tr('查看 / 修改', 'View / edit')}</span>

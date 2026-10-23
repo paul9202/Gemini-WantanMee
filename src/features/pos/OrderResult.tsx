@@ -120,7 +120,7 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
   const s = stage.summary;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1d2420]/55 p-4" role="dialog" aria-modal="true" aria-label={title} onKeyDown={(e) => e.key === 'Escape' && onClose()}>
-      <div className="max-h-[94dvh] w-full max-w-[720px] overflow-y-auto rounded-3xl bg-card px-6 py-8 text-center shadow-2xl sm:px-10">
+      <div className="max-h-[94dvh] w-full max-w-[720px] overflow-y-auto overscroll-contain rounded-3xl bg-card px-6 py-6 text-center shadow-2xl sm:px-10 [@media(min-height:700px)]:py-8">
         <span className={`mx-auto flex h-20 w-20 items-center justify-center rounded-full ${offline || facts.ack === 'alarm' ? 'bg-warn-bg text-warn' : 'bg-ok-bg text-ok'}`}>
           <Icon name={offline ? 'handoff' : 'check'} size={offline ? 44 : 38} />
         </span>
@@ -137,8 +137,8 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
         <div className="mt-6"><Steps steps={facts.steps} offline={offline} /></div>
         <Alerts {...props} facts={facts} />
         <div className="mt-6 flex flex-wrap justify-center gap-3">
-          <button type="button" onClick={onReceipt} className="h-12 rounded-xl border border-line px-5 font-bold">{tr('收据', 'Receipt')}</button>
-          <button type="button" onClick={onClose} autoFocus className="flex h-12 items-center gap-2 rounded-xl bg-ok px-6 font-bold text-white">{tr('下一单', 'Next order')}<Icon name="arrow" size={20} /></button>
+          <button type="button" onClick={onReceipt} className="h-14 rounded-xl border border-line px-6 font-bold">{tr('收据', 'Receipt')}</button>
+          <button type="button" onClick={onClose} autoFocus className="flex h-14 items-center gap-2 rounded-xl bg-ok px-7 font-bold text-white">{tr('下一单', 'Next order')}<Icon name="arrow" size={20} /></button>
         </div>
       </div>
     </div>

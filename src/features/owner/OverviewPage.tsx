@@ -97,11 +97,11 @@ export function OverviewPage() {
           <div className="flex rounded-2xl bg-subtle p-1" role="group" aria-label="统计区间">
             {(Object.keys(PERIOD_ZH) as Period[]).map((p) => (
               <button key={p} type="button" aria-pressed={period === p} onClick={() => setPeriod(p)}
-                className={`h-11 rounded-xl px-4 text-base font-semibold ${period === p ? 'bg-card shadow' : 'text-ink-2'}`}>{PERIOD_ZH[p]}</button>
+                className={`h-14 rounded-xl px-4 text-base font-semibold ${period === p ? 'bg-card shadow' : 'text-ink-2'}`}>{PERIOD_ZH[p]}</button>
             ))}
           </div>
-          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); reviews.refresh(); }} className="flex h-12 items-center gap-1.5 rounded-xl border border-line bg-card px-3 font-semibold"><Icon name="refresh" size={18} />刷新</button>
-          <button type="button" disabled={!summary} onClick={exportCsv} className="flex h-12 items-center gap-1.5 rounded-xl border border-line bg-card px-3 font-semibold disabled:opacity-40"><Icon name="download" size={18} />导出 CSV</button>
+          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); reviews.refresh(); }} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold"><Icon name="refresh" size={18} />刷新</button>
+          <button type="button" disabled={!summary} onClick={exportCsv} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold disabled:opacity-40"><Icon name="download" size={18} />导出 CSV</button>
         </div>
       </div>
 
@@ -146,7 +146,7 @@ export function OverviewPage() {
 
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
         <Section title="钱从哪里来，花到哪里去" hint="经营估算 · 进货不与理论成本重复扣减"
-          actions={<button type="button" onClick={() => setDetail(!detail)} aria-expanded={detail} className="min-h-10 text-sm underline underline-offset-4">{detail ? '收起现金视角' : '查看现金视角'}</button>}>
+          actions={<button type="button" onClick={() => setDetail(!detail)} aria-expanded={detail} className="min-h-14 px-1 text-sm underline underline-offset-4">{detail ? '收起现金视角' : '查看现金视角'}</button>}>
           {summary ? (
             <table className="w-full text-[15px]">
               <tbody>
@@ -180,7 +180,7 @@ export function OverviewPage() {
               {attention.map((a) => (
                 <li key={a.title} className="flex items-center gap-3 py-3">
                   <div className="min-w-0 flex-1"><b>{a.title}</b><p className="text-[13px] text-ink-2">{a.sub}</p></div>
-                  {a.action && <button type="button" onClick={a.action.go} className="h-11 shrink-0 rounded-xl border border-line px-4 font-bold">{a.action.label}</button>}
+                  {a.action && <button type="button" onClick={a.action.go} className="h-14 shrink-0 rounded-xl border border-line px-4 font-bold">{a.action.label}</button>}
                 </li>
               ))}
             </ul>
@@ -190,7 +190,7 @@ export function OverviewPage() {
 
       {!loading && summary && svc && mix && (
         <details className="group rounded-2xl border border-line bg-card p-5 shadow-card">
-          <summary className="flex min-h-10 cursor-pointer list-none items-center gap-2 font-bold"><Icon name="chevron-right" size={18} className="transition-transform group-open:rotate-90" />细账：收款构成、出餐效率、酱料与面种、回本进度</summary>
+          <summary className="flex min-h-14 cursor-pointer list-none items-center gap-2 font-bold"><Icon name="chevron-right" size={18} className="transition-transform group-open:rotate-90" />细账：收款构成、出餐效率、酱料与面种、回本进度</summary>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <Section title="收款构成" hint="现金与 QR 分开；QR 不进钱箱">
               <BarList format={formatRM} rows={[

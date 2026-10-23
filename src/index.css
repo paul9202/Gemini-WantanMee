@@ -83,6 +83,14 @@
   }
 }
 
+/*
+ * 平板与手机：页头放了页面操作（例如点餐页的堂食/打包、餐牌）时，宽度不足 1280 就隐藏页面大标题，
+ * 把一整行留给操作，不让页头换成两行挤掉内容区。
+ */
+@media (max-width: 1279px) {
+  header:has(.shell-slot:not(:empty)) .shell-title { display: none; }
+}
+
 /* 收据打印：收据弹窗打开时（#print-root 有内容）只输出收据；其他页面（如培训图卡）正常打印。 */
 #print-root { display: none; }
 @media print {

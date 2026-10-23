@@ -64,48 +64,48 @@ export function Shell({ route, title, children }: { route: Route; title?: Route;
 
   return (
     <div className="flex h-[100dvh] bg-canvas print:block print:h-auto print:bg-white">
-      <aside className="hidden w-[92px] shrink-0 flex-col items-center border-r border-line bg-[#fbfaf6] py-5 lg:flex print:hidden" aria-label={tr('岗位导航', 'Navigation')}>
-        <span className="mb-6 flex h-11 w-11 items-center justify-center rounded-xl bg-brand text-2xl font-black text-[#fff8e8]">豪</span>
-        <nav className="flex w-full flex-col items-center gap-2 px-2.5" aria-label={tr('主要页面', 'Main pages')}>
+      <aside className="hidden w-[76px] shrink-0 flex-col items-center border-r border-line bg-[#fbfaf6] py-3 md:flex xl:w-[92px] xl:py-5 print:hidden" aria-label={tr('岗位导航', 'Navigation')}>
+        <span className="mb-3 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand text-2xl font-black text-[#fff8e8] xl:mb-6">豪</span>
+        <nav className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto px-2" aria-label={tr('主要页面', 'Main pages')}>
           {nav.map((n) => {
             const active = route === n.route;
             return (
               <button key={n.route} type="button" onClick={() => navigate(n.route)} aria-current={active ? 'page' : undefined}
-                className={`flex w-full flex-col items-center gap-1 rounded-2xl py-2.5 text-[13px] ${active ? 'bg-brand-soft font-bold text-brand' : 'text-ink-2 hover:bg-subtle hover:text-ink'}`}>
+                className={`flex min-h-14 w-full shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[13px] ${active ? 'bg-brand-soft font-bold text-brand' : 'text-ink-2 hover:bg-subtle hover:text-ink'}`}>
                 <Icon name={n.icon} size={24} />{tr(n.label, n.en)}
               </button>
             );
           })}
         </nav>
-        <div className="mt-auto flex flex-col items-center gap-2">
-          <span title={user?.email ?? ''} className="flex h-10 w-10 items-center justify-center rounded-full bg-subtle text-[13px] font-bold">{member ? tr(ROLE_ZH[member.role], ROLE_EN[member.role].slice(0, 4)) : ''}</span>
-          <button type="button" onClick={() => void signOut()} className="min-h-10 rounded-lg px-2 text-xs text-ink-2 hover:text-ink">{tr('退出', 'Sign out')}</button>
+        <div className="mt-2 flex shrink-0 flex-col items-center gap-1">
+          <span title={user?.email ?? ''} className="hidden h-10 w-10 items-center [@media(min-height:700px)]:flex justify-center rounded-full bg-subtle text-[13px] font-bold">{member ? tr(ROLE_ZH[member.role], ROLE_EN[member.role].slice(0, 4)) : ''}</span>
+          <button type="button" onClick={() => void signOut()} className="min-h-14 w-14 rounded-lg text-xs text-ink-2 hover:text-ink">{tr('退出', 'Sign out')}</button>
         </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="z-20 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line bg-card px-4 py-3 lg:px-8 lg:py-4 print:hidden">
-          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand text-xl font-black text-[#fff8e8] lg:hidden">豪</span>
-          <div className="min-w-0 flex-1 xl:flex-none">
+        <header className="z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-card px-4 py-2.5 md:flex-nowrap md:px-5 xl:gap-x-4 xl:px-8 xl:py-4 print:hidden">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand text-xl font-black text-[#fff8e8] md:hidden">豪</span>
+          <div className="shell-title min-w-0 flex-1 xl:flex-none">
             <div className="hidden text-[11px] font-semibold tracking-[0.2em] text-ink-2 sm:block">HAO WANTAN MEE</div>
             <h1 className="truncate text-xl font-bold leading-tight lg:text-[26px]">{tr(head.zh, head.en)}</h1>
             {sub && <p className="hidden text-[13px] text-ink-2 sm:block">{sub}</p>}
           </div>
-          <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3 md:order-last">
             {USE_EMULATORS && <span className="hidden rounded-md bg-warn-bg px-2 py-1 text-xs font-semibold text-warn sm:inline">{tr('测试环境', 'Test env')}</span>}
             <span className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] font-semibold ${online ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>
               <span className={`h-2 w-2 rounded-full ${online ? 'bg-ok' : 'bg-danger'}`} />
               <span className="sr-only sm:not-sr-only">{online ? tr('门店在线', 'Online') : tr('已断网', 'Offline')}</span>
             </span>
             {dateLabel && <span className="hidden text-[13px] text-ink-2 xl:inline" title={tr('营业日', 'Business day')}>{dateLabel}</span>}
-            <button type="button" onClick={() => void signOut()} title={user?.email ?? ''} className="flex h-10 items-center rounded-lg border border-line px-3 text-sm text-ink-2 hover:text-ink lg:hidden">
+            <button type="button" onClick={() => void signOut()} title={user?.email ?? ''} className="flex h-14 items-center rounded-lg border border-line px-3 text-sm text-ink-2 hover:text-ink md:hidden">
               {tr('退出', 'Sign out')}
             </button>
           </div>
-          <div ref={setSlot} className="flex w-full flex-wrap items-center gap-3 empty:hidden xl:order-none xl:w-auto" />
+          <div ref={setSlot} className="shell-slot order-last flex w-full flex-wrap items-center gap-2 empty:hidden md:order-none md:w-auto md:flex-nowrap xl:gap-3" />
         </header>
         {!online && (
-          <div role="status" className="flex items-center gap-3 border-b border-warn/40 bg-warn-bg px-4 py-2 font-semibold text-warn lg:px-8 print:hidden">
+          <div role="status" className="flex items-center gap-3 border-b border-warn/40 bg-warn-bg px-4 py-2 font-semibold text-warn md:px-5 xl:px-8 print:hidden">
             <Icon name="wifi-off" size={22} />
             {tr('网络已断开 · 只有指定主收银机可以离线接单（仅本机保存），后厨屏不会自动收到，请人工传单。', 'Offline · only the main register can take orders (saved on this device). The kitchen screen will not receive them — hand the ticket over.')}
           </div>
@@ -119,7 +119,7 @@ export function Shell({ route, title, children }: { route: Route; title?: Route;
         <HeaderSlot.Provider value={slot}>
           <main className="min-h-0 flex-1 overflow-y-auto print:overflow-visible">{children}</main>
         </HeaderSlot.Provider>
-        <nav aria-label={tr('主要页面', 'Main pages')} className="flex shrink-0 border-t border-line bg-[#fbfaf6] pb-[env(safe-area-inset-bottom)] lg:hidden print:hidden">
+        <nav aria-label={tr('主要页面', 'Main pages')} className="flex shrink-0 border-t border-line bg-[#fbfaf6] pb-[env(safe-area-inset-bottom)] md:hidden print:hidden">
           {nav.map((n) => {
             const active = route === n.route;
             return (

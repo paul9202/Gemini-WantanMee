@@ -13,7 +13,7 @@ function tileSelected(t: EntryTile, c: LineConfig): boolean {
 export function ProductGrid({ menu, config, onPick }: { menu: MenuVersion; config: LineConfig; onPick: (t: EntryTile) => void }) {
   const tr = useT();
   return (
-    <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+    <div className="grid grid-cols-2 gap-2 @[22rem]:grid-cols-3 @[40rem]:grid-cols-6 @[22rem]:gap-2.5">
       {ENTRY_TILES.map((t) => {
         const sel = tileSelected(t, config);
         const from = Math.min(...menu.products[t.productKind].sizes.map((s) => s.priceSen));
