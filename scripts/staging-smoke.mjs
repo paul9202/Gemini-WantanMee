@@ -6,7 +6,8 @@ const FN = `https://asia-southeast1-${project}.cloudfunctions.net`;
 const COMMANDS = ['createOrder', 'getOperationResult', 'openShift', 'releaseToken', 'ackKitchenTicket', 'startOrder', 'serveOrder', 'undoServe',
   'requestCancel', 'confirmKitchenCancel', 'confirmFullRefund', 'manageMember', 'assignRegister', 'inviteMember', 'publishMenu', 'publishBom',
   'syncOfflineEvents', 'routeManualOrderToKitchen', 'heartbeatDevice', 'recordManualHandoff', 'resolveOfflineReview', 'recordExpense',
-  'voidLedgerEntry', 'recordWastage', 'recordCashMovement', 'closeBusinessDay', 'restateBusinessDay'];
+  'voidLedgerEntry', 'recordWastage', 'recordCashMovement', 'closeBusinessDay', 'restateBusinessDay',
+  'recordPayment', 'reversePayment', 'writeOffPayment', 'reinstateWrittenOff', 'rejectKitchenCancel'];
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -25,6 +26,10 @@ const sw = await fetch(`${SITE}/sw.js`);
 check('Service Worker 可下载（离线营业）', sw.ok && (sw.headers.get('cache-control') ?? '').includes('no-cache'), sw.headers.get('cache-control'));
 const photo = await fetch(`${SITE}/photos/dish.dry_noodle.red.v1.webp`);
 check('营业照片可下载', photo.ok && photo.headers.get('content-type')?.includes('webp'));
+// 收款码原图：线上提供的字节与用户原图一致（只下载比对，不扫码、不付款）。
+const { createHash } = await import('node:crypto');
+const qr = Buffer.from(await (await fetch(`${SITE}/payment/tng-receiving-original.jpg`)).arrayBuffer());
+check('收款码原图字节未改动（sha256）', createHash('sha256').update(qr).digest('hex') === '08223503ac18f4345632311d6bd2ad8b02a155e8545329c16721c8034e7567fc', `${qr.length} bytes`);
 
 const bad = [];
 await Promise.all(COMMANDS.map(async (c) => {
@@ -37,7 +42,7 @@ check(`${COMMANDS.length} 个 Callable 已上线，未登录调用被拒绝（�
 
 const FS = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/stores/hao-pontian-main`;
 const denied = [];
-for (const p of ['orders', 'payments', 'members', 'costEvents', 'menuVersions', 'bomVersions', 'dailyReports', 'config/public']) {
+for (const p of ['orders', 'payments', 'paymentWriteOffs', 'members', 'costEvents', 'menuVersions', 'bomVersions', 'dailyReports', 'config/public']) {
   const r = await fetch(`${FS}/${p}`);
   if (r.status !== 403) denied.push(`${p}:${r.status}`);
 }
