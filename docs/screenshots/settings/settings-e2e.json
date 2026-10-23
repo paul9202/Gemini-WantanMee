@@ -50,19 +50,19 @@
     "detail": "{\"price\":true,\"soldOut\":true,\"disabled\":true}"
   },
   {
-    "name": "POS 英文：Sold out / from RM8 / Pay",
+    "name": "POS 英文：Sold out / from RM8 / Send to kitchen",
     "ok": true,
-    "detail": "{\"sold\":true,\"from\":true,\"pay\":true}"
+    "detail": "{\"sold\":true,\"from\":true,\"send\":true}"
   },
   {
-    "name": "新单按新菜单版本 RM8 成交",
+    "name": "新单按新菜单版本 RM8 下单（待收款）",
     "ok": true,
-    "detail": "menu-20261023-01 800"
+    "detail": "menu-20261023-01 800 unpaid"
   },
   {
-    "name": "KDS 英文：菜名、待下锅、开始制作",
+    "name": "KDS 英文：菜名、制作中合计、只有 Served（无 Start）、自动开始",
     "ok": true,
-    "detail": "{\"start\":true,\"name\":true,\"noodle\":true}"
+    "detail": "{\"served\":true,\"noStart\":true,\"name\":true,\"noodle\":true,\"auto\":true}"
   },
   {
     "name": "图卡页（英文）显示 6 种餐品与图卡含义",

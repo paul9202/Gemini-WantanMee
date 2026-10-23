@@ -1,8 +1,11 @@
 /**
- * 后厨 KDS（02 §5，2026-10-23 新版布局）：顶部待下锅（细面 / 面薄 / 云吞 / 口味），左待做 FIFO，右制作中。
- * 餐牌、堂食/打包、等待时间、面种份量、特殊要求、动作按钮都在固定位置。
+ * 后厨 KDS（02 §5；运营重设计 2026-10-23 §4/§5/§7）：顶部制作中合计（细面 / 面薄 / 云吞 / 口味），
+ * 下方单一「制作中 / 待出餐」工作区，按接单先后 FIFO。新电子单接单即自动进入制作中，没有日常「开始制作」步骤；
+ * 旧 queued 单同样在此区域，可直接出餐。
+ * 餐牌、堂食/打包、接单至今时间、面种份量、特殊要求、动作按钮都在固定位置。
  * 收到非缓存厨单才发送「后厨已收到」回执；断网或数据来自缓存时冻结操作并提示画面可能过期。
- * 不显示售价、收款或利润（厨房投影本身不含这些字段）。
+ * 取消待确认单冻结：不能正常出餐，只能由后厨确认「未做」或「已下锅/已用料」，确认即释放餐牌。
+ * 不显示售价、付款金额或付款状态（厨房投影本身不含这些字段）；厨房按钮只负责出餐，不确认收款。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, disableNetwork, enableNetwork, query, where } from 'firebase/firestore';
@@ -25,7 +28,12 @@ import { PICTOGRAMS } from '../../domain/pictograms';
 import { useKdsTheme, useNewTicketChime } from './prefs';
 
 type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean; manualHandoffAtMs?: number | null };
-type Action = 'startOrder' | 'serveOrder' | 'confirmKitchenCancel' | 'undoServe';
+// 不再提供 startOrder：新单接单即制作中，旧 queued 单也直接出餐。
+type Action = 'serveOrder' | 'confirmKitchenCancel' | 'rejectKitchenCancel' | 'undoServe';
+type ActExtra = { consumed?: boolean; reason?: string };
+/** 拒绝取消的可选简短原因。 */
+const REJECT_REASONS: [string, string][] = [['已送餐，顾客仍要', 'Already served, customer keeps it'], ['顾客改主意，仍要', 'Customer changed mind, keeps it']];
+type TicketRef = { id: string; version: number; tokenNumber: number };
 
 export function KitchenPage() {
   const { config, member, deviceId, signOut } = useSession();
@@ -63,10 +71,11 @@ export function KitchenPage() {
   }, [q.fromCache]);
   const stale = cacheStale || (q.fromCache && q.loading) || !online;
   const tickets = sortFifo(q.data);
-  const queued = tickets.filter((t) => t.fulfillmentStatus === 'queued');
-  const preparing = tickets.filter((t) => t.fulfillmentStatus === 'preparing');
-  const queuedIds = useMemo(() => queued.map((t) => t.id), [queued.map((t) => t.id).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-  const sound = useNewTicketChime(queuedIds, !q.fromCache && !q.loading);
+  // 单一工作区：全部未出餐电子单（含旧 queued），取消待确认单留在原位但冻结。
+  const working = tickets;
+  const openIds = working.filter((t) => !t.kitchenCancelRequested).map((t) => t.id);
+  const newIds = useMemo(() => openIds, [openIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sound = useNewTicketChime(newIds, !q.fromCache && !q.loading);
 
   // 只对来自服务器（非缓存）的厨单回执一次。
   useEffect(() => {
@@ -79,15 +88,17 @@ export function KitchenPage() {
     }
   }, [tickets, q.fromCache, q.pendingIds, deviceId]);
 
-  async function act(name: Action, t: { id: string; version: number; tokenNumber: number }) {
+  async function act(name: Action, t: TicketRef, extra: ActExtra = {}) {
     if (busyId) return; // 防止连点：同一时间只处理一张单
+    if (name === 'confirmKitchenCancel' && typeof extra.consumed !== 'boolean') return; // 服务器要求明确 consumed
     setBusyId(t.id);
     setMessage(null);
     try {
-      const r = await submit<{ version: number }>(name, { operationId: newOperationId(), orderId: t.id, expectedVersion: t.version });
+      const r = await submit<{ version: number }>(name, { operationId: newOperationId(), orderId: t.id, expectedVersion: t.version, ...extra });
       if (name === 'serveOrder') setUndo({ orderId: t.id, token: t.tokenNumber, version: r.version, servedAt: Date.now() });
       if (name === 'undoServe') setUndo(null);
     } catch (e) {
+      // 撤回失败（含 TOKEN_REASSIGNED：餐牌已给新单）只显示原因，不尝试换牌；换牌只能由前台/老板明确执行。
       setMessage(e instanceof CommandFailure ? reasonText(e.reasonCode) : String(e));
       if (name === 'undoServe') setUndo(null);
     } finally {
@@ -107,6 +118,7 @@ export function KitchenPage() {
   }
 
   const sum = summarizeKitchen(tickets);
+  const a = sum.active;
   const date = config ? businessDateOf(now, { timeZone: config.timeZone, cutoverMinutes: config.cutoverMinutes }) : '';
   const dateLabel = date ? new Intl.DateTimeFormat(lang === 'en' ? 'en-MY' : 'zh-CN', { month: 'long', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) : '';
   // now 每秒刷新一次，可能略早于出餐时刻；显示不超过 30 秒。实际时限由服务器判断。
@@ -158,48 +170,42 @@ export function KitchenPage() {
         </div>
       )}
 
-      <section className="grid grid-cols-3 gap-2 px-4 pt-4 sm:gap-3 sm:px-7 sm:pt-5 lg:grid-cols-4 lg:gap-4" aria-label={tr('待下锅合计', 'To cook')}>
-        <CountCard art={<Photo id="noodle.thin_egg" size={64} rounded={10} />} label={tr('待下锅 · 细面', 'To cook · Thin')} value={balls(sum.queued.thinEggHalfUnits)} unit={tr('团', 'balls')} />
-        <CountCard art={<Photo id="noodle.mee_poh" size={64} rounded={10} />} label={tr('待下锅 · 面薄', 'To cook · Mee pok')} value={balls(sum.queued.meePohHalfUnits)} unit={tr('团', 'balls')} />
-        <CountCard art={<Icon name="dumpling" size={56} />} label={tr('待下锅 · 云吞', 'To cook · Wantan')} value={String(sum.queued.wantons)} unit={tr('粒', 'pcs')} />
+      <section className="grid grid-cols-3 gap-2 px-4 pt-4 sm:gap-3 sm:px-7 sm:pt-5 lg:grid-cols-4 lg:gap-4" aria-label={tr('制作中合计', 'In-progress totals')}>
+        <CountCard art={<Photo id="noodle.thin_egg" size={64} rounded={10} />} label={tr('制作中 · 细面', 'In progress · Thin')} value={balls(a.thinEggHalfUnits)} unit={tr('团', 'balls')} />
+        <CountCard art={<Photo id="noodle.mee_poh" size={64} rounded={10} />} label={tr('制作中 · 面薄', 'In progress · Mee pok')} value={balls(a.meePohHalfUnits)} unit={tr('团', 'balls')} />
+        <CountCard art={<Icon name="dumpling" size={56} />} label={tr('制作中 · 云吞', 'In progress · Wantan')} value={String(a.wantons)} unit={tr('粒', 'pcs')} />
         <div className="col-span-3 flex flex-col justify-center rounded-2xl border border-kds-line bg-kds-card px-5 py-3 lg:col-span-1">
-          <div className="text-sm text-kds-muted">{tr(`待做口味 · 共 ${sum.queued.orders} 单`, `Flavours waiting · ${sum.queued.orders} orders`)}</div>
+          <div className="text-sm text-kds-muted">{tr(`口味 · 共 ${a.orders} 单`, `Flavours · ${a.orders} orders`)}</div>
           <div className="mt-1 grid grid-cols-5 gap-1 text-sm">
             {[
-              [tr('黑酱', 'Black'), sum.queued.sauce.black], [tr('红酱', 'Red'), sum.queued.sauce.red], [tr('白酱', 'White'), sum.queued.sauce.white],
-              [tr('汤面', 'Soup'), sum.queued.soupNoodle], [tr('云吞汤', 'W. soup'), sum.queued.wantonSoup],
+              [tr('黑酱', 'Black'), a.sauce.black], [tr('红酱', 'Red'), a.sauce.red], [tr('白酱', 'White'), a.sauce.white],
+              [tr('汤面', 'Soup'), a.soupNoodle], [tr('云吞汤', 'W. soup'), a.wantonSoup],
             ].map(([l, v]) => (
               <span key={l as string} className={`whitespace-nowrap ${v ? '' : 'opacity-50'}`}>{l} <b className="text-lg">{v}</b></span>
             ))}
           </div>
-          {sum.queued.kosong > 0 && <div className="mt-1 text-sm font-bold text-kds-action">{tr(`其中净面 ${sum.queued.kosong} 份`, `incl. Kosong ${sum.queued.kosong}`)}</div>}
+          {a.kosong > 0 && <div className="mt-1 text-sm font-bold text-kds-action">{tr(`其中净面 ${a.kosong} 份`, `incl. Kosong ${a.kosong}`)}</div>}
+          {sum.cancelPending > 0 && (
+            <div className="mt-1 text-sm font-bold text-kds-danger">{tr(`取消待确认 ${sum.cancelPending} 单，不计入合计`, `${sum.cancelPending} cancel request(s) pending · not in totals`)}</div>
+          )}
         </div>
       </section>
 
       {message && <div role="alert" className="mx-4 mt-4 rounded-xl bg-kds-danger-bg px-4 py-3 text-lg text-kds-danger sm:mx-7">{message}</div>}
 
-      <div className="flex flex-1 flex-col gap-6 px-4 py-5 sm:px-7 md:flex-row">
-        <section className="min-w-0 md:flex-1 xl:flex-[2]" aria-label={tr('待做', 'Waiting')}>
-          <SectionHead title={tr('待做', 'Waiting')} count={queued.length} hint={tr('等候最久在前', 'Oldest first')} />
-          {q.loading && <p className="text-kds-muted">{tr('正在载入厨单…', 'Loading tickets…')}</p>}
-          {!q.loading && queued.length === 0 && <Empty text={tr('暂无待做的单', 'Nothing waiting')} />}
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {queued.map((t) => <TicketCard key={t.id} t={t} now={now} today={date} disabled={stale || busyId !== null} busy={busyId === t.id} onAct={act} />)}
-          </div>
-        </section>
-        <section className="min-w-0 md:flex-1" aria-label={tr('制作中', 'Cooking')}>
-          <SectionHead title={tr('制作中', 'Cooking')} count={preparing.length} hint={tr('完成后点出餐', 'Tap Served when done')} />
-          {!q.loading && preparing.length === 0 && <Empty text={tr('没有正在制作的单', 'Nothing cooking')} />}
-          <div className="grid grid-cols-1 gap-4">
-            {preparing.map((t) => <TicketCard key={t.id} t={t} now={now} today={date} disabled={stale || busyId !== null} busy={busyId === t.id} onAct={act} />)}
-          </div>
-        </section>
-      </div>
+      <section className="min-w-0 flex-1 px-4 py-5 sm:px-7" aria-label={tr('制作中 / 待出餐', 'Cooking / to serve')}>
+        <SectionHead title={tr('制作中 / 待出餐', 'Cooking / to serve')} count={working.length} hint={tr('接单最早在前 · 做好点完成出餐', 'Oldest first · tap Served when done')} />
+        {q.loading && <p className="text-kds-muted">{tr('正在载入厨单…', 'Loading tickets…')}</p>}
+        {!q.loading && working.length === 0 && <Empty text={tr('暂无要做的单', 'Nothing to cook')} />}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {working.map((t) => <TicketCard key={t.id} t={t} now={now} today={date} disabled={stale || busyId !== null} busy={busyId === t.id} onAct={act} />)}
+        </div>
+      </section>
 
       <footer className="sticky bottom-0 flex flex-wrap items-center gap-3 border-t border-kds-line bg-kds px-4 py-3 sm:px-7">
         <Icon name="cloud" size={22} />
         <span className="text-sm text-kds-muted">
-          {stale ? tr('画面可能过期 · 不要据此开始制作', 'Screen may be stale — do not start from it') : tr('订单已实时更新', 'Orders are live')}
+          {stale ? tr('画面可能过期 · 不要据此制作或出餐', 'Screen may be stale — do not cook or serve from it') : tr('订单已实时更新', 'Orders are live')}
           {' · '}{tr(`人工单待核对 ${manualQ.data.length} 单（补同步订单不会自动重做）`, `${manualQ.data.length} paper ticket(s) to check (synced orders are not re-cooked)`)}
         </span>
         {undo && undoLeft > 0 && (
@@ -258,45 +264,75 @@ const URGENCY = {
 
 function TicketCard({ t, now, today, disabled, busy, onAct }: {
   t: Ticket; now: number; today: string; disabled: boolean; busy: boolean;
-  onAct: (name: Action, t: { id: string; version: number; tokenNumber: number }) => void;
+  onAct: (name: Action, t: TicketRef, extra?: ActExtra) => void;
 }) {
   const tr = useT();
+  const [rejectReason, setRejectReason] = useState<string | null>(null);
+  // 出餐效率按「接单至出餐」计算；自动开始时间不是厨师实际开工，不作测量。
   const elapsed = now - t.acceptedAtEffectiveMs;
   const urgency = kitchenUrgency(elapsed);
   const u = URGENCY[urgency];
-  const isQueued = t.fulfillmentStatus === 'queued';
+  const frozen = t.kitchenCancelRequested;
   const noodle = t.lines.reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
   const wantons = t.lines.reduce((s, l) => s + l.wantonCount * l.quantity, 0);
-  const ref = { id: t.id, version: t.version, tokenNumber: t.tokenNumber };
+  const ref: TicketRef = { id: t.id, version: t.version, tokenNumber: t.tokenNumber };
+  // 只有人工开工（旧流程 startOrder）才显示具体开工时刻；自动或旧 queued 单一律标为自动。
+  const startLabel = t.startedSource === 'manual' && t.startedAtMs != null
+    ? tr(`人工开工 ${clock(t.startedAtMs)}`, `Started by cook ${clock(t.startedAtMs)}`)
+    : tr('自动（接单即制作）', 'Auto (cooking from order)');
   return (
-    <article className={`flex flex-col overflow-hidden rounded-2xl border bg-kds-card ${t.kitchenCancelRequested ? 'border-[#e0735c]' : u.border}`} aria-label={tr(`${t.tokenNumber}号`, `No. ${t.tokenNumber}`)}>
+    <article className={`flex flex-col overflow-hidden rounded-2xl border bg-kds-card ${frozen ? 'border-[#e0735c]' : u.border}`} aria-label={tr(`${t.tokenNumber}号`, `No. ${t.tokenNumber}`)}>
       <div className="flex items-center gap-3 border-b border-kds-line px-5 pt-2.5 pb-2">
         <span className="text-[42px] font-black leading-none tabular-nums">{t.tokenNumber}</span>
         <span className="ml-auto inline-flex items-center gap-2 rounded-xl bg-kds-soft px-3 py-2 font-bold">
           <PictoArt id={t.serviceMode === 'dine_in' ? 'service:dine_in' : 'service:takeaway'} size={26} />{t.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
         </span>
       </div>
-      <div className={`flex items-center gap-2 px-5 py-2 ${isQueued ? u.bar : 'bg-kds-soft/60'}`}>
-        <Icon name="clock" size={18} className={isQueued ? u.text : 'text-kds-muted'} />
-        <b className={`text-lg tabular-nums ${isQueued && urgency !== 'normal' ? u.text : ''}`}>{formatClock(elapsed)}</b>
+      <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 px-5 py-2 ${frozen ? 'bg-kds-danger-bg' : u.bar}`}>
+        <Icon name="clock" size={18} className={frozen ? 'text-kds-danger' : u.text} />
+        <span className="text-xs text-kds-muted">{tr('接单至今', 'Since order')}</span>
+        <b className={`text-lg tabular-nums ${!frozen && urgency !== 'normal' ? u.text : ''}`}>{formatClock(elapsed)}</b>
         {t.timeQuality === 'device_estimated' && <span className="text-xs text-kds-muted">{tr('（离线时间）', '(offline time)')}</span>}
-        <span className={`ml-auto text-sm font-semibold ${isQueued ? u.text : 'text-kds-muted'}`}>
-          {isQueued ? tr(u.label, u.en) : urgency === 'overdue' ? tr('正在制作 · 已超时', 'Cooking · overdue') : tr('正在制作', 'Cooking')}
+        <span className={`ml-auto text-sm font-semibold ${frozen ? 'text-kds-danger' : u.text}`}>
+          {frozen ? tr('取消待确认 · 已冻结', 'Cancel requested · frozen') : tr(u.label, u.en)}
         </span>
+        <span className="w-full text-xs text-kds-muted">{tr('开始：', 'Start: ')}{startLabel}</span>
       </div>
       {today && t.businessDate < today && (
         <Banner tone="warn">{tr(`跨营业日 · ${t.businessDate.slice(5)} 的单（仍需完成）`, `From ${t.businessDate.slice(5)} · still to finish`)}</Banner>
       )}
       {t.manualHandoffAtMs && <Banner tone="danger"><PictoArt id="token:return" size={24} />{tr('收银已递纸单 · 先核对是否已做，避免做两份', 'Paper ticket given · check before cooking twice')}</Banner>}
       {t.routedFromManual && <Banner tone="action"><PictoArt id="token:return" size={24} />{tr('人工单转入 · 收银已核实厨房未做', 'From paper ticket · cashier confirmed not cooked')}</Banner>}
-      <ul className="flex-1 space-y-3 px-5 py-3">
+      <ul className={`flex-1 space-y-3 px-5 py-3 ${frozen ? 'opacity-60' : ''}`}>
         {t.lines.map((l) => <KitchenLineRow key={l.lineId} l={l} serviceMode={t.serviceMode} />)}
       </ul>
-      {t.kitchenCancelRequested ? (
+      {frozen ? (
         <div className="m-4 mt-0 rounded-xl bg-kds-danger-bg p-3 text-kds-danger">
           <b className="text-lg">{tr('收银请求取消：', 'Cashier asks to cancel: ')}{t.cancelReason ?? tr('未注明', 'no reason')}</b>
-          <button type="button" disabled={disabled} onClick={() => onAct('confirmKitchenCancel', ref)}
-            className="mt-2 h-14 w-full rounded-xl border-2 border-current text-lg font-bold disabled:opacity-50">{busy ? tr('处理中…', 'Working…') : tr('确认停止制作', 'Stop cooking')}</button>
+          <p className="mt-1 text-sm">{tr('此单已冻结，不能出餐。请停止制作并如实选择；确认后订单取消，餐牌自动释放。', 'Frozen — cannot be served. Stop cooking and choose truthfully; confirming cancels the order and releases the token.')}</p>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <button type="button" disabled={disabled} onClick={() => onAct('confirmKitchenCancel', ref, { consumed: false })}
+              className="min-h-14 rounded-xl border-2 border-current px-3 py-2 text-lg font-bold disabled:opacity-50">
+              {busy ? tr('处理中…', 'Working…') : tr('未做，确认取消', 'Not cooked · confirm cancel')}
+            </button>
+            <button type="button" disabled={disabled} onClick={() => onAct('confirmKitchenCancel', ref, { consumed: true })}
+              className="min-h-14 rounded-xl border-2 border-current px-3 py-2 text-lg font-bold disabled:opacity-50">
+              {busy ? tr('处理中…', 'Working…') : tr('已下锅/已用料，确认取消', 'Already cooked / used · confirm cancel')}
+            </button>
+          </div>
+          {/* 拒绝取消：结束本次申请，订单恢复正常制作；不标付款、不退款、不释放餐牌，出餐仍要点「完成出餐」。 */}
+          <div className="mt-3 border-t border-current/30 pt-3">
+            <div className="flex flex-wrap gap-2" role="group" aria-label={tr('拒绝原因（可选）', 'Reason (optional)')}>
+              {REJECT_REASONS.map(([zh, en]) => (
+                <button key={zh} type="button" aria-pressed={rejectReason === zh} disabled={disabled} onClick={() => setRejectReason(rejectReason === zh ? null : zh)}
+                  className={`min-h-14 rounded-xl border px-3 text-sm font-semibold ${rejectReason === zh ? 'border-current bg-current/15' : 'border-current/40'}`}>{tr(zh, en)}</button>
+              ))}
+            </div>
+            <button type="button" disabled={disabled} onClick={() => onAct('rejectKitchenCancel', ref, rejectReason ? { reason: rejectReason } : {})}
+              className="mt-2 min-h-14 w-full rounded-xl bg-kds-soft px-3 py-2 text-lg font-bold text-kds-ink disabled:opacity-50">
+              {busy ? tr('处理中…', 'Working…') : tr('继续做，拒绝取消', 'Keep cooking · reject cancel')}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="flex items-end gap-4 px-5 pb-3.5">
@@ -304,16 +340,20 @@ function TicketCard({ t, now, today, disabled, busy, onAct }: {
             {noodle > 0 && <div>{tr('面', 'Noodle')} {balls(noodle)} {tr('团', 'balls')}</div>}
             {wantons > 0 && <div>{tr('云吞', 'Wantan')} {wantons} {tr('粒', 'pcs')}</div>}
           </div>
-          <button type="button" disabled={disabled} onClick={() => onAct(isQueued ? 'startOrder' : 'serveOrder', ref)}
-            className={`flex h-14 flex-1 items-center justify-center gap-3 rounded-xl text-xl font-bold text-kds-action-ink disabled:opacity-45 ${isQueued ? 'bg-kds-action' : 'bg-kds-serve'}`}>
-            <PictoArt id={isQueued ? 'action:start' : 'action:serve'} size={30} />
-            {busy ? tr('处理中…', 'Working…') : isQueued ? tr('开始制作', 'Start') : tr('完成出餐', 'Served')}
+          <button type="button" disabled={disabled} onClick={() => onAct('serveOrder', ref)}
+            className="flex h-14 flex-1 items-center justify-center gap-3 rounded-xl bg-kds-serve text-xl font-bold text-kds-action-ink disabled:opacity-45">
+            <PictoArt id="action:serve" size={30} />
+            {busy ? tr('处理中…', 'Working…') : tr('完成出餐', 'Served')}
             <Icon name="arrow" size={20} />
           </button>
         </div>
       )}
     </article>
   );
+}
+
+function clock(ms: number): string {
+  return new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 function Banner({ tone, children }: { tone: 'warn' | 'danger' | 'action'; children: React.ReactNode }) {

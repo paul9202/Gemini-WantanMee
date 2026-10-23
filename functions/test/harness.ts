@@ -84,7 +84,7 @@ export interface StoreFixture {
   nextSeq: () => number;
 }
 
-/** 新门店：bootstrap owner → 邀请收银/后厨 → 指定主收银机 → 开班。每组测试独立门店，避免互相影响。 */
+/** 新门店：bootstrap owner → 邀请收银/后厨 → 指定主收银机 → 开班（不录备用金）。每组测试独立门店，避免互相影响。 */
 export async function setupStore(qrPayee: string | null = 'HAO PONTIAN WANTAN'): Promise<StoreFixture> {
   const storeId = `t-${randomUUID().slice(0, 12)}`;
   const [owner, cashier, kitchen] = await Promise.all([newClient('owner'), newClient('cashier'), newClient('kitchen')]);
@@ -95,7 +95,7 @@ export async function setupStore(qrPayee: string | null = 'HAO PONTIAN WANTAN'):
   const deviceId = `pos-${randomUUID().slice(0, 8)}`;
   const reg = await owner.call<{ epoch: number }>('assignRegister', { storeId, operationId: randomUUID(), registerId: 'front-01', deviceId, reason: '开店' });
   const claim = { deviceId, registerId: 'front-01', registerEpoch: reg.epoch };
-  const shift = await cashier.call<{ shiftId: string }>('openShift', { storeId, operationId: randomUUID(), ...claim, openingFloatSen: 10000 });
+  const shift = await cashier.call<{ shiftId: string }>('openShift', { storeId, operationId: randomUUID(), ...claim });
   const seq = { value: 0 };
   return { storeId, owner, cashier, kitchen, claim, shiftId: shift.shiftId, seq, nextSeq: () => ++seq.value };
 }
@@ -109,7 +109,8 @@ export interface OrderOptions {
   lines?: { config: unknown; quantity: number; lineId?: string }[];
   serviceMode?: 'dine_in' | 'takeaway';
   expectedTotalSen?: number;
-  payment?: { method: 'cash' | 'qr_manual'; tenderedSen: number | null; qrConfirmed: boolean };
+  /** 下单后立即登记全额收款（另一条命令，下单本身不收款）。 */
+  paid?: boolean;
   sequence?: number;
   operationId?: string;
   clientOrderId?: string;
@@ -133,16 +134,25 @@ export function orderPayload(f: StoreFixture, o: OrderOptions = {}) {
       expectedTotalSen: o.expectedTotalSen ?? 700,
       deviceAcceptedAtMs: Date.now(),
     },
-    payment: o.payment ?? { method: 'cash', tenderedSen: 1000, qrConfirmed: false },
   };
 }
 
-/** 成功创建订单并推进本机序号。 */
+/** 成功创建订单并推进本机序号；paid=true 时随后登记全额收款。 */
 export async function placeOrder(f: StoreFixture, o: OrderOptions = {}) {
   const payload = orderPayload(f, o);
-  const result = await f.cashier.call<{ orderId: string; receiptNumber: string; changeSen: number | null; totalSen: number; businessDate: string }>('createOrder', payload);
+  const result = await f.cashier.call<{ orderId: string; receiptNumber: string; totalSen: number; businessDate: string; paymentState: string; fulfillmentStatus: string }>('createOrder', payload);
   f.seq.value = payload.sequence;
+  if (o.paid) await pay(f, result.orderId, result.totalSen);
   return { payload, result };
+}
+
+export function payPayload(f: StoreFixture, orderId: string, amountSen: number, operationId: string = randomUUID()) {
+  return { storeId: f.storeId, operationId, ...f.claim, orderId, amountSen };
+}
+
+/** 主收银机确认整单已收款（不分渠道）。 */
+export async function pay(f: StoreFixture, orderId: string, amountSen: number, operationId?: string) {
+  return f.cashier.call<{ paymentId: string; businessDate: string; orderBusinessDate: string }>('recordPayment', payPayload(f, orderId, amountSen, operationId));
 }
 
 export async function countDocs(storeId: string, collection: string, field?: string, value?: unknown): Promise<number> {

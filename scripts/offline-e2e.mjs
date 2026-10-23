@@ -1,15 +1,16 @@
-// 真断网端到端验证（04 §4）：正式构建 + Service Worker + 本机 Emulator，用 CDP 切断页面网络（不是改布尔值）。
+// 真断网端到端验证（04 §4 + 2026-10-23 运营改版 §9/§11-12）：断网下单（不收款）→ 离线确认收款 → 人工出餐 → 刷新 → 补同步 → 重复补同步不重复入账。
+// 正式构建 + Service Worker + 本机 Emulator，用 CDP 切断页面网络（不是改布尔值）。
 // 前提：Emulator 已启动并执行过 npm run emulators:seed；用 VITE_USE_EMULATORS=true 构建 dist，并在 4173 端口 vite preview。
 // 用法：node scripts/offline-e2e.mjs
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { callable, fsList, idToken } from './lib/cdp.mjs';
 
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const ORIGIN = process.env.E2E_ORIGIN || 'http://localhost:4173';
 const OUT = 'docs/screenshots/offline';
-const FS = 'http://127.0.0.1:8080/v1/projects/demo-hao-wantan/databases/(default)/documents/stores/hao-pontian-main';
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = [];
 const check = (name, ok, detail = '') => {
@@ -23,15 +24,7 @@ const account = (role) => {
   return { email: m[1], password: m[2] };
 };
 
-// Emulator REST（owner 令牌在 Emulator 中绕过 Rules，仅本机测试用）
-async function fsList(collection) {
-  const r = await (await fetch(`${FS}/${collection}?pageSize=300`, { headers: { Authorization: 'Bearer owner' } })).json();
-  return (r.documents ?? []).map((d) => {
-    const out = {};
-    for (const [k, v] of Object.entries(d.fields ?? {})) out[k] = v.stringValue ?? (v.integerValue !== undefined ? Number(v.integerValue) : v.booleanValue ?? v.nullValue ?? v);
-    return out;
-  });
-}
+// Emulator REST 读取用 lib/cdp.mjs 的 fsList（含文档 ID _id）。
 
 const profile = await mkdtemp(join(tmpdir(), 'hao-offline-'));
 const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--no-first-run', '--hide-scrollbars', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore', windowsHide: true });
@@ -103,15 +96,19 @@ try {
   await offline(true);
   await pause(1500);
   check('断网后显示离线营业横条', await page(`return await __waitFor('离线营业·仅本机保存', 8000);`));
+  // 下单送厨（2026-10-23 起下单不收款）：只点本单里的「下单送厨」。
+  const SEND = `[...document.querySelectorAll('aside[aria-label="本单"] button')].find((b) => b.innerText.includes('下单送厨')).click();`;
+  const RESULT = `(document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText`;
   const order1 = await page(`
     __click('红酱面'); await __sleep(150); __click('加入本单'); await __sleep(200);
     const token = Number(document.querySelector('aside [aria-label^="餐牌"]').getAttribute('aria-label').match(/(\\d+)/)[1]);
-    __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款·本机接单'); await __sleep(1500);
-    return { token, text: (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText };`);
-  check('D01 断网现金接单：本机已接单、显示临时号与人工传单', order1.text.includes('本机已接单') && /O-F\d+-\d{4}/.test(order1.text) && order1.text.includes('请人工传单'), `餐牌 ${order1.token}`);
+    ${SEND} await __sleep(1500);
+    return { token, text: ${RESULT} };`);
+  check('D01 断网下单：本机已接单、显示临时号与人工传单、待收款（不经收款步骤）', order1.text.includes('本机已接单') && /O-F\d+-\d{4}/.test(order1.text) && order1.text.includes('请人工传单') && order1.text.includes('待收款'), `餐牌 ${order1.token}`);
   await shot('offline-pos-accepted');
   await page(`__click('我已把单交给厨师'); await __sleep(800);`);
   check('人工交接已记录', await page(`return __has('已人工交接');`));
+  await page(`__click('下一单'); await __sleep(300);`);
 
   // 断网刷新（模拟关闭浏览器后重开）
   await send('Page.reload', { ignoreCache: false });
@@ -120,36 +117,46 @@ try {
   check('D01 断网刷新：应用从 Service Worker 载入，仍为离线营业', afterReload.includes('离线营业') && afterReload.includes('看图选餐'));
   await goto('/sync');
   const syncText = await page(`await __waitFor('本机离线单', 15000); return document.querySelector('main').innerText;`);
-  check('D01 刷新后本机订单与日志都在', syncText.includes(`未同步 2 条`) && /O-F\d+-\d{4}/.test(syncText), syncText.match(/未同步 \d+ 条/)?.[0]);
+  check('D01 刷新后本机订单与日志都在，订单为未收款', syncText.includes(`未同步 2 条`) && /O-F\d+-\d{4}/.test(syncText) && syncText.includes('未收款'), syncText.match(/未同步 \d+ 条/)?.[0]);
   await shot('offline-sync-center');
 
-  // 人工出餐 → 实体牌收回 → 同牌新单（D03）
-  await page(`__click('已人工出餐'); await __sleep(800); __click('实体牌已收回'); await __sleep(800);`);
+  // 回柜台确认已收款（离线人工全额确认）→ 人工出餐（自动释放餐牌）；各自形成本机事件，先落盘再显示成功
+  await page(`__click('确认已收款RM7.00'); await __sleep(1000); __click('已人工出餐'); await __sleep(1000);`);
+  const steps = await page(`return { text: document.querySelector('main').innerText, again: [...document.querySelectorAll('button')].some((b) => !b.disabled && b.innerText.replace(/\\s+/g, '').includes('确认已收款RM7.00')), returnStep: __has('实体牌已收回') };`);
+  check('离线确认收款、人工出餐：本机记录 4 条、收款按钮不能再点、没有「实体牌已收回」步骤', steps.text.includes('未同步 4 条') && steps.text.includes('已登记收款') && !steps.again && !steps.returnStep, steps.text.match(/未同步 \d+ 条/)?.[0]);
+  await send('Page.reload', { ignoreCache: false });
+  await pause(6000);
+  const afterReload2 = await page(`await __waitFor('本机离线单', 20000); return document.querySelector('main').innerText;`);
+  check('D12 再次断网刷新：收款与出餐记录仍在（原子落盘）', afterReload2.includes('未同步 4 条') && afterReload2.includes('已登记收款') && afterReload2.includes('已确认收款'), afterReload2.match(/未同步 \d+ 条/)?.[0]);
+  await shot('offline-sync-paid-served');
+
+  // 人工出餐即释放餐牌 → 同牌新单（D03）
   await goto('/pos');
   await page(`await __waitFor('看图选餐', 20000);`);
   const order2 = await page(`
-    document.querySelector('button[aria-label^="${order1.token}号"]') || null;
-    __click('餐牌'); await __sleep(400);
+    [...document.querySelectorAll('button')].find((b) => b.innerText.includes('个可用')).click(); await __sleep(400);
     const btn = document.querySelector('button[aria-label^="${order1.token}号"]');
     const state = btn.getAttribute('aria-label');
     btn.click(); await __sleep(300);
     __click('云吞汤'); await __sleep(150); __click('加入本单'); await __sleep(200);
-    __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款·本机接单'); await __sleep(1500);
-    return { state, text: (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText };`);
-  check('D03 回收后同一张牌可再离线接单', order2.state.includes('可用') && order2.text.includes('本机已接单'), order2.state);
+    ${SEND} await __sleep(1500);
+    const text = ${RESULT}; __click('下一单'); await __sleep(300);
+    return { state, text };`);
+  check('D03 人工出餐后同一张牌可再离线接单（无人工回收）', order2.state.includes('可用') && order2.text.includes('本机已接单'), order2.state);
   const order3 = await page(`
     __click('白酱面'); await __sleep(150); __click('加入本单'); await __sleep(200);
-    __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款·本机接单'); await __sleep(1500);
-    return (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText.match(/(\\d+)号 · 临时号/)?.[1];`);
-  check('第三张离线单（尚未制作）', Boolean(order3), `餐牌 ${order3}`);
-  const qrBlocked = await page(`
-    __click('黑酱面'); await __sleep(150); __click('加入本单'); await __sleep(200);
-    __click('收款RM'); await __sleep(400); __click('DuitNowQR'); await __sleep(200);
-    document.querySelector('[aria-label="收款"] input[type=checkbox]').click(); await __sleep(200);
-    const disabled = [...document.querySelectorAll('button')].find(b => b.innerText.includes('确认收款')).disabled;
-    __click('返回'); await __sleep(200);
-    return disabled;`);
-  check('D11 断网 QR 无外部核实说明不能确认', qrBlocked === true);
+    ${SEND} await __sleep(1500);
+    return ${RESULT}.match(/(\\d+)号 · 临时号/)?.[1];`);
+  check('第三张离线单（尚未制作、未收款）', Boolean(order3), `餐牌 ${order3}`);
+  // 收款码原图离线可用（Service Worker 缓存）；打开 / 关闭不登记收款
+  const qrOffline = await page(`
+    __click('显示收款码'); await __sleep(1200);
+    const img = document.querySelector('[role=dialog][aria-label="收款码"] img'); await img.decode().catch(() => {});
+    const loaded = img.naturalWidth > 0;
+    __click('关闭（订单仍待收款）'); await __sleep(500);
+    const text = ${RESULT}; __click('下一单'); await __sleep(300);
+    return { loaded, unpaid: text.includes('待收款') && !text.includes('已登记收款') };`);
+  check('D11 断网时收款码原图仍可显示，关闭后订单仍待收款', qrOffline.loaded && qrOffline.unpaid, JSON.stringify(qrOffline));
 
   const ordersBefore = await fsList('orders');
   check('断网期间云端没有任何订单', ordersBefore.length === 0, `${ordersBefore.length} 单`);
@@ -166,12 +173,26 @@ try {
   const tickets = await fsList('kitchenTickets');
   const inbox = await fsList('offlineInbox');
   const tokens = await fsList('tokens');
+  const payments = await fsList('payments');
+  const o1 = orders.find((o) => o.tokenNumber === order1.token && o.fulfillmentStatus === 'served');
   check('D04 云端 3 张离线单、无重复', orders.length === 3 && orders.every((o) => o.source === 'offline'), `${orders.length} 单`);
   check('补同步不送厨：电子厨单为 0', tickets.filter((t) => t.kitchenRouting === 'digital').length === 0);
-  check('已人工出餐的单导入为已出餐', orders.filter((o) => o.fulfillmentStatus === 'served').length === 1);
-  check('离线日志全部接纳（3 单 + 交接 + 出餐 + 回收 = 6 条）', inbox.length === 6 && inbox.every((x) => x.status === 'accepted'), inbox.map((x) => x.status).join(','));
+  check('已人工出餐的单导入为已出餐 + 已收款', orders.filter((o) => o.fulfillmentStatus === 'served').length === 1 && o1?.paymentState === 'paid' && o1.paidSen === 700, `${o1?.fulfillmentStatus}/${o1?.paymentState}`);
+  check('D12 只有 1 笔收款（属于第一张单），其余两单仍未收款', payments.length === 1 && payments[0].orderId === o1?._id && orders.filter((o) => o.paymentState === 'unpaid').length === 2, `${payments.length} 笔`);
+  check('离线日志全部接纳（3 单 + 交接 + 收款 + 出餐 = 6 条）', inbox.length === 6 && inbox.every((x) => x.status === 'accepted'), inbox.map((x) => x.status).join(','));
   const t1 = tokens.find((t) => t.number === order1.token);
-  check('同一张牌最终属于第二张离线单', t1?.state === 'held' && orders.some((o) => o.id === t1.orderId && o.items), JSON.stringify({ state: t1?.state }));
+  check('同一张牌最终属于第二张离线单（第一张出餐已释放）', t1?.state === 'held' && t1.orderId !== o1?._id && orders.some((o) => o._id === t1.orderId), JSON.stringify({ state: t1?.state }));
+
+  // 重复补同步：UI 再点一次，并把本机全部离线日志原样重传给服务器 → 不重复入账
+  await page(`if ([...document.querySelectorAll('button')].some((b) => !b.disabled && b.innerText.includes('立即同步'))) __click('立即同步'); await __sleep(4000);`);
+  const events = await page(`
+    const db = await new Promise((r, j) => { const q = indexedDB.open('hao-pos'); q.onsuccess = () => r(q.result); q.onerror = () => j(q.error); });
+    const all = await new Promise((r, j) => { const q = db.transaction('outbox').objectStore('outbox').getAll(); q.onsuccess = () => r(q.result); q.onerror = () => j(q.error); });
+    db.close(); return all.sort((a, b) => a.sequence - b.sequence).map((x) => x.event);`);
+  const resend = await callable('syncOfflineEvents', { events }, await idToken('cashier')).catch((e) => ({ error: String(e.message) }));
+  const [orders2, payments2, inbox2] = [await fsList('orders'), await fsList('payments'), await fsList('offlineInbox')];
+  check('D12 重复补同步（UI 再同步 + 原样重传 6 条）：订单、收款、日志都不增加', !resend.error && orders2.length === 3 && payments2.length === 1 && inbox2.length === 6,
+    resend.error ?? `${orders2.length} 单 · ${payments2.length} 笔 · ${inbox2.length} 条 · ${(resend.results ?? []).map((r) => r.status).join(',')}`);
 
   // D05：尚未制作的离线单由收银核实后转电子厨单
   const routed = await page(`__click('厨师确认没做→转电子厨单'); await __waitFor('已转为电子厨单', 30000); return document.querySelector('[role=alert]')?.innerText ?? '';`);
@@ -183,9 +204,9 @@ try {
   const online = await page(`
     await __waitFor('看图选餐', 15000);
     __click('黑酱面'); await __sleep(150); __click('加入本单'); await __sleep(200);
-    __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款并接单'); await __waitFor('✓云端已接单', 40000);
+    ${SEND} await __waitFor('✓云端已接单', 40000);
     return document.body.innerText;`);
-  check('补同步后在线接单正常（序号连续）', online.includes('✓ 云端已接单'), online.includes('✓ 云端已接单') ? '' : online.slice(0, 600).replace(/\s+/g, ' '));
+  check('补同步后在线接单正常（序号连续、待收款）', online.includes('✓ 云端已接单') && online.includes('待收款'), online.includes('✓ 云端已接单') ? '' : online.slice(0, 600).replace(/\s+/g, ' '));
 } catch (e) {
   check('脚本异常', false, String(e?.stack ?? e));
 } finally {

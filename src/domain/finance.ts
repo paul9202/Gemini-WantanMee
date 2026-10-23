@@ -2,7 +2,9 @@
  * 老板财务口径（管理估算，非审计净利润）。两本视角分开，避免进货与 BOM 重复扣：
  * - 经营视角：净收款 − 已分配理论成本 − 未重复的损耗 − 固定费用摊销 − 其他营业费用。
  * - 现金视角：实收 − 实退 − 已付进货 − 已付营业费用（含房租付款），不再扣 BOM/摊销。
- * 每个事件按「自己的」营业日筛选：退款属于退款日，订单留在销售日。
+ * 每个事件按「自己的」营业日筛选：退款属于退款日，订单留在销售日；跨日补登记的收款属于登记日。
+ * 新收款不分渠道（unspecified）：只汇总「已登记收款」，不推算现金/QR 拆分或钱箱应有；
+ * cash / qr_manual 只来自旧记录，单独列出供历史对照。收入数字是人工登记，不是钱包或银行自动核对。
  */
 import { DateRange, datesInRange, daysInMonth, inRange } from './businessDay';
 import { costUnitsToSen, CostUnits, Sen } from './money';
@@ -35,7 +37,8 @@ export function fixedCostForRange(policy: FixedCostPolicy, range: DateRange): Se
 export type ExpenseCategory = 'purchase' | 'fixed_payment' | 'opex' | 'capital';
 
 export type LedgerEvent =
-  | { kind: 'payment'; id: string; orderId: string; businessDate: string; method: PaymentMethod; amountSen: Sen }
+  /** 收款登记；correction=true 是老板对误登记的反向调整（金额为负），不是实际退款。 */
+  | { kind: 'payment'; id: string; orderId: string; businessDate: string; method: PaymentMethod; amountSen: Sen; correction?: boolean }
   | { kind: 'refund'; id: string; orderId: string; businessDate: string; method: PaymentMethod; amountSen: Sen }
   /** 理论成本分配；待做取消时以负数反转。 */
   | { kind: 'cost_allocation'; id: string; orderId: string; businessDate: string; costUnits: CostUnits }
@@ -50,8 +53,11 @@ export type LedgerEvent =
 
 export interface PeriodSummary {
   range: DateRange;
-  receipts: { cashSen: Sen; qrSen: Sen; totalSen: Sen };
-  refunds: { cashSen: Sen; qrSen: Sen; totalSen: Sen };
+  /** totalSen = 已登记收款（含更正）；cash/qr 只来自旧记录，unspecified 为新流程统一收款。 */
+  receipts: { cashSen: Sen; qrSen: Sen; unspecifiedSen: Sen; correctionsSen: Sen; totalSen: Sen };
+  refunds: { cashSen: Sen; qrSen: Sen; unspecifiedSen: Sen; totalSen: Sen };
+  /** 区间内有旧版渠道记录（现金 / QR），报表可附带历史拆分。 */
+  hasLegacyChannels: boolean;
   netReceiptsSen: Sen;
   allocatedCostUnits: CostUnits;
   wastageCostUnits: CostUnits;
@@ -70,7 +76,7 @@ export interface PeriodSummary {
 }
 
 export function summarizePeriod(events: LedgerEvent[], range: DateRange, fixed: FixedCostPolicy = DEFAULT_FIXED_COST): PeriodSummary {
-  let cashSen = 0, qrSen = 0, refundCash = 0, refundQr = 0;
+  let cashSen = 0, qrSen = 0, unspecifiedSen = 0, correctionsSen = 0, refundCash = 0, refundQr = 0, refundUnspecified = 0;
   let allocated = 0, wastage = 0, wastageAllocatedCount = 0;
   let opexAccrued = 0, purchasesPaid = 0, opexPaid = 0, capitalPaid = 0;
 
@@ -87,12 +93,15 @@ export function summarizePeriod(events: LedgerEvent[], range: DateRange, fixed: 
     if (!inRange(e.businessDate, range)) continue;
     switch (e.kind) {
       case 'payment':
-        if (e.method === 'cash') cashSen += e.amountSen;
-        else qrSen += e.amountSen;
+        if (e.correction) correctionsSen += e.amountSen;
+        else if (e.method === 'cash') cashSen += e.amountSen;
+        else if (e.method === 'qr_manual') qrSen += e.amountSen;
+        else unspecifiedSen += e.amountSen;
         break;
       case 'refund':
         if (e.method === 'cash') refundCash += e.amountSen;
-        else refundQr += e.amountSen;
+        else if (e.method === 'qr_manual') refundQr += e.amountSen;
+        else refundUnspecified += e.amountSen;
         break;
       case 'cost_allocation':
         allocated += e.costUnits;
@@ -106,15 +115,16 @@ export function summarizePeriod(events: LedgerEvent[], range: DateRange, fixed: 
     }
   }
 
-  const receiptsTotal = cashSen + qrSen;
-  const refundsTotal = refundCash + refundQr;
+  const receiptsTotal = cashSen + qrSen + unspecifiedSen + correctionsSen;
+  const refundsTotal = refundCash + refundQr + refundUnspecified;
   const net = receiptsTotal - refundsTotal;
   const fixedCostSen = fixedCostForRange(fixed, range);
   const costSen = costUnitsToSen(allocated + wastage);
   return {
     range,
-    receipts: { cashSen, qrSen, totalSen: receiptsTotal },
-    refunds: { cashSen: refundCash, qrSen: refundQr, totalSen: refundsTotal },
+    receipts: { cashSen, qrSen, unspecifiedSen, correctionsSen, totalSen: receiptsTotal },
+    refunds: { cashSen: refundCash, qrSen: refundQr, unspecifiedSen: refundUnspecified, totalSen: refundsTotal },
+    hasLegacyChannels: cashSen + qrSen + refundCash + refundQr !== 0,
     netReceiptsSen: net,
     allocatedCostUnits: allocated,
     wastageCostUnits: wastage,
@@ -131,7 +141,9 @@ export function summarizePeriod(events: LedgerEvent[], range: DateRange, fixed: 
   };
 }
 
-/** 钱箱应有 = 备用金 + 现金收款 − 现金退款 − 钱箱付出的支出 + 补入 − 存银行/取走。QR 不进钱箱。 */
+/**
+ * 旧版日结（schemaVersion 1）专用。新收款不分渠道，无法推算物理钱箱，新日结不调用。
+ * 钱箱应有 = 备用金 + 现金收款 − 现金退款 − 钱箱付出的支出 + 补入 − 存银行/取走。QR 不进钱箱。 */
 export function expectedCashDrawer(events: LedgerEvent[], businessDate: string): Sen {
   let total = 0;
   for (const e of events) {

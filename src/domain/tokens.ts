@@ -1,6 +1,7 @@
 /**
- * 实体餐牌生命周期：available → held(orderId) → awaiting_return → available。
- * 堂食与打包共用 1–50；出餐只进入待回收，确认实体牌收回才释放。
+ * 实体餐牌生命周期：available → held(orderId) → available。
+ * 堂食与打包共用 1–50；出餐或取消最终成立时自动释放，不再做人工回收管理。
+ * awaiting_return 只存在于旧版本数据（出餐后待人工回收），由前台逐张明确处理，不批量释放。
  */
 
 export const TOKEN_MIN = 1;
@@ -13,11 +14,13 @@ export interface TokenState {
   state: TokenStateName;
   orderId: string | null;
   version: number;
+  /** 最近一次由哪张订单释放；撤回出餐据此判断牌是否已被别的订单用过。 */
+  lastReleasedOrderId?: string | null;
 }
 
 export type TokenBoard = Record<number, TokenState>;
 
-export type TokenError = 'TOKEN_OUT_OF_RANGE' | 'TOKEN_OCCUPIED' | 'TOKEN_NOT_HELD_BY_ORDER' | 'TOKEN_NOT_AWAITING_RETURN' | 'STALE_VERSION';
+export type TokenError = 'TOKEN_OUT_OF_RANGE' | 'TOKEN_OCCUPIED' | 'TOKEN_NOT_HELD_BY_ORDER' | 'TOKEN_NOT_AWAITING_RETURN' | 'TOKEN_REASSIGNED' | 'STALE_VERSION';
 
 export type TokenResult = { ok: true; board: TokenBoard; token: TokenState } | { ok: false; error: TokenError; token?: TokenState };
 
@@ -65,25 +68,27 @@ export function holdToken(board: TokenBoard, n: number, orderId: string, expecte
   return put(board, { number: n, state: 'held', orderId, version: t.version + 1 });
 }
 
-/** 出餐或取消后：牌进入待回收，仍关联原订单。 */
-export function markAwaitingReturn(board: TokenBoard, n: number, orderId: string): TokenResult {
-  if (!isTokenNumber(n)) return { ok: false, error: 'TOKEN_OUT_OF_RANGE' };
+/**
+ * 出餐 / 取消最终成立：释放仍属于该订单的牌。牌已不属于本单（旧单重试、旧离线日志）时返回 null，
+ * 调用方不得改动牌——绝不释放已属于新单的牌。
+ */
+export function releaseHeldToken(board: TokenBoard, n: number, orderId: string): TokenResult | null {
+  if (!isTokenNumber(n)) return null;
   const t = board[n];
-  if (t.state === 'awaiting_return' && t.orderId === orderId) return { ok: true, board, token: t };
-  if (t.state !== 'held' || t.orderId !== orderId) return { ok: false, error: 'TOKEN_NOT_HELD_BY_ORDER', token: t };
-  return put(board, { ...t, state: 'awaiting_return', version: t.version + 1 });
+  if (t.orderId !== orderId || (t.state !== 'held' && t.state !== 'awaiting_return')) return null;
+  return put(board, { number: n, state: 'available', orderId: null, version: t.version + 1, lastReleasedOrderId: orderId });
 }
 
-/** 撤回出餐：只能在原订单仍持有该牌（待回收）时恢复为占用。 */
-export function revertToHeld(board: TokenBoard, n: number, orderId: string): TokenResult {
+/** 撤回出餐：原牌仍空闲、且最后一次是本单释放，才能在同一事务重新占用；否则不抢牌。 */
+export function reholdToken(board: TokenBoard, n: number, orderId: string): TokenResult {
   if (!isTokenNumber(n)) return { ok: false, error: 'TOKEN_OUT_OF_RANGE' };
   const t = board[n];
   if (t.state === 'held' && t.orderId === orderId) return { ok: true, board, token: t };
-  if (t.state !== 'awaiting_return' || t.orderId !== orderId) return { ok: false, error: 'TOKEN_NOT_HELD_BY_ORDER', token: t };
-  return put(board, { ...t, state: 'held', version: t.version + 1 });
+  if (t.state !== 'available' || (t.lastReleasedOrderId ?? null) !== orderId) return { ok: false, error: 'TOKEN_REASSIGNED', token: t };
+  return put(board, { number: n, state: 'held', orderId, version: t.version + 1, lastReleasedOrderId: orderId });
 }
 
-/** 收银确认实体牌已收回。未出餐/未取消（仍 held）不能普通回收。 */
+/** 旧版待回收牌：前台确认实体牌已收回后释放。未出餐/未取消（仍 held）不能普通回收。 */
 export function releaseToken(board: TokenBoard, n: number, orderId: string, expectedVersion?: number): TokenResult {
   if (!isTokenNumber(n)) return { ok: false, error: 'TOKEN_OUT_OF_RANGE' };
   const t = board[n];
@@ -91,5 +96,5 @@ export function releaseToken(board: TokenBoard, n: number, orderId: string, expe
   if (t.orderId !== orderId) return { ok: false, error: 'TOKEN_NOT_HELD_BY_ORDER', token: t };
   if (t.state !== 'awaiting_return') return { ok: false, error: 'TOKEN_NOT_AWAITING_RETURN', token: t };
   if (!checkVersion(t, expectedVersion)) return { ok: false, error: 'STALE_VERSION', token: t };
-  return put(board, { number: n, state: 'available', orderId: null, version: t.version + 1 });
+  return put(board, { number: n, state: 'available', orderId: null, version: t.version + 1, lastReleasedOrderId: orderId });
 }

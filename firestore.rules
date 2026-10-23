@@ -80,7 +80,7 @@ service cloud.firestore {
       // 仅老板：成本、支付流水、退款、账本、审计、日结、设备、离线收件箱。
       match /{ownerOnly}/{docId} {
         allow read: if ownerOnly in [
-            'orderCosts', 'costEvents', 'payments', 'refunds', 'expenses', 'wastage', 'cashMovements',
+            'orderCosts', 'costEvents', 'payments', 'refunds', 'paymentWriteOffs', 'expenses', 'wastage', 'cashMovements',
             'dailyReports', 'dailyStats', 'businessDays', 'auditEvents', 'operations',
             'bomVersions', 'devices', 'offlineInbox'
           ] && isOwner(storeId);

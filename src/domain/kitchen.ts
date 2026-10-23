@@ -40,6 +40,8 @@ export interface KitchenTicket {
   kitchenCancelRequested: boolean;
   acceptedAtEffectiveMs: number;
   startedAtMs: number | null;
+  /** auto：下单时自动进入制作中，不是厨师实际开工的测量值。 */
+  startedSource?: 'auto' | 'manual' | null;
   servedAtMs: number | null;
   timeQuality: TimeQuality;
   businessDate: string;
@@ -56,6 +58,7 @@ export interface KitchenTicketSource {
   kitchenCancelRequested: boolean;
   acceptedAtEffectiveMs: number;
   startedAtMs: number | null;
+  startedSource: 'auto' | 'manual' | null;
   servedAtMs: number | null;
   timeQuality: TimeQuality;
   businessDate: string;
@@ -74,6 +77,7 @@ export function buildKitchenTicket(menu: MenuVersion, src: KitchenTicketSource):
     kitchenCancelRequested: src.kitchenCancelRequested,
     acceptedAtEffectiveMs: src.acceptedAtEffectiveMs,
     startedAtMs: src.startedAtMs,
+    startedSource: src.startedSource,
     servedAtMs: src.servedAtMs,
     timeQuality: src.timeQuality,
     businessDate: src.businessDate,
@@ -138,23 +142,33 @@ function addTicket(c: BatchCounts, t: KitchenTicket) {
   }
 }
 
-/**
- * 待下锅只统计 queued；制作中单独统计，避免同一份再抓一次。
- * 人工单（manual routing）不进入主队列合计。
- */
-export function summarizeKitchen(tickets: KitchenTicket[]): { queued: BatchCounts; preparing: BatchCounts; manualPending: number } {
-  const queued = emptyCounts();
-  const preparing = emptyCounts();
+export interface KitchenSummary {
+  /** 全部有效、未出餐、未取消、无取消申请的电子厨单（新单直接制作中，必须一起合计）。 */
+  active: BatchCounts;
+  /** 取消待后厨确认：冻结，不计入合计、不能正常出餐。 */
+  cancelPending: number;
+  /** 人工单（manual routing）单独核对，不混入电子合计。 */
+  manualPending: number;
+}
+
+export function summarizeKitchen(tickets: KitchenTicket[]): KitchenSummary {
+  const active = emptyCounts();
   let manualPending = 0;
+  let cancelPending = 0;
   for (const t of tickets) {
+    const open = t.fulfillmentStatus === 'queued' || t.fulfillmentStatus === 'preparing';
+    if (!open) continue;
     if (t.kitchenRouting === 'manual') {
-      if (t.fulfillmentStatus === 'queued' || t.fulfillmentStatus === 'preparing') manualPending++;
+      manualPending++;
       continue;
     }
-    if (t.fulfillmentStatus === 'queued') addTicket(queued, t);
-    else if (t.fulfillmentStatus === 'preparing') addTicket(preparing, t);
+    if (t.kitchenCancelRequested) {
+      cancelPending++;
+      continue;
+    }
+    addTicket(active, t);
   }
-  return { queued, preparing, manualPending };
+  return { active, cancelPending, manualPending };
 }
 
 /** 半球单位 → 显示文字，例如 3 → "1.5"。 */

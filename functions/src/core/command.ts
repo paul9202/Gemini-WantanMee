@@ -56,6 +56,7 @@ export function storeRefs(db: Firestore, storeId: string) {
     token: (n: number) => root.collection('tokens').doc(String(n).padStart(2, '0')),
     payment: (id: string) => root.collection('payments').doc(id),
     refund: (id: string) => root.collection('refunds').doc(id),
+    writeOff: (id: string) => root.collection('paymentWriteOffs').doc(id),
     cashMovement: (id: string) => root.collection('cashMovements').doc(id),
     businessDay: (date: string) => root.collection('businessDays').doc(date),
     operation: (id: string) => root.collection('operations').doc(id),

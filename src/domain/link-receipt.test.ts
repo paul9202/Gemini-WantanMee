@@ -62,3 +62,15 @@ test('O13 已出餐、重印副本、离线单标识与本机时间', () => {
   assert.ok(t.includes('DuitNow QR|已收款'));
   assert.ok(!t.includes('找零'));
 });
+
+test('§10 新订单收据：未登记醒目标「未收款」、不打印虚构渠道或实收找零；登记后只写已收款', () => {
+  const unpaid = buildReceipt(menu, src({ paymentState: 'unpaid', paymentMethod: null, tenderedSen: null, changeSen: null, fulfillmentStatus: 'preparing' }), { printIndex: 0, timeZone: 'Asia/Kuala_Lumpur' });
+  const t = text(unpaid);
+  assert.ok(unpaid.badges.includes('未收款 · 不是付款凭证'));
+  assert.ok(t.includes('付款|未收款'));
+  assert.ok(!/现金|DuitNow|TNG|实收|找零/.test(t), t);
+  const paid = buildReceipt(menu, src({ paymentState: 'paid', paymentMethod: 'unspecified', tenderedSen: null, changeSen: null }), { printIndex: 0, timeZone: 'Asia/Kuala_Lumpur' });
+  assert.ok(text(paid).includes('付款|已收款'));
+  assert.ok(!/现金|DuitNow|实收|找零/.test(text(paid)));
+  assert.ok(!paid.badges.some((b) => b.includes('未收款')));
+});

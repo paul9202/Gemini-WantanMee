@@ -1,0 +1,332 @@
+{
+  "ranAt": "2026-10-23T17:00:53.593Z",
+  "viewport": {
+    "id": "L1280x800",
+    "w": 1280,
+    "h": 800,
+    "dpr": 1.6
+  },
+  "environment": "正式构建 + 本机 Firebase Emulator；前台 / 后厨 / 老板为三台独立无头 Chrome（触控 + Android UA，候选视口，非实机）；未扫码、未转账",
+  "results": [
+    {
+      "name": "14 收款码原图字节未改动（sha256）",
+      "ok": true,
+      "detail": "279423 bytes"
+    },
+    {
+      "name": "收银登录进入点餐页",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "10 开班页没有备用金输入框",
+      "ok": true,
+      "detail": "输入框 0"
+    },
+    {
+      "name": "10 开班成功：班次无备用金、未创建备用金流水",
+      "ok": true,
+      "detail": "{\"shifts\":1,\"openingFloatSen\":null,\"cashMovements\":0}"
+    },
+    {
+      "name": "1 购物车主按钮为「下单送厨 · RM金额」",
+      "ok": true,
+      "detail": "下单送厨 · RM7.00"
+    },
+    {
+      "name": "1 结果：订单已保存、本机已记录、云端已接单、待收款",
+      "ok": true,
+      "detail": "订单已保存，正在送到后厨 堂食 · RM7.00 · 待收款 1 把这张餐牌交给客人 1号 · 票号 261023-001 ✓ 本机已记录 ✓ 云端已接单 正在送到后厨 待收款 RM7.00可先送餐，收到钱后再登记 确认已收款 RM7.00 显示收款码 收据 下一单"
+    },
+    {
+      "name": "1 后厨屏未登录：不显示「后厨已收到」，订单无回执时间",
+      "ok": true,
+      "detail": "kitchenAckAtMs=null"
+    },
+    {
+      "name": "1 订单待收款、paidSen=0、无付款记录",
+      "ok": true,
+      "detail": "unpaid 0"
+    },
+    {
+      "name": "1 厨单直接为制作中（自动开始）",
+      "ok": true,
+      "detail": "preparing / preparing"
+    },
+    {
+      "name": "后厨登录直达后厨屏",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "1 后厨：单一「制作中 / 待出餐」区、无开始制作按钮、可直接完成出餐",
+      "ok": true,
+      "detail": "{\"inWork\":true,\"start\":false,\"serve\":true}"
+    },
+    {
+      "name": "1 后厨：开始时间标为自动（接单即制作）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "1 后厨顶部合计非零（计入制作中的单）",
+      "ok": true,
+      "detail": "制作中 · 细面 1团 制作中 · 面薄 0团 制作中 · 云吞 3粒 口味 · 共 1 单 黑酱 0 红酱 1 白酱 0 汤面 0 云吞汤 0"
+    },
+    {
+      "name": "1 后厨真实回执后才显示「后厨已收到」",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "2 结果弹窗含 QuickPay：确认已收款 / 显示收款码可见且够大",
+      "ok": true,
+      "detail": "{\"pay\":true,\"qr\":true}"
+    },
+    {
+      "name": "2 提前登记：订单已收款、仍在制作中，1 笔收款",
+      "ok": true,
+      "detail": "paid/preparing/1"
+    },
+    {
+      "name": "2 收款记录不分渠道、人工确认",
+      "ok": true,
+      "detail": "unspecified/manual"
+    },
+    {
+      "name": "2 提前收款的单出餐",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "2 出餐后：已出餐 + 已收款，仍只有 1 张厨单、1 笔收款",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "6 收款码弹窗：原图完整在视口内、未裁切（等比、object-contain）",
+      "ok": true,
+      "detail": "{\"loaded\":true,\"imgInView\":true,\"insideBox\":true,\"ratio\":0.000007110937442766918,\"fit\":\"contain\",\"size\":\"455x704\",\"closeInView\":true,\"amount\":true,\"payee\":true}"
+    },
+    {
+      "name": "6 收款码弹窗：应收金额、图片标示收款人、关闭按钮可见",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "6 关闭收款码后订单仍待收款、无付款记录",
+      "ok": true,
+      "detail": "unpaid"
+    },
+    {
+      "name": "3 出餐（未收款的 A 单）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "3 出餐即释放餐牌（无待回收），订单仍未收款",
+      "ok": true,
+      "detail": "{\"token\":\"available\",\"f\":\"served\",\"p\":\"unpaid\"}"
+    },
+    {
+      "name": "3 前台没有「待回收」入口",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "4 同一张餐牌立即用于新单 C",
+      "ok": true,
+      "detail": "餐牌 1"
+    },
+    {
+      "name": "9 30 秒内撤回、但餐牌已给新单：拒绝，不抢牌、不重复恢复厨单",
+      "ok": true,
+      "detail": "{\"found\":true,\"msg\":\"餐牌已给了新单，不能撤回；请前台处理\",\"cards\":1,\"a\":\"served\",\"token\":\"held\",\"holder\":\"C\"}"
+    },
+    {
+      "name": "前台页头常驻「待登记收款 N 单 · RM」",
+      "ok": true,
+      "detail": "{\"text\":\"待登记收款 3 单 · RM21.00\",\"h\":56,\"inView\":true}"
+    },
+    {
+      "name": "3 待登记列表：旧单 A 仍可找到（原餐牌、票号、时间、餐品、已出餐·未收款），排在最前",
+      "ok": true,
+      "detail": "原餐牌 1 261023-001 00:58 已出餐 · 未收款 红酱面 · 小 确认已收款 RM7.00 显示收款码"
+    },
+    {
+      "name": "4 同牌新单 C 同时在列表（制作中·未收款）",
+      "ok": true,
+      "detail": "原餐牌 1 261023-004 00:59 制作中 · 未收款 白酱面 · 小 确认已收款 RM7.00 显示收款码"
+    },
+    {
+      "name": "待登记抽屉：触控目标 ≥56、无横向溢出",
+      "ok": true,
+      "detail": "{\"small\":0,\"overflow\":0}"
+    },
+    {
+      "name": "2 出餐后补登记：A 已收款、1 笔收款",
+      "ok": true,
+      "detail": "paid"
+    },
+    {
+      "name": "2 待登记抽屉：登记成功的卡留在原位并显示「已登记收款」",
+      "ok": true,
+      "detail": "原餐牌\n1\n261023-001\n00:58\n已出餐 · 未收款\n\n红酱面 · 小\n\n已登记收款 RM7.00"
+    },
+    {
+      "name": "4 登记旧单 A 不影响同牌新单 C（REST：C 仍未收款、paidSen=0、无收款记录）",
+      "ok": true,
+      "detail": "unpaid 0"
+    },
+    {
+      "name": "5 连点三次「确认已收款」：只有 1 笔收款",
+      "ok": true,
+      "detail": "1 笔 · 收款 云吞汤面 · 小 确认已收款 RM7.00 显示收款码"
+    },
+    {
+      "name": "5 两个不同 operationId 并发确认同一订单：一次成功、另一次 ALREADY_PAID",
+      "ok": true,
+      "detail": "[true,false,\"{\\\"details\\\":{\\\"reasonCode\\\":\\\"ALREADY_PAID\\\",\\\"paymentState\\\":\\\"paid\\\",\\\"paidAtMs\\\":1792774\"]"
+    },
+    {
+      "name": "5 同 operationId 重试返回原结果",
+      "ok": true,
+      "detail": "{\"ok\":true,\"r\":{\"orderId\":\"71ae35c2-b65f-4d74-8bcf-61f51f58726a\",\"paymentId\":\"71ae35c2-b65f-4d74-8bcf-61f51f58726a-p1\",\""
+    },
+    {
+      "name": "5 并发 + 重试后订单 E 只有 1 笔收款",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "7 未收款单申请取消：等待后厨确认，期间仍占牌",
+      "ok": true,
+      "detail": "{\"req\":true,\"f\":\"preparing\",\"token\":\"held\"}"
+    },
+    {
+      "name": "7 取消待确认的单不能登记收款",
+      "ok": true,
+      "detail": "{\"text\":\"原餐牌 4 261023-006 00:59 取消待后厨确认 干捞云吞 · 10粒 确认已收款 RM7.00 显示收款码\",\"disabled\":true}"
+    },
+    {
+      "name": "7 后厨：取消申请卡片有「未做 / 已下锅已用料」两种确认，不能出餐",
+      "ok": true,
+      "detail": "{\"notCooked\":true,\"consumed\":true,\"serve\":false,\"totals\":\"制作中 · 细面 2团 制作中 · 面薄 0团 制作中 · 云吞 16粒 口味 · 共 3 单 黑酱 0 红酱 0 白酱 1 汤面 1 云吞汤 1 取消待确认 1 单，不计入合计\"}"
+    },
+    {
+      "name": "后厨合计：计入全部制作中的单，取消待确认不计入",
+      "ok": true,
+      "detail": "制作中 · 细面 2团 制作中 · 面薄 0团 制作中 · 云吞 16粒 口味 · 共 3 单 黑酱 0 红酱 0 白酱 1 汤面 1 云吞汤 1 取消待确认 1 单，不计入合计"
+    },
+    {
+      "name": "7 后厨确认未做：订单取消、无需收款、不退款、无收款记录",
+      "ok": true,
+      "detail": "{\"p\":\"not_due\",\"refunded\":0,\"refunds\":0}"
+    },
+    {
+      "name": "3 取消最终成立自动释放餐牌",
+      "ok": true,
+      "detail": "available"
+    },
+    {
+      "name": "7 取消后的单不再出现在待登记收款",
+      "ok": true,
+      "detail": "待登记收款 1 单 · RM7.00 · 收到钱后按订单确认，不选现金或 TNG 关闭 原餐牌 1 261023-004 00:59 制作中 · 未收款 白酱面 · 小 确认已收款 RM7.00 显示收款码"
+    },
+    {
+      "name": "5 后厨拒绝取消：申请结束、留原因记录；仍占牌、未付款、无退款；卡片恢复「完成出餐」",
+      "ok": true,
+      "detail": "{\"serve\":true,\"rej\":\"已送餐，顾客仍要\",\"pay\":\"unpaid\",\"token\":\"held\"}"
+    },
+    {
+      "name": "5 前台订单页看到「后厨拒绝取消，继续制作」通知",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "5 拒绝取消后可正常出餐并自动释放餐牌",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "订单页：未收款 / 已收款 / 已取消·无需收款 分开显示，并有「确认已收款」",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "概览显示「净登记收款」（不再是净收款）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "1 放弃追收：无原因不能确认；记录金额/原因/操作者；订单保留为已放弃、不计实收",
+      "ok": true,
+      "detail": "{\"before\":true,\"state\":\"written_off\",\"docs\":1}"
+    },
+    {
+      "name": "1 放弃追收的单退出待登记收款列表",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "日结页：没有钱箱实点 / QR 输入与差额，显示待登记收款步骤",
+      "ok": true,
+      "detail": "金额输入 0"
+    },
+    {
+      "name": "1 日结单独显示「未收回金额」（放弃追收，不计实收）",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "shots": [
+    {
+      "name": "docs/screenshots/operations-2026-10-23/pos-open-shift.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/pos-result-quickpay.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/pos-result-paid.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/pos-qr-dialog.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/pos-pending-button.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/pos-pending-drawer.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/pos-pending-drawer-recorded.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/kitchen-work-area-cancel-pending.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/kitchen-work-area.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/orders-payment-badges.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/owner-overview.png",
+      "overflow": 0
+    },
+    {
+      "name": "docs/screenshots/operations-2026-10-23/owner-close.png",
+      "overflow": 0
+    }
+  ]
+}

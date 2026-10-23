@@ -8,10 +8,25 @@ import { CsvCell, toCsv } from './csv';
 import { expectedCashDrawer, ExpenseCategory, FixedCostPolicy, LedgerEvent, PeriodSummary, summarizePeriod } from './finance';
 import { costUnitsToSen, CostUnits, formatRM, Sen } from './money';
 import type { PaymentMethod } from './payment';
+import type { Fulfillment, PaymentState } from './orderLifecycle';
 import { ServiceSampleSource, serviceStats, ServiceStats } from './timing';
 import type { BomVersion } from './bom';
 
-export interface PaymentDoc { id: string; orderId: string; businessDate: string; method: PaymentMethod; amountSen: Sen; occurredAtMs: number }
+/**
+ * 收款流水。businessDate = 登记（确认收到）所属营业日；orderBusinessDate = 原订单营业日（旧记录没有，即同日）。
+ * kind='reversal' 是老板对误登记的反向调整（负数），关联原收款，不是退款。
+ */
+export interface PaymentDoc {
+  id: string; orderId: string; businessDate: string; method: PaymentMethod; amountSen: Sen; occurredAtMs: number;
+  orderBusinessDate?: string; kind?: 'payment' | 'reversal'; reversesPaymentId?: string | null;
+}
+/**
+ * 放弃追收记录（老板）。kind='reinstate' 为之后又收到钱、恢复待收款的反向记录（金额为负）。
+ * 只用于「未收回金额」，不是收款或退款，不进入实收与利润。
+ */
+export interface WriteOffDoc {
+  id: string; orderId: string; businessDate: string; orderBusinessDate: string; amountSen: Sen; kind: 'write_off' | 'reinstate'; reason: string; occurredAtMs: number;
+}
 export interface RefundDoc { id: string; orderId: string; businessDate: string; method: PaymentMethod; amountSen: Sen; occurredAtMs: number; reason: string }
 export interface CostEventDoc { id: string; orderId: string; businessDate: string; costUnits: CostUnits; kind: 'allocate' | 'reverse' }
 export interface WastageDoc {
@@ -31,12 +46,14 @@ export interface LedgerDocs {
   wastage: WastageDoc[];
   expenses: ExpenseDoc[];
   cashMovements: CashMovementDoc[];
+  /** 新版才有；旧调用方可省略。 */
+  writeOffs?: WriteOffDoc[];
 }
 
 export function ledgerEvents(d: LedgerDocs): LedgerEvent[] {
   return [
-    ...d.payments.map((p): LedgerEvent => ({ kind: 'payment', id: p.id, orderId: p.orderId, businessDate: p.businessDate, method: p.method, amountSen: p.amountSen })),
-    ...d.refunds.map((r): LedgerEvent => ({ kind: 'refund', id: r.id, orderId: r.orderId, businessDate: r.businessDate, method: r.method, amountSen: r.amountSen })),
+    ...d.payments.map((p): LedgerEvent => ({ kind: 'payment', id: p.id, orderId: p.orderId, businessDate: p.businessDate, method: p.method ?? 'unspecified', amountSen: p.amountSen, correction: p.kind === 'reversal' })),
+    ...d.refunds.map((r): LedgerEvent => ({ kind: 'refund', id: r.id, orderId: r.orderId, businessDate: r.businessDate, method: r.method ?? 'unspecified', amountSen: r.amountSen })),
     ...d.costEvents.map((c): LedgerEvent => ({ kind: 'cost_allocation', id: c.id, orderId: c.orderId, businessDate: c.businessDate, costUnits: c.costUnits })),
     ...d.wastage.filter((w) => w.status === 'active').map((w): LedgerEvent => ({
       kind: 'wastage', id: w.id, businessDate: w.businessDate, costUnits: w.costUnits, alreadyAllocated: w.alreadyAllocated,
@@ -56,12 +73,14 @@ export function wastageCostUnits(bom: BomVersion, q: { noodleHalfUnits: number; 
   return q.noodleHalfUnits * bom.noodleHalfBall.thin_egg + q.wantonCount * bom.wanton + q.charSiewPortions * bom.charSiewPortion;
 }
 
+/** 旧版（schemaVersion 1）日结输入：钱箱实点与 QR 银行端核对。只用于查看 / 更正旧冻结报表。 */
 export interface CloseInput {
   businessDate: string;
   countedCashSen: Sen;
   qrBankConfirmedSen: Sen;
 }
 
+/** 旧版日结数字（已冻结报表的形状，保持不变以兼容查看）。 */
 export interface CloseFigures {
   summary: PeriodSummary;
   expectedCashSen: Sen;
@@ -72,7 +91,7 @@ export interface CloseFigures {
   qrDiffSen: Sen;
 }
 
-/** 日结数字：钱箱应有 vs 实点；QR 账面净额 vs 银行端核对额。QR 不进钱箱。 */
+/** 旧版日结：钱箱应有 vs 实点；QR 账面净额 vs 银行端核对额。新营业日不再使用。 */
 export function closeFigures(docs: LedgerDocs, input: CloseInput, fixed: FixedCostPolicy): CloseFigures {
   const events = ledgerEvents(docs);
   const range: DateRange = { start: input.businessDate, endExclusive: nextDate(input.businessDate) };
@@ -83,6 +102,84 @@ export function closeFigures(docs: LedgerDocs, input: CloseInput, fixed: FixedCo
     summary, expectedCashSen, countedCashSen: input.countedCashSen, cashDiffSen: input.countedCashSen - expectedCashSen,
     qrLedgerNetSen, qrBankConfirmedSen: input.qrBankConfirmedSen, qrDiffSen: input.qrBankConfirmedSen - qrLedgerNetSen,
   };
+}
+
+/** 日结用的订单行（营业日内的订单与跨日未登记订单）。 */
+export interface CloseOrderRow {
+  id: string;
+  receiptNumber: string;
+  tokenNumber: number;
+  businessDate: string;
+  totalSen: Sen;
+  portionCount?: number;
+  fulfillmentStatus: Fulfillment;
+  /** 旧订单没有 unpaid / not_due。 */
+  paymentState: PaymentState;
+  acceptedAtEffectiveMs?: number;
+}
+
+/**
+ * 新版日结数字（schemaVersion 2）：不分收款渠道，不推算钱箱。
+ * - 有效订单金额：本营业日接单、未取消的订单整单金额（应收口径，不等于实收）。
+ * - 已登记收款：本营业日登记的收款（含跨日补登记旧单、含误登记更正），按登记日归属。
+ * - 待登记收款：截至关账时仍未登记的有效订单（含之前营业日结转来的），需逐单核对。
+ */
+export interface CloseFiguresV2 {
+  schemaVersion: 2;
+  summary: PeriodSummary;
+  validOrderCount: number;
+  validOrderSen: Sen;
+  cancelledOrderCount: number;
+  servedPortions: number;
+  registeredSen: Sen;
+  /** 已登记收款中，属于之前营业日订单的部分（跨日补登记）。 */
+  registeredForEarlierDaysSen: Sen;
+  paymentCorrectionsSen: Sen;
+  refundsSen: Sen;
+  netRegisteredSen: Sen;
+  /** 本营业日订单中仍未登记的金额。 */
+  sameDayUnpaidSen: Sen;
+  /** 本营业日老板放弃追收的金额（扣除恢复），不计实收。旧快照没有这个字段。 */
+  writtenOffSen?: Sen;
+  writtenOffCount?: number;
+  unpaid: { count: number; totalSen: Sen; orders: { id: string; receiptNumber: string; tokenNumber: number; businessDate: string; totalSen: Sen; fulfillmentStatus: Fulfillment }[] };
+}
+
+export function closeFiguresV2(
+  docs: LedgerDocs, dayOrders: CloseOrderRow[], unpaidOrders: CloseOrderRow[], businessDate: string, fixed: FixedCostPolicy,
+): CloseFiguresV2 {
+  const range: DateRange = { start: businessDate, endExclusive: nextDate(businessDate) };
+  const summary = summarizePeriod(ledgerEvents(docs), range, fixed);
+  const valid = dayOrders.filter((o) => o.fulfillmentStatus !== 'cancelled');
+  const inDay = docs.payments.filter((p) => p.businessDate === businessDate);
+  const unpaid = unpaidOrders
+    .filter((o) => o.paymentState === 'unpaid' && o.fulfillmentStatus !== 'cancelled' && o.businessDate <= businessDate)
+    .sort((a, b) => a.businessDate.localeCompare(b.businessDate) || (a.acceptedAtEffectiveMs ?? 0) - (b.acceptedAtEffectiveMs ?? 0));
+  return {
+    schemaVersion: 2,
+    summary,
+    validOrderCount: valid.length,
+    validOrderSen: valid.reduce((s, o) => s + o.totalSen, 0),
+    cancelledOrderCount: dayOrders.length - valid.length,
+    servedPortions: dayOrders.filter((o) => o.fulfillmentStatus === 'served').reduce((s, o) => s + (o.portionCount ?? 0), 0),
+    registeredSen: summary.receipts.totalSen,
+    registeredForEarlierDaysSen: inDay.filter((p) => (p.orderBusinessDate ?? p.businessDate) < businessDate).reduce((s, p) => s + p.amountSen, 0),
+    paymentCorrectionsSen: summary.receipts.correctionsSen,
+    refundsSen: summary.refunds.totalSen,
+    netRegisteredSen: summary.netReceiptsSen,
+    sameDayUnpaidSen: unpaid.filter((o) => o.businessDate === businessDate).reduce((s, o) => s + o.totalSen, 0),
+    writtenOffSen: (docs.writeOffs ?? []).filter((w) => w.businessDate === businessDate).reduce((s, w) => s + w.amountSen, 0),
+    writtenOffCount: (docs.writeOffs ?? []).filter((w) => w.businessDate === businessDate && w.kind === 'write_off').length,
+    unpaid: {
+      count: unpaid.length,
+      totalSen: unpaid.reduce((s, o) => s + o.totalSen, 0),
+      orders: unpaid.map((o) => ({ id: o.id, receiptNumber: o.receiptNumber, tokenNumber: o.tokenNumber, businessDate: o.businessDate, totalSen: o.totalSen, fulfillmentStatus: o.fulfillmentStatus })),
+    },
+  };
+}
+
+export function isCloseFiguresV2(f: unknown): f is CloseFiguresV2 {
+  return typeof f === 'object' && f !== null && (f as { schemaVersion?: unknown }).schemaVersion === 2;
 }
 
 function nextDate(d: string): string {
@@ -105,9 +202,10 @@ export interface OrderReportRow {
   tokenNumber: number;
   serviceMode: 'dine_in' | 'takeaway';
   source: 'online' | 'offline';
-  fulfillmentStatus: 'queued' | 'preparing' | 'served' | 'cancelled';
-  paymentState: 'paid' | 'refund_due' | 'refunded';
-  paymentMethod: PaymentMethod;
+  fulfillmentStatus: Fulfillment;
+  paymentState: PaymentState;
+  /** 旧订单为真实渠道；新订单在登记前为 null，登记后为 unspecified。 */
+  paymentMethod: PaymentMethod | null;
   totalSen: Sen;
   acceptedAtEffectiveMs: number;
   servedAtMs: number | null;
@@ -210,12 +308,16 @@ const iso = (ms: number | null, timeZone: string) => (ms === null ? '' : new Int
 }).format(new Date(ms)) + ' (' + timeZone + ')');
 
 export function csvSummary(s: PeriodSummary): string {
+  const legacy: CsvCell[][] = s.hasLegacyChannels
+    ? [['其中旧版现金收款', s.receipts.cashSen], ['其中旧版 QR 收款', s.receipts.qrSen], ['其中旧版现金退款', s.refunds.cashSen], ['其中旧版 QR 退款', s.refunds.qrSen]]
+    : [];
   const rows: CsvCell[][] = [
     ['项目', '金额_sen'],
-    ['现金收款', s.receipts.cashSen], ['QR 收款', s.receipts.qrSen], ['现金退款', s.refunds.cashSen], ['QR 退款', s.refunds.qrSen],
-    ['净收款', s.netReceiptsSen],
+    ['已登记收款（人工确认）', s.receipts.totalSen], ['其中误登记更正', s.receipts.correctionsSen], ['已登记退款', s.refunds.totalSen],
+    ...legacy,
+    ['净登记收款', s.netReceiptsSen],
     ['已分配理论成本（四舍五入）', costUnitsToSen(s.allocatedCostUnits)], ['未重复计算的损耗（四舍五入）', costUnitsToSen(s.wastageCostUnits)],
-    ['固定费用摊销', s.fixedCostSen], ['其他营业费用', s.otherOpexSen], ['估算经营利润', s.estimatedProfitSen],
+    ['固定费用摊销', s.fixedCostSen], ['其他营业费用', s.otherOpexSen], ['估算经营利润（按已登记收款）', s.estimatedProfitSen],
     ['已付进货', s.cash.purchasesPaidSen], ['已付营业费用（含固定费用付款）', s.cash.opexPaidSen], ['资本设备付款（另列）', s.cash.capitalPaidSen],
     ['经营现金净流入', s.cash.operatingNetInflowSen],
   ];
@@ -227,7 +329,7 @@ export function csvOrders(orders: OrderReportRow[], timeZone: string): string {
     ['营业日', '票号', '餐牌', '就餐', '来源', '制作状态', '付款状态', '付款方式', '金额_sen', '接单时间', '出餐时间', '时间质量', '餐品'],
     ...orders.map((o) => [
       o.businessDate, o.receiptNumber, o.tokenNumber, o.serviceMode === 'dine_in' ? '堂食' : '打包', o.source === 'offline' ? '离线' : '在线',
-      o.fulfillmentStatus, o.paymentState, o.paymentMethod, o.totalSen, iso(o.acceptedAtEffectiveMs, timeZone), iso(o.servedAtMs, timeZone), o.timeQuality,
+      o.fulfillmentStatus, o.paymentState, o.paymentMethod ?? '', o.totalSen, iso(o.acceptedAtEffectiveMs, timeZone), iso(o.servedAtMs, timeZone), o.timeQuality,
       o.items.map((i) => `${i.quantity}×${i.nameZh}${i.note ? `（${i.note}）` : ''}`).join('；'),
     ]),
   ]);
@@ -235,9 +337,9 @@ export function csvOrders(orders: OrderReportRow[], timeZone: string): string {
 
 export function csvPayments(payments: PaymentDoc[], refunds: RefundDoc[], timeZone: string): string {
   return toCsv([
-    ['类型', '营业日', '订单', '方式', '金额_sen', '时间', '原因'],
-    ...payments.map((p) => ['收款', p.businessDate, p.orderId, p.method, p.amountSen, iso(p.occurredAtMs, timeZone), '']),
-    ...refunds.map((r) => ['退款', r.businessDate, r.orderId, r.method, -r.amountSen, iso(r.occurredAtMs, timeZone), r.reason]),
+    ['类型', '营业日（登记）', '订单营业日', '订单', '方式', '金额_sen', '时间', '原因'],
+    ...payments.map((p) => [p.kind === 'reversal' ? '收款更正' : '收款', p.businessDate, p.orderBusinessDate ?? p.businessDate, p.orderId, p.method ?? 'unspecified', p.amountSen, iso(p.occurredAtMs, timeZone), '']),
+    ...refunds.map((r) => ['退款', r.businessDate, '', r.orderId, r.method ?? 'unspecified', -r.amountSen, iso(r.occurredAtMs, timeZone), r.reason]),
   ]);
 }
 
@@ -255,7 +357,18 @@ export function csvWastage(wastage: WastageDoc[], timeZone: string): string {
   ]);
 }
 
-export function csvClose(f: CloseFigures, version: number, note: string): string {
+export function csvClose(f: CloseFigures | CloseFiguresV2, version: number, note: string): string {
+  if (isCloseFiguresV2(f)) {
+    return toCsv([
+      ['日结版本', version], ['营业日', f.summary.range.start], ['口径', '收款为人工登记，未与钱包/银行自动核对'],
+      ['有效订单数', f.validOrderCount], ['有效订单金额_sen', f.validOrderSen], ['取消订单数', f.cancelledOrderCount], ['出餐份数', f.servedPortions],
+      ['已登记收款_sen', f.registeredSen], ['其中跨日补登记_sen', f.registeredForEarlierDaysSen], ['其中误登记更正_sen', f.paymentCorrectionsSen],
+      ['已登记退款_sen', f.refundsSen], ['净登记收款_sen', f.netRegisteredSen],
+      ['本日订单未登记_sen', f.sameDayUnpaidSen], ['未收回金额（放弃追收）_sen', f.writtenOffSen ?? 0], ['结转未登记订单数', f.unpaid.count], ['结转未登记金额_sen', f.unpaid.totalSen],
+      ...f.unpaid.orders.map((o) => ['未登记', `${o.businessDate} ${o.receiptNumber} 牌${o.tokenNumber}`, o.totalSen]),
+      ['备注', note],
+    ]);
+  }
   return toCsv([
     ['日结版本', version], ['营业日', f.summary.range.start],
     ['钱箱应有_sen', f.expectedCashSen], ['钱箱实点_sen', f.countedCashSen], ['现金差额_sen', f.cashDiffSen], ['现金差额说明', describeDiff(f.cashDiffSen)],

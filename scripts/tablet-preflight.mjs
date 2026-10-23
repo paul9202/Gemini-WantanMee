@@ -1,7 +1,8 @@
 // 档口平板到货前的预检（DEVICE-BASELINE）。以下视口全部是「候选」开发覆盖尺寸，不是 REDMI Pad 2 已测量的 CSS 视口：
 // 2048×1280 是硬件像素，实际 viewport 取决于 DPR、系统显示大小、浏览器工具栏 / PWA 与键盘，到货后必须实测替换。
-// 每个视口：触控模拟 + Android 平板 UA，真实下单 → 收款 → 后厨回执，截图并检查横向溢出、小于 56px 的触控目标、
-// 本单是否可见、收款弹窗的实收 / 找零 / 确认 / 关闭是否在可见区域内。
+// 每个视口：触控模拟 + Android 平板 UA，真实「下单送厨」（2026-10-23 起不经收款弹窗）→ 后厨回执，截图并检查横向溢出、
+// 小于 56px 的触控目标、本单与「下单送厨」按钮是否可见、结果弹窗的「确认已收款 / 显示收款码」是否完整在视口内、
+// 收款码弹窗原图是否完整显示（未裁切）及关闭按钮可见、「待登记收款」抽屉是否可用。不扫码、不转账。
 // 前提：干净的 Emulator 已启动并 seed；VITE_USE_EMULATORS=true 构建后在 4173 端口 vite preview。
 // 用法：node scripts/tablet-preflight.mjs
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -21,7 +22,7 @@ const PROFILES = [
   { id: 'P600x960', w: 600, h: 960, dpr: 2.133, label: '竖屏候选：DPR 2.133' },
   { id: 'P800x1216', w: 800, h: 1216, dpr: 1.6, label: '竖屏候选：DPR 1.6，扣除地址栏' },
 ];
-/** 软键盘展开（interactive-widget=resizes-content 时视口变矮）的近似高度。 */
+/** 软键盘展开（interactive-widget=resizes-content 时视口变矮）的近似高度。点餐页已没有输入框，改测订单页搜索框。 */
 const KEYBOARD = [
   { id: 'L960x600-kb', w: 960, h: 300, dpr: 2.133, label: '横屏键盘展开近似：可用高度约 300px' },
   { id: 'L1280x800-kb', w: 1280, h: 430, dpr: 1.6, label: '横屏键盘展开近似：可用高度约 430px' },
@@ -47,9 +48,23 @@ const MEASURE = `
   const cart = document.querySelector('aside[aria-label="本单"]');
   return { overflow: de.scrollWidth - de.clientWidth, targets: targets.length, small: small.length, smallSamples: small.slice(0, 8),
     cartVisible: cart ? cart.getBoundingClientRect().width > 0 : null, cartEntry: [...document.querySelectorAll('button')].some((b) => /本单[\\s\\S]*查看/.test(b.innerText)),
-    payConfirmInView: inView([...document.querySelectorAll('[role=dialog] button')].find((b) => /确认收款|Confirm payment/.test(b.innerText))),
-    paySummaryInView: inView(document.querySelector('[data-testid=pay-summary]')),
-    payCloseInView: inView(document.querySelector('[role=dialog] button')),
+    sendInView: inView([...document.querySelectorAll('button')].find((b) => /下单送厨|Send/.test(b.innerText) && b.getBoundingClientRect().width > 0)),
+    quickPayInView: inView([...document.querySelectorAll('[role=dialog] button')].find((b) => /确认已收款|Confirm received/.test(b.innerText))),
+    quickQrInView: inView([...document.querySelectorAll('[role=dialog] button')].find((b) => /显示收款码|Show QR/.test(b.innerText))),
+    resultNextInView: inView([...document.querySelectorAll('[role=dialog] button')].find((b) => /下一单|Next order/.test(b.innerText))),
+    qr: (() => {
+      const d = document.querySelector('[role=dialog][aria-label="收款码"], [role=dialog][aria-label="Payment QR"]'); if (!d) return null;
+      const img = d.querySelector('img'); const r = img.getBoundingClientRect(); const box = img.parentElement.getBoundingClientRect();
+      const close = [...d.querySelectorAll('button')].pop();
+      return { loaded: img.naturalWidth > 0, imgInView: inView(img), notCropped: (Math.abs(r.width / r.height - img.naturalWidth / img.naturalHeight) < 0.02 || getComputedStyle(img).objectFit === 'contain')
+        && r.top >= box.top - 0.5 && r.bottom <= box.bottom + 0.5 && r.left >= box.left - 0.5 && r.right <= box.right + 0.5, size: Math.round(r.width) + 'x' + Math.round(r.height), shown: (() => { const k = Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight); return Math.round(img.naturalWidth * k) + 'x' + Math.round(img.naturalHeight * k); })(), closeInView: inView(close) };
+    })(),
+    drawer: (() => {
+      const d = document.querySelector('[role=dialog][aria-label="待登记收款"]'); if (!d) return null;
+      const first = d.querySelector('li[data-order-id]');
+      const btns = first ? [...first.querySelectorAll('button')] : [];
+      return { cards: d.querySelectorAll('li[data-order-id]').length, closeInView: inView([...d.querySelectorAll('header button')].pop()), firstCardButtonsInView: btns.length === 2 && btns.every(inView) };
+    })(),
   };`;
 
 async function shot(tab, profile, page) {
@@ -57,7 +72,8 @@ async function shot(tab, profile, page) {
   const name = `${profile.id}-${page}`;
   await writeFile(`${OUT}/${name}.png`, await tab.screenshot());
   results.push({ profile: profile.id, viewport: `${profile.w}x${profile.h}`, dpr: profile.dpr, assumption: profile.label, page, ...m });
-  console.log(`${name} overflow=${m.overflow} small=${m.small}/${m.targets} cart=${m.cartVisible} entry=${m.cartEntry} pay=${m.payConfirmInView}/${m.paySummaryInView}/${m.payCloseInView}`);
+  console.log(`${name} overflow=${m.overflow} small=${m.small}/${m.targets} cart=${m.cartVisible} entry=${m.cartEntry} send=${m.sendInView} quick=${m.quickPayInView}/${m.quickQrInView}/${m.resultNextInView} qr=${m.qr ? JSON.stringify(m.qr) : '-'} drawer=${m.drawer ? JSON.stringify(m.drawer) : '-'}`);
+  return m;
 }
 
 const pos = await openChrome('http://localhost:4173', { width: 1280, height: 800 });
@@ -79,7 +95,6 @@ try {
     ${tile('红酱面')} __click('加3粒'); await __sleep(120); __click('无油渣'); await __sleep(120); __click('加入本单'); await __sleep(250);
     return document.querySelectorAll('aside[aria-label="本单"] li').length;`);
 
-  let first = true;
   for (const p of PROFILES) {
     await setProfile(pos, p);
     await pos.goto('/pos', 3500);
@@ -95,22 +110,25 @@ try {
       const after = document.querySelector('aside[aria-label="本单"] ul')?.innerText;
       return { keptAfterCancel: before === after, unchangedWhileEditing: mid?.replace('正在修改…', '编辑') === before, editingSwitchedTile: true };`).catch((e) => ({ error: String(e) }));
     results.push({ profile: p.id, page: 'edit-cancel', ...edit });
-    // 收款：现金 RM50 → 找零可见、确认可见。
-    await pos.page(`__click('收款RM'); await __sleep(500); __click('RM50'); await __sleep(300); return 1;`);
-    await shot(pos, p, 'payment');
-    if (first) {
-      // 只在第一个 profile 实际提交，验证前台→后厨回执（其余 profile 只看布局，避免产生过多订单）。
-      await kds.goto('/kitchen', 3500);
-      await pos.page(`__click('确认收款并接单'); await __waitFor('把这张餐牌交给客人', 40000); await __waitFor('✓后厨已收到', 25000); await __sleep(400); return 1;`);
-      await shot(pos, p, 'result');
-      await pos.page(`__click('下一单'); return 1;`);
-      first = false;
-    } else {
-      await pos.page(`document.querySelector('[role=dialog] button').click(); await __sleep(300); __click('清空本单'); await __sleep(200); return 1;`);
-    }
+    // 下单送厨：不经收款弹窗；每个视口真实下一单，检查结果弹窗里的收款区（QuickPay）与收款码弹窗。
+    await kds.goto('/kitchen', 2500);
+    await pos.page(`[...document.querySelectorAll('aside[aria-label="本单"] button')].find((b) => b.innerText.includes('下单送厨')).click();
+      await __waitFor('把这张餐牌交给客人', 40000); await __waitFor('✓后厨已收到', 25000); await __sleep(400); return 1;`);
+    await shot(pos, p, 'result');
+    await pos.page(`[...document.querySelectorAll('[role=dialog] button')].find((b) => b.innerText.includes('显示收款码')).click(); await __sleep(900);
+      await document.querySelector('[role=dialog][aria-label="收款码"] img').decode().catch(() => {}); return 1;`);
+    await shot(pos, p, 'qr');
+    await pos.page(`__click('关闭（订单仍待收款）'); await __sleep(300); __click('下一单'); await __sleep(400); return 1;`);
+    // 待登记收款抽屉：卡片主按钮 / 收款码按钮 / 关闭可见可点。
+    await pos.page(`__click('待登记收款'); await __sleep(900); return 1;`);
+    await shot(pos, p, 'pending');
+    await pos.page(`const li = document.querySelector('[role=dialog][aria-label="待登记收款"] li[data-order-id]');
+      [...li.querySelectorAll('button')].find((b) => b.innerText.includes('显示收款码')).click(); await __sleep(900); return 1;`);
+    await shot(pos, p, 'pending-qr');
+    await pos.page(`__click('关闭（订单仍待收款）'); await __sleep(300); [...document.querySelectorAll('[role=dialog][aria-label="待登记收款"] header button')].pop().click(); await __sleep(300); return 1;`);
     await setProfile(kds, p);
     await kds.goto('/kitchen', 2000);
-    await kds.page(`await __waitFor('待下锅', 25000); await __sleep(800); return 1;`);
+    await kds.page(`await __waitFor('制作中/待出餐', 25000); await __sleep(800); return 1;`);
     await shot(kds, p, 'kitchen');
     for (const [path, page, ready] of [['/orders', 'orders', '掌握每一单的进度'], ['/device', 'device', '订单传递状态'], ['/owner', 'owner', '收款走势']]) {
       await pos.goto(path, 2000);
@@ -119,19 +137,16 @@ try {
     }
   }
 
-  // 键盘展开近似：收款弹窗在矮视口下仍能看到实收 / 找零 / 确认 / 关闭，并能滚动到输入框。
+  // 键盘展开近似：点餐页已无输入框（下单不再输入实收）；改测订单页搜索框在矮视口下仍可滚动到并可见。
   for (const p of KEYBOARD) {
     await setProfile(pos, { ...p, h: 800 });
-    await pos.goto('/pos', 3500);
-    await pos.page(`await __waitFor('看图选餐', 20000); return 1;`);
-    await fillCart();
-    await pos.page(`__click('收款RM'); await __sleep(500); __click('RM50'); await __sleep(200); return 1;`);
+    await pos.goto('/orders', 3500);
+    await pos.page(`await __waitFor('掌握每一单的进度', 20000); return 1;`);
     await setProfile(pos, p);
-    const scroll = await pos.page(`const body = document.querySelector('[role=dialog] .overflow-y-auto'); const input = document.querySelector('#tendered'); input.focus(); input.scrollIntoView({ block: 'center' }); await __sleep(300);
-      const r = input.getBoundingClientRect(); return { inputReachable: r.top >= 0 && r.bottom <= innerHeight, bodyScrollable: body.scrollHeight > body.clientHeight, inputMode: input.inputMode };`);
+    const scroll = await pos.page(`const input = document.querySelector('input[aria-label="搜索订单"]'); input.focus(); input.scrollIntoView({ block: 'center' }); await __sleep(300);
+      const r = input.getBoundingClientRect(); return { inputReachable: r.top >= 0 && r.bottom <= innerHeight, overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };`);
     results.push({ profile: p.id, page: 'keyboard-scroll', ...scroll });
-    await shot(pos, p, 'payment-keyboard');
-    await pos.page(`document.querySelector('[role=dialog] button').click(); await __sleep(300); __click('清空本单'); return 1;`);
+    await shot(pos, p, 'orders-keyboard');
   }
 
   // 英文：同一套布局，横屏候选 960×600。
@@ -144,16 +159,37 @@ try {
     document.querySelector('button[aria-label="Black Sauce"]').click(); await __sleep(200); __click('Add'); await __sleep(250);
     document.querySelector('button[aria-label="Wantan Soup"]').click(); await __sleep(200); __click('Add'); await __sleep(250); return 1;`);
   await shot(pos, en, 'pos-en');
-  await pos.page(`__click('paymentRM'); await __sleep(500); __click('Exact'); await __sleep(200); return 1;`);
-  await shot(pos, en, 'payment-en');
-  await pos.page(`document.querySelector('[role=dialog] button').click(); localStorage.setItem('hao-lang', 'zh'); return 1;`);
+  await pos.page(`[...document.querySelectorAll('aside[aria-label="Order"] button')].find((b) => b.innerText.includes('Send to kitchen')).click();
+    await __waitFor('Givethistoken', 40000); await __sleep(600); return 1;`);
+  await shot(pos, en, 'result-en');
+  await pos.page(`__click('Nextorder'); localStorage.setItem('hao-lang', 'zh'); return 1;`);
   await kds.page(`localStorage.setItem('hao-lang', 'en'); return 1;`);
   await setProfile(kds, en);
   await kds.goto('/kitchen', 3500);
   await shot(kds, en, 'kitchen-en');
   await kds.page(`localStorage.setItem('hao-lang', 'zh'); return 1;`);
+  // 汇总：每张截图的通用要求 + 各页面的关键控件。
+  const rules = [];
+  for (const r of results) {
+    if (r.page === 'edit-cancel') { rules.push([`${r.profile} 编辑取消保留原行`, r.keptAfterCancel && r.unchangedWhileEditing]); continue; }
+    if (r.page === 'keyboard-scroll') { rules.push([`${r.profile} 键盘近似：订单搜索框可见、无溢出`, r.inputReachable && r.overflow === 0]); continue; }
+    if (!('overflow' in r)) continue;
+    const id = `${r.profile}-${r.page}`;
+    rules.push([`${id} 无横向溢出`, r.overflow === 0, `${r.overflow}px`]);
+    rules.push([`${id} 触控目标 ≥56`, r.small === 0, r.smallSamples?.join(' | ')]);
+    if (r.page === 'pos' || r.page === 'pos-en') rules.push([`${id} 「下单送厨」按钮可见`, r.sendInView]);
+    if (r.page === 'result' || r.page === 'result-en') rules.push([`${id} 结果弹窗：确认已收款 / 显示收款码 / 下一单完整可见`, r.quickPayInView && r.quickQrInView && r.resultNextInView]);
+    if (r.page === 'qr' || r.page === 'pending-qr') rules.push([`${id} 收款码：原图完整在视口内、未裁切、关闭可见`, r.qr?.loaded && r.qr.imgInView && r.qr.notCropped && r.qr.closeInView, JSON.stringify(r.qr)]);
+    if (r.page === 'pending') rules.push([`${id} 待登记抽屉：有卡片、卡片按钮与关闭可见`, r.drawer?.cards > 0 && r.drawer.firstCardButtonsInView && r.drawer.closeInView, JSON.stringify(r.drawer)]);
+  }
+  for (const [name, ok, detail] of rules) if (!ok) console.log(`FAIL ${name}${detail ? ' — ' + detail : ''}`);
+  const failed = rules.filter((x) => !x[1]).length;
+  console.log(`
+${rules.length - failed}/${rules.length} passed`);
+  process.exitCode = failed ? 1 : 0;
 } catch (e) {
   console.error('FAIL', e);
+  process.exitCode = 1;
   results.push({ page: 'script-error', error: String(e) });
 } finally {
   await writeFile(`${OUT}/tablet-preflight.json`, JSON.stringify({

@@ -1,4 +1,5 @@
 // O11 后厨心跳/回执提示、O12 跨营业日未完成单、O13 收据——两个独立浏览器（收银 / 后厨）+ 本机 Emulator。
+// 2026-10-23 起：下单送厨不收款（待收款），后厨接单即制作中、只有「完成出餐」；收据未收款时标「未收款 · 不是付款凭证」。
 // 前提：干净的 Emulator 已启动并 seed；VITE_USE_EMULATORS=true 构建后在 4173 端口 vite preview。
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fsList, fsPatch, login, openChrome, pause } from './lib/cdp.mjs';
@@ -17,7 +18,7 @@ let kds = await openChrome('http://127.0.0.1:4173', { width: 1366, height: 900 }
 const order = (tile) => pos.page(`
   await __waitFor('看图选餐', 15000);
   __click('${tile}'); await __sleep(150); __click('加入本单'); await __sleep(200);
-  __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款并接单');
+  [...document.querySelectorAll('aside[aria-label="本单"] button')].find((b) => b.innerText.includes('下单送厨')).click();
   await __waitFor('✓云端已接单', 40000);
   return (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText;`);
 
@@ -53,7 +54,7 @@ try {
   await pos.page(`__click('我已递纸单给厨师'); await __waitFor('已登记人工传单', 20000);`);
   const token2 = Number(t2.match(/(\d+)号 · 票号/)?.[1]);
   const orders = await fsList('orders');
-  const o2 = orders.find((o) => o.tokenNumber === token2 && o.fulfillmentStatus === 'queued');
+  const o2 = orders.find((o) => o.tokenNumber === token2 && o.fulfillmentStatus === 'preparing');
   check('O11 人工传单已记录在订单上，制作状态不变', o2 && o2.manualHandoffAtMs && o2.kitchenAckAtMs === null, `餐牌 ${token2}`);
 
   // ---- 后厨屏恢复：看到人工传单提示；回执补上 ----
@@ -73,14 +74,14 @@ try {
   check('O12 后厨屏继续显示前一营业日的未完成单并标明', crossKds);
   await save(kds, 'kds-crossday-handoff');
   await pos.goto('/orders');
-  const crossOrders = await pos.page(`return await __waitFor('跨营业日未完成·1单', 20000);`);
-  check('O12 订单页单列「跨营业日未完成」', crossOrders);
+  const crossOrders = await pos.page(`return await __waitFor('之前营业日未完成或未收款·1单', 20000);`);
+  check('O12 订单页单列「之前营业日未完成或未收款」', crossOrders);
   await save(pos, 'orders-crossday');
   await kds.page(`
     const card = () => document.querySelector('article[aria-label="${token2}号"]');
     const btn = (t) => [...card().querySelectorAll('button')].find(b => b.innerText.includes(t));
-    btn('开始制作').click();
-    for (let i = 0; i < 80 && !btn('完成出餐'); i++) await __sleep(250);
+    for (let i = 0; i < 80 && !(card() && btn('完成出餐')); i++) await __sleep(250);
+    if (btn('开始制作')) throw new Error('后厨不应再有「开始制作」');
     btn('完成出餐').click();
     for (let i = 0; i < 80 && card(); i++) await __sleep(250);`);
   const served = (await fsList('orders')).find((o) => o._id === o2._id);
@@ -88,11 +89,12 @@ try {
 
   // ---- O13：收据 ----
   const receipt = await pos.page(`
-    await __waitFor('跨营业日', 5000);
+    await __waitFor('之前营业日', 5000);
     const rows = [...document.querySelectorAll('button')].filter(b => b.innerText.trim() === '收据');
     rows[0].click(); await __waitFor('谢谢光临', 15000);
     return document.querySelector('.print-receipt').innerText;`);
-  check('O13 收据：票号、餐牌、实收找零、出餐时间仅在已出餐时显示', /票号/.test(receipt) && /餐牌/.test(receipt) && /合计/.test(receipt), receipt.replace(/\s+/g, ' ').slice(0, 160));
+  check('O13 收据：票号、餐牌、合计；新单不打印虚构现金 / QR 渠道，标明收款状态', /票号/.test(receipt) && /餐牌/.test(receipt) && /合计/.test(receipt) && !/现金|DuitNow/.test(receipt) && /未收款|已收款/.test(receipt), receipt.replace(/\s+/g, ' ').slice(0, 160));
+  check('O13 未收款订单（本脚本两单都未收款）的收据标「未收款 · 不是付款凭证」', receipt.includes('未收款 · 不是付款凭证'));
   await save(pos, 'receipt-80mm-dialog');
   const pdf80 = await pos.pdf({ printBackground: true, preferCSSPageSize: true });
   await writeFile(`${OUT}/receipt-80mm.pdf`, pdf80);

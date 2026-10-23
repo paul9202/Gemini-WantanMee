@@ -1,5 +1,7 @@
 /**
- * 前台命令：开班、餐牌回收、后厨收单确认。
+ * 前台命令：开班、旧版待回收餐牌处理、后厨收单确认。
+ * 开班不再要求备用金：新收款不分渠道，无法推算钱箱，不创建虚构的备用金流水；
+ * 开班仍是主设备、营业日与 24 小时离线资格的唯一入口，校验不变。
  */
 import { Firestore } from 'firebase-admin/firestore';
 import { businessDateOf } from '../../../src/domain/businessDay';
@@ -17,7 +19,8 @@ export async function openShift(db: Firestore, uid: string | undefined, raw: unk
   const o = obj(raw, ['storeId', 'operationId', ...REGISTER_CLAIM_FIELDS, 'openingFloatSen']);
   const input = {
     storeId: storeId(o), operationId: uuid(o, 'operationId'), claim: parseRegisterClaim(o),
-    openingFloatSen: int(o, 'openingFloatSen', 0, 10_000_000),
+    // 旧客户端仍可能传实点备用金：照实记录；新客户端不传，即不记录钱箱。
+    openingFloatSen: optInt(o, 'openingFloatSen', 0, 10_000_000),
   };
   return runCommand(db, {
     type: 'openShift', storeId: input.storeId, operationId: input.operationId, uid, roles: ['cashier', 'owner'], payload: input,
@@ -34,11 +37,14 @@ export async function openShift(db: Firestore, uid: string | undefined, raw: unk
       const offlineCapabilityExpiresAtMs = nowMs + OFFLINE_CAPABILITY_MS;
       tx.create(store.shift(shiftId), {
         id: shiftId, registerId: input.claim.registerId, deviceId: input.claim.deviceId, registerEpoch: input.claim.registerEpoch,
-        status: 'open', openedAtMs: nowMs, openedBy: actor.uid, openingFloatSen: input.openingFloatSen, businessDate, offlineCapabilityExpiresAtMs,
+        status: 'open', openedAtMs: nowMs, openedBy: actor.uid, openingFloatSen: input.openingFloatSen, cashDrawerTracked: input.openingFloatSen !== null,
+        businessDate, offlineCapabilityExpiresAtMs,
       });
-      tx.create(store.cashMovement(`${shiftId}-float`), {
-        shiftId, type: 'opening_float', amountSen: input.openingFloatSen, source: 'drawer', occurredAtMs: nowMs, businessDate, recordedBy: actor.uid,
-      });
+      if (input.openingFloatSen !== null) {
+        tx.create(store.cashMovement(`${shiftId}-float`), {
+          shiftId, type: 'opening_float', amountSen: input.openingFloatSen, source: 'drawer', occurredAtMs: nowMs, businessDate, recordedBy: actor.uid,
+        });
+      }
       tx.update(store.register(input.claim.registerId), { shiftId, lastSeenAtMs: nowMs });
       tx.set(store.businessDay(businessDate), { state: 'open', updatedAtMs: nowMs }, { merge: true });
       const result = {
@@ -49,7 +55,10 @@ export async function openShift(db: Firestore, uid: string | undefined, raw: unk
   });
 }
 
-/** 收银确认实体牌已收回。只能释放「待回收」且属于该订单的牌。 */
+/**
+ * 旧版待回收牌（awaiting_return，改版前出餐的单）：前台确认实体牌已收回后逐张释放，留审计。
+ * 新流程出餐 / 取消即自动释放，不会再产生待回收牌。
+ */
 export async function releaseToken(db: Firestore, uid: string | undefined, raw: unknown) {
   const o = obj(raw, ['storeId', 'operationId', ...REGISTER_CLAIM_FIELDS, 'sequence', 'tokenNumber', 'orderId', 'expectedVersion']);
   const input = {

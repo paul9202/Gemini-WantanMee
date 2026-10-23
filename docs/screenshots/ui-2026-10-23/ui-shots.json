@@ -1,7 +1,12 @@
 {
-  "at": "2026-10-23T13:49:52.760Z",
+  "at": "2026-10-23T16:58:04.806Z",
   "env": "local Firebase Emulator + vite preview (VITE_USE_EMULATORS=true)",
   "results": [
+    {
+      "name": "kitchen-single-work-area",
+      "cards": 6,
+      "start": false
+    },
     {
       "name": "kitchen-phone",
       "width": 390,
@@ -16,7 +21,7 @@
       "height": 1024,
       "overflow": 0,
       "actions": 6,
-      "actionsVisible": 3
+      "actionsVisible": 2
     },
     {
       "name": "kitchen-tabletL",
@@ -120,7 +125,7 @@
       "actionsVisible": 0
     },
     {
-      "name": "payment-cash-wide",
+      "name": "result-quickpay-wide",
       "width": 1600,
       "height": 1120,
       "overflow": 0,
@@ -128,7 +133,7 @@
       "actionsVisible": 0
     },
     {
-      "name": "payment-cash-phone",
+      "name": "result-quickpay-phone",
       "width": 390,
       "height": 844,
       "overflow": 0,
@@ -136,9 +141,33 @@
       "actionsVisible": 0
     },
     {
-      "name": "payment-result-wide",
+      "name": "qr-wide",
       "width": 1600,
       "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "qr-phone",
+      "width": 390,
+      "height": 844,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "pending-payments-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "pending-payments-phone",
+      "width": 390,
+      "height": 844,
       "overflow": 0,
       "actions": 0,
       "actionsVisible": 0

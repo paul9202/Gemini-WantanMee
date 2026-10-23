@@ -1,7 +1,7 @@
 /**
  * 离线运行时（主收银机）：本机日志状态、补同步、离线营业快照、结果不明收款的核对。
  * - 「已同步」只来自服务器逐条结果，浏览器 online 事件只触发尝试。
- * - 结果不明的在线收款只自动「查询」，查不到时交给收银决定（厨房没做 → 原单重交；已人工处理 → 原单号转人工补账），
+ * - 结果不明的在线下单只自动「查询」，查不到时交给收银决定（厨房没做 → 原单重交；已人工处理 → 原单号转人工补账），
  *   绝不自动换新 ID 复制成新单。
  */
 import { useSyncExternalStore } from 'react';
@@ -104,7 +104,7 @@ export function syncNow(): Promise<void> {
         const { results } = await call<{ results: OfflineEventResult[] }>('syncOfflineEvents', { events: batch.map((r) => r.event) });
         await applySyncResults(results);
         if (results.some((r) => r.status === 'blocked')) {
-          emit({ lastSyncError: '有记录被前面的缺号阻塞，请先处理待核对的收款' });
+          emit({ lastSyncError: '有记录被前面的缺号阻塞，请先处理待核对的订单' });
           break;
         }
       }
@@ -120,7 +120,7 @@ export function syncNow(): Promise<void> {
   return inFlight;
 }
 
-/** 结果不明的在线收款：只查询原操作，不自动重交。 */
+/** 结果不明的在线下单：只查询原操作，不自动重交。 */
 async function reconcilePendingOps() {
   for (const op of await listPendingOps()) {
     if (op.status !== 'submitting' && op.status !== 'unknown_result') continue;
@@ -154,9 +154,13 @@ export interface RegisterContext {
   serverApplied: number;
 }
 
-/** 追加人工交接 / 人工出餐 / 餐牌回收事件；失败返回中文错误，不假装成功。 */
+/**
+ * 追加收款确认 / 人工交接 / 人工出餐（出餐即本机释放餐牌）事件；先原子写入本机再算成功，
+ * 失败返回中文错误，不假装成功、不假报已收。token_returned 只为兼容旧日志保留，新界面不再产生。
+ */
 export async function appendManualEvent(
-  ctx: RegisterContext, type: 'manual_handoff' | 'manual_served' | 'token_returned', clientOrderId: string, tokenNumber?: number,
+  ctx: RegisterContext, type: 'manual_handoff' | 'manual_served' | 'token_returned' | 'offline_payment_recorded', clientOrderId: string,
+  extra?: { tokenNumber?: number; amountSen?: number },
 ): Promise<string | null> {
   try {
     await appendOfflineEvent(seqKey(ctx.claim.registerId, ctx.claim.registerEpoch), ctx.serverApplied, (sequence) => {
@@ -164,9 +168,9 @@ export async function appendManualEvent(
         eventId: crypto.randomUUID(), ...ctx.claim, sequence, shiftId: ctx.shiftId, occurredAtDeviceMs: Date.now(),
         lastServerOffsetMs: state.snapshot?.serverOffsetMs ?? 0,
       };
-      return type === 'token_returned'
-        ? { ...base, type, payload: { clientOrderId, tokenNumber: tokenNumber! } }
-        : { ...base, type, payload: { clientOrderId } };
+      if (type === 'token_returned') return { ...base, type, payload: { clientOrderId, tokenNumber: extra!.tokenNumber! } };
+      if (type === 'offline_payment_recorded') return { ...base, type, payload: { clientOrderId, amountSen: extra!.amountSen! } };
+      return { ...base, type, payload: { clientOrderId } };
     });
     await reloadLocal();
     return null;

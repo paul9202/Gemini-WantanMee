@@ -1,7 +1,9 @@
 /**
  * 老板概览（02 §7、01 §9；2026-10-23 新版布局）：先回答「今天经营如何」。
  * 所有数字、走势与排行都来自账本查询和领域函数；无数据时显示空态，不放示例数字。
- * 估算经营利润为管理估算，未含工资/税费；经营现金流与钱箱金额分开展示，不混用。
+ * 估算经营利润为管理估算（按已登记收款估算），未含工资/税费。
+ * 2026-10-23 运营改版：新收款不分现金 / QR，只看已登记 / 未登记；收款是人工登记，不是钱包或银行自动核对。
+ * 旧版渠道拆分只在区间内有旧记录时显示，标为旧版记录。
  */
 import { useState } from 'react';
 import { collection, doc, getDoc, query, where } from 'firebase/firestore';
@@ -16,7 +18,7 @@ import { useLiveQuery, useNow } from '../../data/firebase/live';
 import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
 import { Icon, Photo } from '../../ui/visual';
-import { download, loadLedger, loadOpenReviews, useLoad } from './data';
+import { download, loadLedger, loadOpenReviews, orderPaymentOverview, useLoad } from './data';
 import { BarList, minutes, OwnerTabs, pct, Section } from './ui';
 
 type Period = 'today' | 'd7' | 'd30';
@@ -37,9 +39,12 @@ export function OverviewPage() {
   const all = useLoad(() => (today ? loadLedger(null) : Promise.resolve(null)), `all-${today}`);
   const reviews = useLoad(loadOpenReviews, 'reviews');
   const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data() as { initialCapitalSen: number; openingProfitSen: number; fixedCostPolicy: FixedCostPolicy } | undefined, 'finance');
-  // 关注事项用实时数据：厨房超时单、待回收餐牌。
+  // 关注事项用实时数据：厨房超时单、待登记收款、旧版遗留的待回收餐牌。
   const kitchenQ = useLiveQuery<{ tokenNumber: number; acceptedAtEffectiveMs: number; fulfillmentStatus: string; kitchenRouting: string }>(
     query(collection(db, storePath('kitchenTickets')), where('fulfillmentStatus', 'in', ['queued', 'preparing'])), 'owner-kitchen',
+  );
+  const unpaidQ = useLiveQuery<{ id: string; receiptNumber: string; tokenNumber: number; totalSen: number; fulfillmentStatus: string; businessDate: string }>(
+    query(collection(db, storePath('orders')), where('paymentState', '==', 'unpaid')), 'owner-unpaid',
   );
   const tokensQ = useLiveQuery<{ number: number; state: string }>(query(collection(db, storePath('tokens')), where('state', '==', 'awaiting_return')), 'owner-tokens');
 
@@ -53,6 +58,9 @@ export function OverviewPage() {
   const ranking = cur.data ? dishRanking(cur.data.orders) : [];
   const trend = cur.data ? receiptsTrend(cur.data.docs.payments, cur.data.docs.refunds, range, config.timeZone) : [];
   const refundDue = cur.data ? cur.data.orders.filter((o) => o.paymentState === 'refund_due') : [];
+  const orderPay = cur.data ? orderPaymentOverview(cur.data.orders) : null;
+  const outstanding = unpaidQ.data.filter((o) => o.fulfillmentStatus !== 'cancelled');
+  const outstandingSen = outstanding.reduce((s, o) => s + o.totalSen, 0);
   // 回本：所有日期的估算利润累计（从第一笔账到今天）+ 老板确认的期初余额。
   const allDates = all.data ? [...all.data.docs.payments, ...all.data.docs.expenses, ...all.data.docs.costEvents].map((d) => d.businessDate).sort() : [];
   const allRange: DateRange | null = allDates.length ? { start: allDates[0], endExclusive: addDays(today, 1) } : null;
@@ -79,7 +87,8 @@ export function OverviewPage() {
 
   const attention: { title: string; sub: string; action?: { label: string; go: () => void } }[] = [];
   if (overdue.length) attention.push({ title: `有 ${overdue.length} 单等候超过 12 分钟`, sub: `餐牌 ${overdue.map((t) => t.tokenNumber).join('、')} · 后厨可优先处理`, action: { label: '去后厨', go: () => navigate('/kitchen') } });
-  if (tokensQ.data.length) attention.push({ title: `还有 ${tokensQ.data.length} 张餐牌未确认回收`, sub: `餐牌 ${tokensQ.data.map((t) => t.number).sort((a, b) => a - b).join('、')} · 先拿回实体牌，再在点餐页释放`, action: { label: '查看', go: () => navigate('/pos') } });
+  if (outstanding.length) attention.push({ title: `待登记收款 ${outstanding.length} 单 · ${formatRM(outstandingSen)}`, sub: `票号 ${outstanding.slice(0, 6).map((o) => o.receiptNumber).join('、')}${outstanding.length > 6 ? ' 等' : ''} · 收到钱后在主点单平板确认`, action: { label: '去订单', go: () => navigate('/orders') } });
+  if (tokensQ.data.length) attention.push({ title: `旧版遗留 ${tokensQ.data.length} 张餐牌待回收`, sub: `餐牌 ${tokensQ.data.map((t) => t.number).sort((a, b) => a - b).join('、')} · 改版前的记录；新流程出餐即自动释放`, action: { label: '查看', go: () => navigate('/pos') } });
   if (openReviews.length) attention.push({ title: `离线记录待核对 ${openReviews.length} 条`, sub: reviewAmount ? `已收 ${formatRM(reviewAmount)} 尚未入云端账，上面的数字不含这些金额` : '逐条补入账或不入账', action: { label: '去核对', go: () => navigate('/owner/review') } });
   if (refundDue.length) attention.push({ title: `${refundDue.length} 单应退款待登记`, sub: `餐牌 ${refundDue.map((o) => o.tokenNumber).join('、')} · 实际退款后到订单页登记`, action: { label: '去订单', go: () => navigate('/orders') } });
 
@@ -109,20 +118,40 @@ export function OverviewPage() {
 
       <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl bg-ok p-5 text-white shadow-card">
-          <div className="flex items-center text-sm text-white/85">{PERIOD_ZH[period]}净收款<Icon name="wallet" size={20} className="ml-auto" /></div>
+          <div className="flex items-center text-sm text-white/85">{PERIOD_ZH[period]}净登记收款<Icon name="wallet" size={20} className="ml-auto" /></div>
           <div className="mt-2 text-4xl font-black tabular-nums"><span className="mr-1 text-lg">RM</span>{summary ? formatRM(summary.netReceiptsSen).replace('RM', '') : '…'}</div>
           <div className="mt-2 text-xs text-white/85">
-            {summary ? `现金 ${formatRM(summary.receipts.cashSen)} · QR ${formatRM(summary.receipts.qrSen)}${summary.refunds.totalSen ? ` · 已扣退款 ${formatRM(summary.refunds.totalSen)}` : ''}` : ''}
+            {summary ? `已登记 ${formatRM(summary.receipts.totalSen)}${summary.refunds.totalSen ? ` · 已扣退款 ${formatRM(summary.refunds.totalSen)}` : ''} · 人工登记` : ''}
             {delta !== null && ` · 对比上一区间 ${delta >= 0 ? '+' : ''}${pct(delta)}`}
           </div>
         </div>
-        <Kpi icon="chart" label="估算经营利润" value={summary ? formatRM(summary.estimatedProfitSen) : '…'} bad={Boolean(summary && summary.estimatedProfitSen < 0)} sub="管理估算 · 未计工资与税费" />
+        <Kpi icon="chart" label="估算经营利润" value={summary ? formatRM(summary.estimatedProfitSen) : '…'} bad={Boolean(summary && summary.estimatedProfitSen < 0)} sub="按已登记收款估算 · 未计工资与税费" />
         <Kpi icon="serve" label="已出餐" value={mix ? `${mix.portionsServed}` : '…'} unit="份" sub={inKitchen ? `厨房还有 ${inKitchen} 单处理中` : '厨房目前没有待做单'} />
         <Kpi icon="clock" label="8 分钟内出餐率" value={svc ? pct(svc.onTimeRate) : '…'} sub={svc ? (svc.count ? `${Math.round((svc.onTimeRate ?? 0) * svc.count)} / ${svc.count} 单达标 · 平均 ${minutes(svc.avgMs)}` : '还没有已出餐样本') + (svc.excluded ? ` · ${svc.excluded} 单离线时间未核对不计` : '') : undefined} />
       </div>
 
+      <div className="mb-5">
+        <Section title="收款登记" hint="订单金额按订单营业日；收款按登记日。收款为员工人工登记，未与钱包或银行自动核对">
+          {summary && orderPay ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+              <PayFig label="有效订单金额" value={formatRM(orderPay.validSen)} sub={`${orderPay.validCount} 单${orderPay.cancelledCount ? ` · 另取消 ${orderPay.cancelledCount} 单` : ''}`} />
+              <PayFig label="已登记收款" value={formatRM(summary.receipts.totalSen)} sub={summary.receipts.correctionsSen ? `含误登记更正 ${formatRM(summary.receipts.correctionsSen)}` : '含跨日补登记'} />
+              <PayFig label="未登记（本区间订单）" value={formatRM(orderPay.unpaidSen)} sub={`${orderPay.unpaidCount} 单 · 不算已收`} tone={orderPay.unpaidCount ? 'bad' : undefined} />
+              <PayFig label="已登记退款" value={formatRM(summary.refunds.totalSen)} />
+              <PayFig label="净登记收款" value={formatRM(summary.netReceiptsSen)} strong />
+            </div>
+          ) : <Empty text="正在载入…" />}
+          {summary?.hasLegacyChannels && (
+            <p className="mt-3 rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">
+              旧版记录（改版前按渠道登记）：现金收款 {formatRM(summary.receipts.cashSen)} · QR 收款 {formatRM(summary.receipts.qrSen)}
+              {summary.refunds.cashSen + summary.refunds.qrSen ? ` · 现金退款 ${formatRM(summary.refunds.cashSen)} · QR 退款 ${formatRM(summary.refunds.qrSen)}` : ''}；已包含在上面的已登记收款与退款内。
+            </p>
+          )}
+        </Section>
+      </div>
+
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <Section title={period === 'today' ? '今日收款走势' : `${PERIOD_ZH[period]}收款走势`} hint={period === 'today' ? '按整点 · 实收减退款' : '按营业日 · 实收减退款'}>
+        <Section title={period === 'today' ? '今日收款走势' : `${PERIOD_ZH[period]}收款走势`} hint={period === 'today' ? '按登记时间整点 · 已登记收款减退款' : '按登记营业日 · 已登记收款减退款'}>
           <TrendChart buckets={trend} loading={loading} />
         </Section>
         <Section title="客人最爱" hint="按实际出餐份数排列">
@@ -145,22 +174,22 @@ export function OverviewPage() {
       </div>
 
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <Section title="钱从哪里来，花到哪里去" hint="经营估算 · 进货不与理论成本重复扣减"
+        <Section title="钱从哪里来，花到哪里去" hint="按已登记收款估算 · 进货不与理论成本重复扣减"
           actions={<button type="button" onClick={() => setDetail(!detail)} aria-expanded={detail} className="min-h-14 px-1 text-sm underline underline-offset-4">{detail ? '收起现金视角' : '查看现金视角'}</button>}>
           {summary ? (
             <table className="w-full text-[15px]">
               <tbody>
                 {[
-                  ['净收款', summary.netReceiptsSen], ['理论食材与包装成本', -costUnitsToSen(summary.allocatedCostUnits)],
+                  ['净登记收款', summary.netReceiptsSen], ['理论食材与包装成本', -costUnitsToSen(summary.allocatedCostUnits)],
                   ['未重复计算的损耗', -costUnitsToSen(summary.wastageCostUnits)], ['固定费用摊销（按日历日）', -summary.fixedCostSen],
                   ['其他营业费用', -summary.otherOpexSen],
                 ].map(([l, v]) => <tr key={l as string} className="border-b border-line"><td className="py-2.5">{l}</td><td className="text-right tabular-nums">{formatRM(v as number)}</td></tr>)}
-                <tr><td className="pt-3 font-bold text-ok">估算经营利润</td><td className={`pt-3 text-right font-bold tabular-nums ${summary.estimatedProfitSen < 0 ? 'text-danger' : 'text-ok'}`}>{formatRM(summary.estimatedProfitSen)}</td></tr>
+                <tr><td className="pt-3 font-bold text-ok">估算经营利润（按已登记收款估算）</td><td className={`pt-3 text-right font-bold tabular-nums ${summary.estimatedProfitSen < 0 ? 'text-danger' : 'text-ok'}`}>{formatRM(summary.estimatedProfitSen)}</td></tr>
                 {detail && (
                   <>
-                    <tr><td className="pt-5 pb-1 font-semibold" colSpan={2}>现金视角（不同于估算利润，也不是钱箱金额）</td></tr>
+                    <tr><td className="pt-5 pb-1 font-semibold" colSpan={2}>现金视角（不同于估算利润；新收款不分渠道，不能推算钱箱金额）</td></tr>
                     {[
-                      ['实际收款 − 实际退款', summary.receipts.totalSen - summary.refunds.totalSen], ['已付进货', -summary.cash.purchasesPaidSen],
+                      ['已登记收款 − 已登记退款', summary.receipts.totalSen - summary.refunds.totalSen], ['已付进货', -summary.cash.purchasesPaidSen],
                       ['已付营业费用（含房租等付款）', -summary.cash.opexPaidSen], ['= 经营现金净流入', summary.cash.operatingNetInflowSen],
                       ['资本设备付款（另列，不计经营）', -summary.cash.capitalPaidSen],
                     ].map(([l, v]) => <tr key={l as string} className="border-b border-line"><td className="py-2">{l}</td><td className="text-right tabular-nums">{formatRM(v as number)}</td></tr>)}
@@ -170,11 +199,11 @@ export function OverviewPage() {
             </table>
           ) : <Empty text="正在载入…" />}
           {summary && summary.wastageAlreadyAllocatedCount > 0 && <p className="mt-2 text-xs text-ink-2">另有 {summary.wastageAlreadyAllocatedCount} 条损耗属于已计入订单成本的食材，只记数量、不重复扣款。</p>}
-          <p className="mt-3 text-xs text-ink-2">钱箱应有金额请看「日结」；面薄与汤底成本待实店校准。</p>
+          <p className="mt-3 text-xs text-ink-2">收款数字为员工人工登记，未登记的订单不计入；面薄与汤底成本待实店校准。</p>
         </Section>
         <Section title="营业小提醒" hint="需要关注的事情，集中看">
           {attention.length === 0 ? (
-            <p className="flex items-center gap-2 rounded-xl border border-warn/20 bg-warn-bg/60 px-4 py-3 text-sm text-ink"><Icon name="check" size={18} className="text-ok" />目前没有超时单、待回收餐牌、待核对记录或应退款。</p>
+            <p className="flex items-center gap-2 rounded-xl border border-warn/20 bg-warn-bg/60 px-4 py-3 text-sm text-ink"><Icon name="check" size={18} className="text-ok" />目前没有超时单、待登记收款、待核对记录或应退款。</p>
           ) : (
             <ul className="divide-y divide-line">
               {attention.map((a) => (
@@ -192,10 +221,15 @@ export function OverviewPage() {
         <details className="group rounded-2xl border border-line bg-card p-5 shadow-card">
           <summary className="flex min-h-14 cursor-pointer list-none items-center gap-2 font-bold"><Icon name="chevron-right" size={18} className="transition-transform group-open:rotate-90" />细账：收款构成、出餐效率、酱料与面种、回本进度</summary>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <Section title="收款构成" hint="现金与 QR 分开；QR 不进钱箱">
+            <Section title="收款构成" hint="新收款不分渠道 · 人工登记">
               <BarList format={formatRM} rows={[
-                { label: '现金收款', value: summary.receipts.cashSen }, { label: 'QR 收款', value: summary.receipts.qrSen },
-                { label: '现金退款', value: -summary.refunds.cashSen }, { label: 'QR 退款', value: -summary.refunds.qrSen },
+                { label: '已登记收款', value: summary.receipts.unspecifiedSen },
+                ...(summary.receipts.correctionsSen ? [{ label: '误登记更正', value: summary.receipts.correctionsSen }] : []),
+                { label: '已登记退款', value: -summary.refunds.unspecifiedSen },
+                ...(summary.hasLegacyChannels ? [
+                  { label: '旧版·现金收', value: summary.receipts.cashSen }, { label: '旧版·QR 收', value: summary.receipts.qrSen },
+                  { label: '旧版·现金退', value: -summary.refunds.cashSen }, { label: '旧版·QR 退', value: -summary.refunds.qrSen },
+                ] : []),
               ]} />
             </Section>
             <Section title="出餐效率" hint={`样本 ${svc.count} 单`}>
@@ -246,13 +280,23 @@ function Kpi({ icon, label, value, unit, sub, bad }: { icon: 'chart' | 'serve' |
   );
 }
 
+function PayFig({ label, value, sub, strong, tone }: { label: string; value: string; sub?: string; strong?: boolean; tone?: 'bad' }) {
+  return (
+    <div className={`rounded-xl p-3 ${strong ? 'bg-ok-bg' : 'bg-subtle'}`}>
+      <div className="text-xs text-ink-2">{label}</div>
+      <div className={`mt-1 text-xl font-black tabular-nums ${tone === 'bad' ? 'text-danger' : strong ? 'text-ok' : ''}`}>{value}</div>
+      {sub && <div className="mt-0.5 text-xs text-ink-2">{sub}</div>}
+    </div>
+  );
+}
+
 function Empty({ text }: { text: string }) {
   return <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-ink-2">{text}</p>;
 }
 
 /** 柱状走势：最高时段用深绿，其余浅绿；数值写在最高柱上方，不依赖颜色读数。 */
 function TrendChart({ buckets, loading }: { buckets: { key: string; label: string; netSen: number }[]; loading: boolean }) {
-  if (!buckets.length || buckets.every((b) => b.netSen === 0)) return <Empty text={loading ? '正在载入…' : '这段时间还没有收款'} />;
+  if (!buckets.length || buckets.every((b) => b.netSen === 0)) return <Empty text={loading ? '正在载入…' : '这段时间还没有登记收款'} />;
   const max = Math.max(...buckets.map((b) => b.netSen), 1);
   const peak = buckets.reduce((m, b) => (b.netSen > m.netSen ? b : m), buckets[0]);
   const step = buckets.length > 16 ? Math.ceil(buckets.length / 8) : 1;
@@ -270,7 +314,7 @@ function TrendChart({ buckets, loading }: { buckets: { key: string; label: strin
         {buckets.map((b, i) => <span key={b.key} className="min-w-0 flex-1 text-center text-[11px] text-ink-2">{i % step === 0 ? b.label : ''}</span>)}
       </div>
       <figcaption className="mt-3 flex gap-4 text-xs text-ink-2">
-        <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-[#d2dac4]" />已收款</span>
+        <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-[#d2dac4]" />已登记收款</span>
         <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-ok" />最高时段</span>
       </figcaption>
     </figure>

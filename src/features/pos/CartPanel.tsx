@@ -1,4 +1,4 @@
-/** 第三栏：本单明细。每行可改数量、编辑、删除（删除可短暂撤销），底部应收合计与去收款。 */
+/** 第三栏：本单明细。每行可改数量、编辑、删除（删除可短暂撤销），底部应收合计与「下单送厨」（不收款，收款另行登记）。 */
 import { ReactNode } from 'react';
 import { Cart, OrderTotals } from '../../domain/cart';
 import { LineConfig, lineName, linePhotoId } from '../../domain/lineItem';
@@ -100,11 +100,11 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
         </div>
         <button type="button" onClick={onPay} disabled={Boolean(payDisabledReason)}
           className="flex h-16 w-full items-center justify-center gap-3 rounded-xl bg-ok text-xl font-bold text-white hover:bg-ok-pressed disabled:bg-control">
-          <Icon name="cash" size={30} />{tr('去收款', 'Take payment')} <span className="sr-only">{formatRM(totals.totalSen)}</span><Icon name="arrow" size={22} />
+          <Icon name="cook" size={30} />{tr('下单送厨', 'Send to kitchen')} · {formatRM(totals.totalSen)}<Icon name="arrow" size={22} />
         </button>
         {payDisabledReason
           ? <p className="mt-2 text-sm text-warn">{payDisabledReason}</p>
-          : <p className="mt-2 flex items-center justify-center gap-1.5 text-xs text-ink-2">{tr('核对金额', 'Check total')}<Icon name="chevron-right" size={12} />{tr('确认收款', 'Confirm payment')}<Icon name="chevron-right" size={12} />{tr('发送后厨', 'Send to kitchen')}</p>}
+          : <p className="mt-2 text-center text-xs text-ink-2">{tr('下单即送厨，不需先收款；收到钱后在「待登记收款」确认。', 'Goes straight to the kitchen; record the payment under “To record” once collected.')}</p>}
         {children}
       </div>
     </div>

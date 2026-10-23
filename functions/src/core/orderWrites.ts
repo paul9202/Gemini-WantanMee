@@ -1,6 +1,8 @@
 /**
- * 已收款订单的统一写入：订单（无 BOM）、支付、私有成本、厨房投影。
+ * 接单的统一写入：订单（无 BOM）、私有成本、厨房投影；收款登记另行写入（writePaymentRegistration）。
  * 在线 createOrder 与离线补同步共用，保证两种来源的字段一致；餐牌、序号、票号由调用方负责。
+ * 新订单默认待收款、不产生付款流水；只有旧格式离线日志（下单即收款）才按原渠道写付款。
+ * schemaVersion 3：paymentState 可为 unpaid / not_due；旧读取方不得把未付款新单当已付。
  */
 import { Timestamp, Transaction } from 'firebase-admin/firestore';
 import { BomVersion } from '../../../src/domain/bom';
@@ -9,7 +11,7 @@ import { buildKitchenTicket, KitchenRouting, TimeQuality } from '../../../src/do
 import { LineConfig, lineNameZh, linePhotoId, linePortions } from '../../../src/domain/lineItem';
 import { MenuVersion, ServiceMode } from '../../../src/domain/menu';
 import { newAcceptedState } from '../../../src/domain/orderLifecycle';
-import { PaymentMethod } from '../../../src/domain/payment';
+import { LegacyPaymentMethod, paymentIdFor } from '../../../src/domain/payment';
 import { linePictograms } from '../../../src/domain/pictograms';
 import type { StoreRefs } from './command';
 
@@ -26,7 +28,8 @@ export interface AcceptedOrderInput {
   bom: BomVersion;
   lines: { lineId: string; config: LineConfig; quantity: number }[];
   totals: OrderTotals;
-  payment: { method: PaymentMethod; tenderedSen: number | null; changeSen: number | null; qrExternalVerificationNote: string | null };
+  /** 只有旧格式离线日志（下单即收款）才有；新订单为 null。 */
+  legacyPayment: { method: LegacyPaymentMethod; tenderedSen: number | null; changeSen: number | null; qrExternalVerificationNote: string | null } | null;
   acceptedAtEffectiveMs: number;
   deviceAcceptedAtMs: number;
   cloudReceivedAtMs: number;
@@ -42,8 +45,9 @@ export interface AcceptedOrderInput {
 }
 
 export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: AcceptedOrderInput) {
-  const life = newAcceptedState(a.totals.totalSen);
-  const paymentId = `${a.orderId}-p1`;
+  const legacy = a.legacyPayment;
+  const life = newAcceptedState({ acceptedAtMs: a.acceptedAtEffectiveMs, kitchenRouting: a.kitchenRouting, legacyPaidSen: legacy ? a.totals.totalSen : null });
+  const paymentId = legacy ? paymentIdFor(a.orderId, 1) : null;
   const items = a.lines.map((l, i) => {
     const p = linePortions(a.menu, l.config);
     return {
@@ -55,11 +59,13 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     };
   });
   tx.create(store.order(a.orderId), {
-    schemaVersion: 2, storeId: a.storeId, id: a.orderId, receiptNumber: a.receiptNumber, offlineReceiptNumber: a.offlineReceiptNumber,
+    schemaVersion: 3, storeId: a.storeId, id: a.orderId, receiptNumber: a.receiptNumber, offlineReceiptNumber: a.offlineReceiptNumber,
     tokenNumber: a.tokenNumber, serviceMode: a.serviceMode, source: a.source, kitchenRouting: a.kitchenRouting,
     ...life,
     items, totalSen: a.totals.totalSen, portionCount: a.totals.portionCount,
-    paymentMethod: a.payment.method, cashTenderedSen: a.payment.method === 'cash' ? a.payment.tenderedSen : null, changeSen: a.payment.changeSen,
+    paymentMethod: legacy?.method ?? null, cashTenderedSen: legacy?.method === 'cash' ? legacy.tenderedSen : null, changeSen: legacy?.changeSen ?? null,
+    paymentSeq: legacy ? 1 : 0, paymentId, paidAtMs: legacy ? a.acceptedAtEffectiveMs : null, paymentBusinessDate: legacy ? a.businessDate : null,
+    tokenReleasedAtMs: null, tokenReleaseSource: null,
     acceptedAtEffective: Timestamp.fromMillis(a.acceptedAtEffectiveMs), acceptedAtEffectiveMs: a.acceptedAtEffectiveMs,
     deviceAcceptedAtMs: a.deviceAcceptedAtMs, cloudReceivedAtMs: a.cloudReceivedAtMs,
     kitchenAckAtMs: null, timeQuality: a.timeQuality, businessDate: a.businessDate, menuVersion: a.menu.version,
@@ -67,13 +73,15 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     createdBy: a.createdBy, updatedAtMs: a.cloudReceivedAtMs,
     ...a.extra,
   });
-  tx.create(store.payment(paymentId), {
-    id: paymentId, orderId: a.orderId, method: a.payment.method, amountSen: a.totals.totalSen,
-    tenderedSen: a.payment.method === 'cash' ? a.payment.tenderedSen : null, changeSen: a.payment.changeSen,
-    qrExternalVerificationNote: a.payment.qrExternalVerificationNote,
-    confirmedBy: a.createdBy, businessDate: a.businessDate, occurredAtMs: a.acceptedAtEffectiveMs, source: a.source,
-    registerId: a.registerId, shiftId: a.shiftId,
-  });
+  if (legacy && paymentId) {
+    tx.create(store.payment(paymentId), {
+      id: paymentId, orderId: a.orderId, kind: 'payment', method: legacy.method, amountSen: a.totals.totalSen,
+      tenderedSen: legacy.method === 'cash' ? legacy.tenderedSen : null, changeSen: legacy.changeSen,
+      qrExternalVerificationNote: legacy.qrExternalVerificationNote,
+      confirmedBy: a.createdBy, businessDate: a.businessDate, orderBusinessDate: a.businessDate, occurredAtMs: a.acceptedAtEffectiveMs, source: a.source,
+      registerId: a.registerId, shiftId: a.shiftId,
+    });
+  }
   tx.create(store.orderCost(a.orderId), {
     orderId: a.orderId, bomVersion: a.bom.version, businessDate: a.businessDate,
     lines: a.totals.lines.map((l) => ({ lineId: l.lineId, unitCostUnits: l.unitCostUnits, lineCostUnits: l.lineCostUnits })),
@@ -88,15 +96,52 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
   });
   tx.create(store.ticket(a.orderId), {
     ...buildKitchenTicket(a.menu, {
-      orderId: a.orderId, tokenNumber: a.tokenNumber, serviceMode: a.serviceMode, kitchenRouting: a.kitchenRouting, fulfillmentStatus: 'queued',
-      kitchenCancelRequested: false, acceptedAtEffectiveMs: a.acceptedAtEffectiveMs, startedAtMs: null, servedAtMs: null, timeQuality: a.timeQuality,
+      orderId: a.orderId, tokenNumber: a.tokenNumber, serviceMode: a.serviceMode, kitchenRouting: a.kitchenRouting, fulfillmentStatus: life.fulfillmentStatus,
+      kitchenCancelRequested: false, acceptedAtEffectiveMs: a.acceptedAtEffectiveMs, startedAtMs: life.startedAtMs, startedSource: life.startedSource,
+      servedAtMs: null, timeQuality: a.timeQuality,
       businessDate: a.businessDate, version: life.version, lines: a.lines,
     }),
     kitchenAckAtMs: null,
     receiptNumber: a.receiptNumber,
     offlineReceiptNumber: a.offlineReceiptNumber,
   });
-  return { paymentId };
+  return { paymentId, life };
+}
+
+export interface PaymentRegistration {
+  orderId: string;
+  /** 同一订单第几次登记（更正后可再登记）。 */
+  seq: number;
+  amountSen: number;
+  /** 登记（确认收到）所属营业日；可能晚于订单营业日。 */
+  businessDate: string;
+  orderBusinessDate: string;
+  occurredAtMs: number;
+  recordedAtMs: number;
+  confirmedBy: string;
+  source: 'online' | 'offline';
+  registerId: string | null;
+  operationId: string | null;
+  offlineEventId: string | null;
+}
+
+/**
+ * 收款登记：不分渠道的人工全额确认。确定性 ID（orderId-p{seq}）+ tx.create 保证并发确认只生成一笔。
+ * 只改订单的付款字段，不碰制作版本、厨房投影、餐牌与成本。
+ */
+export function writePaymentRegistration(tx: Transaction, store: StoreRefs, r: PaymentRegistration) {
+  const id = paymentIdFor(r.orderId, r.seq);
+  tx.create(store.payment(id), {
+    id, orderId: r.orderId, kind: 'payment', method: 'unspecified', confirmationMode: 'manual', amountSen: r.amountSen,
+    tenderedSen: null, changeSen: null, confirmedBy: r.confirmedBy, businessDate: r.businessDate, orderBusinessDate: r.orderBusinessDate,
+    occurredAtMs: r.occurredAtMs, recordedAtMs: r.recordedAtMs, source: r.source, registerId: r.registerId,
+    operationId: r.operationId, offlineEventId: r.offlineEventId,
+  });
+  tx.update(store.order(r.orderId), {
+    paymentState: 'paid', paidSen: r.amountSen, paymentMethod: 'unspecified', paymentSeq: r.seq, paymentId: id,
+    paidAtMs: r.occurredAtMs, paymentBusinessDate: r.businessDate, paymentConfirmedBy: r.confirmedBy, updatedAtMs: r.recordedAtMs,
+  });
+  return id;
 }
 
 export function receiptNumberFor(businessDate: string, seq: number): string {

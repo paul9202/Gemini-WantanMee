@@ -1,18 +1,19 @@
 /**
- * createOrder：订单、支付、私有成本、餐牌占用、厨房投影、收银机序号、票号、operation、审计——同一事务。
+ * createOrder：下单即送厨。订单、私有成本、餐牌占用、厨房投影（直接制作中）、收银机序号、票号、operation、审计——同一事务。
+ * 不收款、不写付款流水：订单待收款（paidSen=0），收款由 recordPayment 另行确认。
  * 服务器按菜单版本重算价格与配置；前端传入的总价只用于比对，不是权威。
+ * 旧客户端带 payment 字段（下单即收款）会被拒绝，避免把未付款新单当成已付。
  */
 import { businessDateOf } from '../../../src/domain/businessDay';
 import { Cart, computeTotals } from '../../../src/domain/cart';
 import { isValidQuantity, parseLineConfig, LineConfig } from '../../../src/domain/lineItem';
 import { SERVICE_MODES } from '../../../src/domain/menu';
 import { loadBom, loadMenu } from '../core/catalog';
-import { checkPayment } from '../../../src/domain/payment';
 import { holdToken, isTokenNumber, TokenBoard } from '../../../src/domain/tokens';
 import { CommandContext, runCommand } from '../core/command';
 import { receiptNumberFor, writeAcceptedOrder } from '../core/orderWrites';
 import { CommandError } from '../core/errors';
-import { bool, int, obj, oneOf, optInt, str, storeId, uuid, bad } from '../core/input';
+import { int, obj, oneOf, str, storeId, uuid, bad } from '../core/input';
 import { loadStoreConfig, parseRegisterClaim, REGISTER_CLAIM_FIELDS, requireActiveRegister, requireDayOpen, requireNextSequence } from '../core/store';
 import type { Firestore } from 'firebase-admin/firestore';
 
@@ -20,19 +21,18 @@ export const MAX_LINES = 30;
 
 export interface CreateOrderResult {
   orderId: string;
-  paymentId: string;
   receiptNumber: string;
   tokenNumber: number;
   totalSen: number;
-  changeSen: number | null;
+  paymentState: 'unpaid';
+  fulfillmentStatus: 'preparing';
   businessDate: string;
   acceptedAtMs: number;
 }
 
 export function parseCreateOrder(raw: unknown) {
-  const o = obj(raw, ['storeId', 'operationId', ...REGISTER_CLAIM_FIELDS, 'sequence', 'shiftId', 'order', 'payment']);
+  const o = obj(raw, ['storeId', 'operationId', ...REGISTER_CLAIM_FIELDS, 'sequence', 'shiftId', 'order']);
   const order = obj(o.order, ['clientOrderId', 'tokenNumber', 'serviceMode', 'menuVersion', 'lines', 'expectedTotalSen', 'deviceAcceptedAtMs'], 'order');
-  const payment = obj(o.payment, ['method', 'tenderedSen', 'qrConfirmed'], 'payment');
   if (!Array.isArray(order.lines) || order.lines.length < 1 || order.lines.length > MAX_LINES) throw bad(`lines 需 1–${MAX_LINES} 行`);
   const lines = order.lines.map((l, i) => {
     const line = obj(l, ['lineId', 'config', 'quantity'], `lines[${i}]`);
@@ -55,11 +55,6 @@ export function parseCreateOrder(raw: unknown) {
       lines,
       expectedTotalSen: int(order, 'expectedTotalSen', 0, 10_000_000),
       deviceAcceptedAtMs: int(order, 'deviceAcceptedAtMs', 0, Number.MAX_SAFE_INTEGER),
-    },
-    payment: {
-      method: oneOf(payment, 'method', ['cash', 'qr_manual'] as const),
-      tenderedSen: optInt(payment, 'tenderedSen', 0, 10_000_000),
-      qrConfirmed: bool(payment, 'qrConfirmed'),
     },
   };
 }
@@ -114,11 +109,6 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   if (totals.totalSen !== o.expectedTotalSen) {
     throw new CommandError('PRICE_MISMATCH', '金额与服务器计算不一致', { serverTotalSen: totals.totalSen });
   }
-  const pay = checkPayment(
-    { method: input.payment.method, dueSen: totals.totalSen, tenderedSen: input.payment.tenderedSen, qrConfirmed: input.payment.qrConfirmed, qrExternalVerificationNote: null },
-    { online: true, qrConfigured: config.qrConfigured },
-  );
-  if (!pay.ok) throw new CommandError('PAYMENT_NOT_CONFIRMED', pay.blocks.join(','), { blocks: pay.blocks });
 
   const tokenData = tokenSnap.data();
   if (!tokenSnap.exists || !tokenData || !isTokenNumber(o.tokenNumber)) throw new CommandError('STORE_NOT_CONFIGURED', '餐牌未初始化');
@@ -132,10 +122,10 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   const orderId = o.clientOrderId;
   const receiptSeq = day.receiptSeq + 1;
   const receiptNumber = receiptNumberFor(businessDate, receiptSeq);
-  const { paymentId } = writeAcceptedOrder(tx, store, {
+  writeAcceptedOrder(tx, store, {
     storeId: ctx.storeId, orderId, receiptNumber, offlineReceiptNumber: null, tokenNumber: o.tokenNumber, serviceMode: o.serviceMode,
     source: 'online', kitchenRouting: 'digital', menu, bom, lines, totals,
-    payment: { method: input.payment.method, tenderedSen: input.payment.tenderedSen, changeSen: pay.changeSen, qrExternalVerificationNote: null },
+    legacyPayment: null,
     acceptedAtEffectiveMs: nowMs, deviceAcceptedAtMs: o.deviceAcceptedAtMs, cloudReceivedAtMs: nowMs, timeQuality: 'server', businessDate,
     registerId: input.claim.registerId, registerEpoch: input.claim.registerEpoch, shiftId: input.shiftId, sequence: input.sequence,
     createdBy: actor.uid, allocationEventId: `${input.operationId}-alloc`,
@@ -145,7 +135,7 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   tx.set(store.businessDay(businessDate), { state: 'open', receiptSeq, updatedAtMs: nowMs }, { merge: true });
 
   const result: CreateOrderResult = {
-    orderId, paymentId, receiptNumber, tokenNumber: o.tokenNumber, totalSen: totals.totalSen, changeSen: pay.changeSen, businessDate, acceptedAtMs: nowMs,
+    orderId, receiptNumber, tokenNumber: o.tokenNumber, totalSen: totals.totalSen, paymentState: 'unpaid', fulfillmentStatus: 'preparing', businessDate, acceptedAtMs: nowMs,
   };
-  return { result, audit: { entityId: orderId, after: { totalSen: totals.totalSen, tokenNumber: o.tokenNumber, method: input.payment.method } } };
+  return { result, audit: { entityId: orderId, after: { totalSen: totals.totalSen, tokenNumber: o.tokenNumber, paymentState: 'unpaid' } } };
 }

@@ -34,7 +34,7 @@ test('发布菜单：新价生效；旧版本在线单 MENU_CHANGED；越权、�
   assert.equal(await pub({ prices: noodlePrices(900) }), 'STALE_VERSION', '必须基于当前启用版本修改');
   assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 1 })), 'MENU_CHANGED');
   assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 1, menuVersion: r.version })), 'PRICE_MISMATCH', '旧价 700 被拒');
-  const ok = await placeOrder(f, { tokenNumber: 1, menuVersion: r.version, expectedTotalSen: 800, payment: { method: 'cash', tenderedSen: 1000, qrConfirmed: false } });
+  const ok = await placeOrder(f, { tokenNumber: 1, menuVersion: r.version, expectedTotalSen: 800 });
   assert.equal(ok.result.totalSen, 800);
   const order = (await admin().doc(`stores/${f.storeId}/orders/${ok.result.orderId}`).get()).data()!;
   assert.equal(order.menuVersion, r.version);

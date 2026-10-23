@@ -1,15 +1,17 @@
 /**
  * 离线营业：事件信封与本机餐牌叠加（03 §7）。
- * 指定主收银机断网时，订单、收款、餐牌占用、人工交接/出餐/回收都写成不可变的追加事件，
+ * 指定主收银机断网时，下单（可未付款）、收款确认、人工交接、人工出餐（同时释放餐牌）都写成不可变的追加事件，
  * 与在线命令共用同一个本机序号流；联网后按序号补同步。离线单一律 kitchenRouting=manual，
- * 补同步不会自动送厨。
+ * 补同步不会自动送厨、不重扣成本。收款确认只关联订单 ID，不占牌也不释放牌。
+ * 旧格式日志（下单即收款、token_returned 人工回收）仍可解析与补同步。
  */
 import type { LineConfig } from './lineItem';
 import type { ServiceMode } from './menu';
-import type { PaymentMethod } from './payment';
+import type { LegacyPaymentMethod } from './payment';
 import { TokenBoard, TokenState } from './tokens';
 
-export type OfflineEventType = 'offline_order_created' | 'manual_handoff' | 'manual_served' | 'token_returned' | 'sequence_void';
+export type OfflineEventType =
+  | 'offline_order_created' | 'offline_payment_recorded' | 'manual_handoff' | 'manual_served' | 'token_returned' | 'sequence_void';
 
 export interface OfflineOrderPayload {
   clientOrderId: string;
@@ -19,11 +21,19 @@ export interface OfflineOrderPayload {
   menuVersion: string;
   lines: { lineId: string; config: LineConfig; quantity: number }[];
   totalSen: number;
-  payment: { method: PaymentMethod; tenderedSen: number | null; qrExternalVerificationNote: string | null };
+  /** null：新流程，下单未付款。旧格式日志为下单即收款的真实渠道记录。 */
+  payment: { method: LegacyPaymentMethod; tenderedSen: number | null; qrExternalVerificationNote: string | null } | null;
+}
+
+/** 员工确认整单已收到（不分渠道）。clientOrderId 可以是离线单，也可以是之前的在线单。 */
+export interface OfflinePaymentPayload {
+  clientOrderId: string;
+  amountSen: number;
 }
 
 export type OfflinePayload =
   | { type: 'offline_order_created'; payload: OfflineOrderPayload }
+  | { type: 'offline_payment_recorded'; payload: OfflinePaymentPayload }
   | { type: 'manual_handoff'; payload: { clientOrderId: string } }
   | { type: 'manual_served'; payload: { clientOrderId: string } }
   | { type: 'token_returned'; payload: { clientOrderId: string; tokenNumber: number } }
@@ -51,7 +61,8 @@ export type OfflineEventStatus = 'accepted' | 'needs_review' | 'blocked' | 'reje
 export type OfflineReviewReason =
   | 'REGISTER_REVOKED' | 'SEQUENCE_GAP' | 'SEQUENCE_REUSED' | 'TIME_ANOMALY' | 'OFFLINE_CAPABILITY_EXPIRED'
   | 'MENU_UNKNOWN' | 'INVALID_MODIFIER' | 'PRICE_MISMATCH' | 'PAYMENT_UNVERIFIED' | 'TOKEN_CONFLICT'
-  | 'DAY_CLOSED_LATE' | 'ORDER_ID_CONFLICT' | 'DEPENDS_ON_REVIEW' | 'ORDER_STATE' | 'EVENT_CONFLICT';
+  | 'DAY_CLOSED_LATE' | 'ORDER_ID_CONFLICT' | 'DEPENDS_ON_REVIEW' | 'ORDER_STATE' | 'EVENT_CONFLICT'
+  | 'ALREADY_PAID' | 'AMOUNT_MISMATCH';
 
 export interface OfflineEventResult {
   eventId: string;
@@ -80,7 +91,8 @@ export function offlineReceiptNumber(registerId: string, sequence: number): stri
 
 /**
  * 本机餐牌视图 = 最后一次联网时的服务器餐牌 + 尚未被服务器确认的本机离线事件。
- * 事件按序号应用；同一张牌先回收旧单再占给新单的顺序由序号保证。
+ * 事件按序号应用；人工出餐即释放本单仍持有的牌，同一张牌先释放旧单再占给新单的顺序由序号保证。
+ * 这只是本机视图：后厨在云端出餐释放的牌，断网期间本机看不到，不能声称拥有最新牌状态。
  */
 export function overlayLocalTokens(base: TokenBoard, events: OfflineEvent[]): TokenBoard {
   const board: TokenBoard = { ...base };
@@ -90,8 +102,8 @@ export function overlayLocalTokens(base: TokenBoard, events: OfflineEvent[]): To
       const t = board[e.payload.tokenNumber];
       set({ number: e.payload.tokenNumber, state: 'held', orderId: e.payload.clientOrderId, version: (t?.version ?? 0) + 1 });
     } else if (e.type === 'manual_served') {
-      const held = Object.values(board).find((t) => t.orderId === e.payload.clientOrderId && t.state === 'held');
-      if (held) set({ ...held, state: 'awaiting_return', version: held.version + 1 });
+      const held = Object.values(board).find((t) => t.orderId === e.payload.clientOrderId && (t.state === 'held' || t.state === 'awaiting_return'));
+      if (held) set({ number: held.number, state: 'available', orderId: null, version: held.version + 1, lastReleasedOrderId: e.payload.clientOrderId });
     } else if (e.type === 'token_returned') {
       const t = board[e.payload.tokenNumber];
       if (t && t.orderId === e.payload.clientOrderId) set({ number: t.number, state: 'available', orderId: null, version: t.version + 1 });
@@ -101,12 +113,15 @@ export function overlayLocalTokens(base: TokenBoard, events: OfflineEvent[]): To
 }
 
 /** 某离线单在本机事件中的人工状态（用于同步中心与 POS 显示）。 */
-export function manualStatus(events: OfflineEvent[], clientOrderId: string): { handedOff: boolean; served: boolean; tokenReturned: boolean } {
+export function manualStatus(events: OfflineEvent[], clientOrderId: string): { handedOff: boolean; served: boolean; tokenReturned: boolean; paid: boolean } {
   const mine = events.filter((e) => e.type !== 'sequence_void' && e.payload.clientOrderId === clientOrderId);
+  const served = mine.some((e) => e.type === 'manual_served');
+  const created = mine.find((e) => e.type === 'offline_order_created');
   return {
     handedOff: mine.some((e) => e.type === 'manual_handoff'),
-    served: mine.some((e) => e.type === 'manual_served'),
-    tokenReturned: mine.some((e) => e.type === 'token_returned'),
+    served,
+    tokenReturned: served || mine.some((e) => e.type === 'token_returned'),
+    paid: mine.some((e) => e.type === 'offline_payment_recorded') || Boolean(created && created.type === 'offline_order_created' && created.payload.payment),
   };
 }
 

@@ -1,11 +1,13 @@
 /**
  * 离线补同步 Emulator 测试（04 §4）：真实身份调用 syncOfflineEventsCmd。
+ * create() 默认生成「旧格式」日志（下单即收现金，含 token_returned），用来证明旧日志仍兼容；
+ * 新格式（method:'none'，下单未付款 + 独立收款事件 + 出餐即释放牌）见 §11-12 用例。
  * 浏览器侧的断网、刷新、IndexedDB 原子性另见前端测试与 E2E 脚本。
  */
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { collection, getDocs, query, where } from 'firebase/firestore';
-import { admin, cleanupClients, countDocs, noodle, orderPayload, placeOrder, setupStore, StoreFixture, uuid } from './harness';
+import { admin, cleanupClients, countDocs, noodle, orderPayload, pay, placeOrder, setupStore, StoreFixture, uuid } from './harness';
 import { MENU_V1 } from '../../src/domain';
 
 after(cleanupClients);
@@ -19,16 +21,17 @@ function makeEvents(f: StoreFixture) {
     sequence: o.sequence ?? ++seq, shiftId: f.shiftId, type, occurredAtDeviceMs: o.atMs ?? Date.now(), lastServerOffsetMs: 0, payload,
   });
   return {
-    create: (orderId: string, tokenNumber: number, extra: { totalSen?: number; menuVersion?: string; method?: 'cash' | 'qr_manual'; note?: string | null; atMs?: number; epoch?: number; deviceId?: string } = {}) =>
+    create: (orderId: string, tokenNumber: number, extra: { totalSen?: number; menuVersion?: string; method?: 'cash' | 'qr_manual' | 'none'; note?: string | null; atMs?: number; epoch?: number; deviceId?: string } = {}) =>
       base('offline_order_created', {
         clientOrderId: orderId, offlineReceiptNumber: `O-T01-${String(seq + 1).padStart(4, '0')}`, tokenNumber, serviceMode: 'dine_in',
         menuVersion: extra.menuVersion ?? MENU_V1.version, lines: [{ lineId: uuid(), config: noodle({ size: 'medium' }), quantity: 1 }],
         totalSen: extra.totalSen ?? 900,
-        payment: extra.method === 'qr_manual'
+        payment: extra.method === 'none' ? null : extra.method === 'qr_manual'
           ? { method: 'qr_manual', tenderedSen: null, qrExternalVerificationNote: extra.note ?? null }
           : { method: 'cash', tenderedSen: 1000, qrExternalVerificationNote: null },
       }, extra),
     handoff: (orderId: string) => base('manual_handoff', { clientOrderId: orderId }),
+    paid: (orderId: string, amountSen = 900, atMs?: number) => base('offline_payment_recorded', { clientOrderId: orderId, amountSen }, { atMs }),
     served: (orderId: string) => base('manual_served', { clientOrderId: orderId }),
     returned: (orderId: string, tokenNumber: number) => base('token_returned', { clientOrderId: orderId, tokenNumber }),
     voided: (orderId: string, operationId: string) => base('sequence_void', { clientOrderId: orderId, operationId }),
@@ -44,7 +47,7 @@ async function sync(f: StoreFixture, events: Ev[], who = f.cashier) {
 
 const doc = (f: StoreFixture, p: string) => admin().doc(`stores/${f.storeId}/${p}`).get().then((s) => s.data());
 
-test('D03/D04 离线接单→人工交接→人工出餐→回收→同牌新单；每条重复上传 10 次不重复入账、不送厨', async () => {
+test('D03/D04 旧格式日志兼容：离线接单(下单即收)→人工交接→人工出餐→回收→同牌新单；每条重复上传 10 次不重复入账、不送厨', async () => {
   const f = await setupStore();
   const ev = makeEvents(f);
   const a = uuid();
@@ -95,7 +98,9 @@ test('D05 尚未制作的离线单：保持人工单；收银核实后才转电�
   const t2 = (await doc(f, `kitchenTickets/${a}`))!;
   assert.equal(t2.kitchenRouting, 'digital');
   assert.equal(t2.routedFromManual, true);
-  await f.kitchen.call('startOrder', { storeId: f.storeId, operationId: uuid(), orderId: a, expectedVersion: 2 });
+  // 转入后厨即自动制作中（与新单一致），不需要开始制作
+  assert.deepEqual([t2.fulfillmentStatus, t2.startedSource], ['preparing', 'auto']);
+  assert.equal(await f.kitchen.code('startOrder', { storeId: f.storeId, operationId: uuid(), orderId: a, expectedVersion: 2 }), 'INVALID_TRANSITION');
   // 转电子厨单后，本机再补登「人工出餐」不会被自动接纳
   const lateServe = await sync(f, [makeEvents(f).served(a)]);
   assert.deepEqual(lateServe.map((x) => [x.status, x.reasonCode]), [['needs_review', 'ORDER_STATE']]);
@@ -213,4 +218,71 @@ test('同 eventId 换内容被拒绝；后厨不能上传；越权与非法事�
   // 原单不受影响
   assert.equal(await countDocs(f.storeId, 'orders'), 1);
   void orderPayload;
+});
+
+test('§11-12 新格式：断网下单未付款 → 确认收款 → 人工出餐（即释放牌）→ 同牌新单；重复补同步 10 次账款与厨单一致', async () => {
+  const f = await setupStore();
+  const ev = makeEvents(f);
+  const a = uuid();
+  const b = uuid();
+  const events = [ev.create(a, 7, { method: 'none' }), ev.paid(a), ev.served(a), ev.create(b, 7, { method: 'none' })];
+  const first = await sync(f, events);
+  assert.deepEqual(first.map((r) => r.status), ['accepted', 'accepted', 'accepted', 'accepted'], JSON.stringify(first));
+  for (let i = 0; i < 10; i++) {
+    const again = await sync(f, events);
+    assert.ok(again.every((r) => r.status === 'accepted'));
+  }
+  assert.equal(await countDocs(f.storeId, 'orders'), 2);
+  assert.equal(await countDocs(f.storeId, 'payments'), 1, '只有一笔确认收款；b 仍未付款');
+  assert.equal(await countDocs(f.storeId, 'costEvents'), 2, '不重扣成本');
+  const pa = (await doc(f, `payments/${a}-p1`))!;
+  assert.deepEqual([pa.method, pa.source, pa.amountSen], ['unspecified', 'offline', 900]);
+  const oa = (await doc(f, `orders/${a}`))!;
+  assert.deepEqual([oa.paymentState, oa.fulfillmentStatus, oa.tokenReleaseSource], ['paid', 'served', 'served']);
+  const ob = (await doc(f, `orders/${b}`))!;
+  assert.deepEqual([ob.paymentState, ob.paidSen, ob.paymentMethod], ['unpaid', 0, null]);
+  const tok = (await doc(f, 'tokens/07'))!;
+  assert.deepEqual([tok.state, tok.orderId], ['held', b], '人工出餐释放后由新单占用');
+  const digital = await getDocs(query(collection(f.kitchen.db, `stores/${f.storeId}/kitchenTickets`), where('kitchenRouting', '==', 'digital')));
+  assert.equal(digital.size, 0, '人工单不重新送厨');
+});
+
+test('离线收款确认：可登记断网前的在线单；原单未入账时待核对；与在线登记重复时待核对、不重复入账', async () => {
+  const f = await setupStore();
+  const online = await placeOrder(f, { tokenNumber: 3 });
+  const ev = makeEvents(f);
+  const r1 = await sync(f, [ev.paid(online.result.orderId, 700)]);
+  assert.equal(r1[0].status, 'accepted');
+  assert.equal((await doc(f, `orders/${online.result.orderId}`))!.paymentState, 'paid');
+  assert.equal((await doc(f, 'tokens/03'))!.state, 'held', '收款不占牌也不释放牌');
+  // 重复：在线已登记后又来一条离线收款
+  const r2 = await sync(f, [makeEvents(f).paid(online.result.orderId, 700)]);
+  assert.deepEqual(r2.map((x) => [x.status, x.reasonCode]), [['needs_review', 'ALREADY_PAID']]);
+  assert.equal(await countDocs(f.storeId, 'payments'), 1);
+  // 金额不符
+  const other = await placeOrder(f, { tokenNumber: 4 });
+  const r3 = await sync(f, [makeEvents(f).paid(other.result.orderId, 100)]);
+  assert.equal(r3[0].reasonCode, 'AMOUNT_MISMATCH');
+  // 原离线单进入待核对：其收款事件依赖它，也待核对
+  const c = uuid();
+  const ev2 = makeEvents(f);
+  const r4 = await sync(f, [ev2.create(c, 5, { method: 'none', menuVersion: 'menu-unknown' }), ev2.paid(c)]);
+  assert.deepEqual(r4.map((x) => x.reasonCode), ['MENU_UNKNOWN', 'DEPENDS_ON_REVIEW']);
+  assert.equal(await countDocs(f.storeId, 'payments'), 1);
+  // 在线单之后在线再登记 → 被拒为已登记
+  assert.equal(await f.cashier.code('recordPayment', { storeId: f.storeId, operationId: uuid(), ...f.claim, orderId: online.result.orderId, amountSen: 700 }), 'ALREADY_PAID');
+  void pay;
+});
+
+test('人工出餐不会释放已属于新单的牌（旧离线日志重放）', async () => {
+  const f = await setupStore();
+  const ev = makeEvents(f);
+  const a = uuid();
+  await sync(f, [ev.create(a, 9, { method: 'none' }), ev.served(a)]);
+  const online = await placeOrder(f, { tokenNumber: 9 });
+  // 旧格式 token_returned 迟到：只补记时间，不动新单的牌
+  const late = await sync(f, [makeEvents(f).returned(a, 9)]);
+  assert.equal(late[0].status, 'accepted');
+  const tok = (await doc(f, 'tokens/09'))!;
+  assert.deepEqual([tok.state, tok.orderId], ['held', online.result.orderId]);
 });

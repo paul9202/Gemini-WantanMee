@@ -71,7 +71,17 @@ export async function login(tab, role) {
 }
 
 const FS = 'http://127.0.0.1:8080/v1/projects/demo-hao-wantan/databases/(default)/documents/stores/hao-pontian-main';
-const decode = (v) => v.stringValue ?? (v.integerValue !== undefined ? Number(v.integerValue) : v.booleanValue ?? (v.nullValue !== undefined ? null : v));
+// Firestore REST 值 → JS 值；嵌套的 map / array 递归解码（例如 cancelRejection、writeOff）。
+const decode = (v) => {
+  if (v.stringValue !== undefined) return v.stringValue;
+  if (v.integerValue !== undefined) return Number(v.integerValue);
+  if (v.doubleValue !== undefined) return v.doubleValue;
+  if (v.booleanValue !== undefined) return v.booleanValue;
+  if (v.nullValue !== undefined) return null;
+  if (v.mapValue) return Object.fromEntries(Object.entries(v.mapValue.fields ?? {}).map(([k, x]) => [k, decode(x)]));
+  if (v.arrayValue) return (v.arrayValue.values ?? []).map(decode);
+  return v;
+};
 
 /** Emulator REST（owner 令牌绕过 Rules，仅本机测试用）。 */
 export async function fsList(collection) {

@@ -1,5 +1,6 @@
 // 设置与培训端到端：邀请成员 → 设置密码链接 → 员工登录；发布菜单价/售罄 → 收银机按新价收款；
 // 英文可选设置（POS/KDS）；培训图卡截图与 A4 打印 PDF；停用成员。
+// 2026-10-23 起：收银机按新价「下单送厨」（不收款）；英文 KDS 只有 Served，不再有 Start。
 // 前提：干净的 Emulator 已启动并 seed；VITE_USE_EMULATORS=true 构建后在 4173 端口 vite preview。
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fsGet, fsList, login, openChrome } from './lib/cdp.mjs';
@@ -98,20 +99,23 @@ try {
   await pos.goto('/device');
   await pos.page(`await __waitFor('连接与设备'); __click('English'); await __sleep(400);`);
   await pos.goto('/pos');
-  const en = await pos.page(`await __waitFor('Pickthedish', 15000); return { sold: __has('Soldout'), from: __has('RM8.00from'), pay: __has('Takepayment') };`);
-  check('POS 英文：Sold out / from RM8 / Pay', en.sold && en.from && en.pay, JSON.stringify(en));
+  const en = await pos.page(`await __waitFor('Pickthedish', 15000); return { sold: __has('Soldout'), from: __has('RM8.00from'), send: __has('Sendtokitchen') || __has('Goesstraighttothekitchen') };`);
+  check('POS 英文：Sold out / from RM8 / Send to kitchen', en.sold && en.from && en.send, JSON.stringify(en));
   await pos.page(`__click('RedSauce'); await __sleep(200);`);
   await save(pos, 'pos-en-1366');
-  await pos.page(`__click('Add'); await __sleep(300); __click('paymentRM8'); await __sleep(400); __click('Exact'); await __sleep(200); __click('Confirmpayment&send'); await __waitFor('Acceptedonline', 90000);`);
+  await pos.page(`__click('Add'); await __sleep(300);
+    const send = [...document.querySelectorAll('aside[aria-label="Order"] button')].find((b) => b.innerText.includes('Send to kitchen'));
+    if (!send.innerText.includes('RM8.00')) throw new Error('Send button price: ' + send.innerText);
+    send.click(); await __waitFor('Acceptedonline', 90000);`);
   let o;
   for (let i = 0; i < 30 && !o; i++) { o = (await fsList('orders')).find((x) => x.menuVersion === cfg.activeMenuVersion); if (!o) await new Promise((r) => setTimeout(r, 1000)); }
-  check('新单按新菜单版本 RM8 成交', o && o.totalSen === 800, o ? `${o.menuVersion} ${o.totalSen}` : 'none');
+  check('新单按新菜单版本 RM8 下单（待收款）', o && o.totalSen === 800 && o.paymentState === 'unpaid', o ? `${o.menuVersion} ${o.totalSen} ${o.paymentState}` : 'none');
   await save(pos, 'pos-en-accepted-1366');
 
   // ---- 后厨英文 KDS ----
   await staff.goto('/kitchen', 5000);
-  const kds = await staff.page(`await __waitFor('Start', 20000); return { start: __has('Start'), name: __has('RedSauceNoodles·Small'), noodle: __has('Tocook·Thin') };`);
-  check('KDS 英文：菜名、待下锅、开始制作', kds.start && kds.name && kds.noodle, JSON.stringify(kds));
+  const kds = await staff.page(`await __waitFor('Served', 20000); return { served: [...document.querySelectorAll('article button')].some((b) => b.innerText.trim() === 'Served'), noStart: ![...document.querySelectorAll('button')].some((b) => b.innerText.trim() === 'Start'), name: __has('RedSauceNoodles·Small'), noodle: __has('Inprogress·Thin'), auto: __has('Auto(cookingfromorder)') };`);
+  check('KDS 英文：菜名、制作中合计、只有 Served（无 Start）、自动开始', kds.served && kds.noStart && kds.name && kds.noodle && kds.auto, JSON.stringify(kds));
   await save(staff, 'kds-en-1366');
 
   // ---- 培训图卡 ----

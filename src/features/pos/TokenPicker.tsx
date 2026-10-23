@@ -1,6 +1,6 @@
 /**
- * 餐牌选择器：1–50，四种状态（可用 / 当前 / 占用中 / 待回收）。
- * 占用牌不能强选；待回收牌在实体牌收回后由收银确认释放。
+ * 餐牌选择器：1–50，状态（可用 / 当前 / 占用中）。出餐或取消成立即自动释放，不再人工回收。
+ * 占用牌不能强选。「旧版待回收」只出现在改版前出餐的单上，实体牌收回后由收银逐张确认释放（留审计）。
  */
 import { useState } from 'react';
 import { TokenBoard } from '../../domain/tokens';
@@ -30,7 +30,7 @@ export function TokenPicker({ board, current, onPick, onRelease, onClose }: {
           <span className="inline-flex items-center gap-1"><i className="h-4 w-4 rounded border-2 border-line bg-card" />{tr('可用', 'Free')}</span>
           <span className="inline-flex items-center gap-1"><i className="h-4 w-4 rounded bg-ink" />{tr('当前', 'Current')}</span>
           <span className="inline-flex items-center gap-1"><i className="h-4 w-4 rounded bg-[#cfd5cc]" />{tr('占用中', 'In use')}</span>
-          <span className="inline-flex items-center gap-1"><i className="h-4 w-4 rounded border-2 border-dashed border-warn bg-warn-bg" />{tr('待回收（点击确认实体牌已收回）', 'To collect (tap when token is back)')}</span>
+          <span className="inline-flex items-center gap-1"><i className="h-4 w-4 rounded border-2 border-dashed border-warn bg-warn-bg" />{tr('旧版待回收（改版前出餐的单；实体牌收回后点击确认）', 'Legacy “to collect” (pre-update orders; tap when token is back)')}</span>
         </div>
         <div className="grid grid-cols-5 gap-2 sm:grid-cols-10">
           {Array.from({ length: 50 }, (_, i) => i + 1).map((n) => {
@@ -48,7 +48,7 @@ export function TokenPicker({ board, current, onPick, onRelease, onClose }: {
                   setInfo(null);
                   if (state === 'available') { onPick(n); onClose(); }
                   else if (state === 'awaiting_return' && t.orderId) setConfirm({ n, orderId: t.orderId });
-                  else setInfo(tr(`${n}号仍被订单 …${t?.orderId?.slice(-6) ?? ''} 占用，出餐并回收实体牌后才能再用。`, `No. ${n} is still used by order …${t?.orderId?.slice(-6) ?? ''}. Serve it and collect the token first.`));
+                  else setInfo(tr(`${n}号仍被订单 …${t?.orderId?.slice(-6) ?? ''} 占用（制作中或取消待后厨确认），出餐或取消成立后自动可用。`, `No. ${n} is still used by order …${t?.orderId?.slice(-6) ?? ''} (cooking or cancel pending). It frees itself once served or cancelled.`));
                 }}
                 className={`h-14 rounded-xl border-2 text-lg font-bold tabular-nums ${cls}`}>
                 {n}

@@ -1,7 +1,7 @@
 /**
  * 本机 IndexedDB（独立于 Firestore 缓存）。
  * - kv：设备 ID、本机序号、离线营业快照、上次发出的牌号
- * - pendingOps：在线收款请求（结果不明时据此核对，不重复收钱）
+ * - pendingOps：在线下单请求（结果不明时据此核对，不重复送厨 / 不让顾客重复付钱）
  * - localOrders / outbox：离线接单与不可变事件日志
  * 离线接单在「同一个事务」里写入订单、事件与序号：任何一步失败整次回滚，界面不得假装成功。
  * 升级版本只新增存储，绝不删除 outbox / pendingOps。
@@ -91,7 +91,8 @@ export interface PendingOp {
   status: PendingStatus;
   createdAtMs: number;
   updatedAtMs: number;
-  summary: { tokenNumber: number; totalSen: number; method: string; tenderedSen: number | null };
+  /** 旧版记录还带 method / tenderedSen（下单即收款），只用于显示。 */
+  summary: { tokenNumber: number; totalSen: number; method?: string; tenderedSen?: number | null };
   result?: Record<string, unknown>;
   reasonCode?: string;
 }
@@ -153,7 +154,7 @@ export function commitOfflineOrder(key: string, serverApplied: number, build: (s
   });
 }
 
-/** 追加人工交接 / 人工出餐 / 餐牌回收事件。 */
+/** 追加收款确认 / 人工交接 / 人工出餐（旧版还有餐牌回收）事件。 */
 export function appendOfflineEvent(key: string, serverApplied: number, build: (sequence: number) => OfflineEvent) {
   return atomic(['kv', 'outbox'], async (tx) => {
     const sequence = await nextSeq(tx, key, serverApplied);

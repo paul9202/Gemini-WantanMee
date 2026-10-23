@@ -73,7 +73,8 @@ function chime() {
 export type SoundState = 'off' | 'on' | 'needs_tap';
 
 /**
- * 新单提示音。首次收到服务器数据时只记录已有单，不响；之后出现新的待做单才响。
+ * 新单提示音。首次收到服务器数据时只记录已有单，不响；之后出现新的制作中电子单才响
+ * （新单接单即制作中，传入的是全部未出餐、无取消申请的电子单 ID）。
  * 来自缓存的数据不算新单（断网恢复时不把旧单当新单）。
  */
 export function useNewTicketChime(queuedIds: string[], fromServer: boolean): { state: SoundState; toggle: () => void } {

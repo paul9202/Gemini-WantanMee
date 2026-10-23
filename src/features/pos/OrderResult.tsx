@@ -1,6 +1,7 @@
 /**
- * 接单结果：三个事实分别有依据才点亮——本机已记录（IndexedDB 事务完成）、云端已接单（服务器事务提交）、
- * 后厨已收到（KDS 回执）。断网接单只点亮第一步，后厨一步改为人工传单。绝不在收款后立即全部打勾。
+ * 下单结果：三个事实分别有依据才点亮——本机已记录（IndexedDB 事务完成）、云端已接单（服务器事务提交）、
+ * 后厨已收到（KDS 回执）。断网接单只点亮第一步，后厨一步改为人工传单。绝不在下单后立即全部打勾。
+ * 收款是独立的第四件事：默认待收款，可立即确认或之后在「待登记收款」补登记；下单成功不等于已付。
  */
 import { ReactNode } from 'react';
 import { AckState, ackState } from '../../domain/kitchenLink';
@@ -12,13 +13,12 @@ import { useT } from '../../app/i18n';
 
 export interface ResultSummary {
   serviceMode: 'dine_in' | 'takeaway';
-  method: 'cash' | 'qr_manual';
   firstItem: string;
 }
 
 export type ResultStage =
-  | { kind: 'accepted'; orderId: string; receiptNumber: string; tokenNumber: number; totalSen: Sen; changeSen: Sen | null; acceptedAtMs: number; summary: ResultSummary }
-  | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: Sen; changeSen: Sen | null; summary: ResultSummary };
+  | { kind: 'accepted'; orderId: string; receiptNumber: string; tokenNumber: number; totalSen: Sen; acceptedAtMs: number; summary: ResultSummary }
+  | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: Sen; summary: ResultSummary };
 
 interface Facts {
   ack: AckState | null;
@@ -62,6 +62,8 @@ interface Props {
   onHandoff: () => void;
   onOnlineHandoff: () => void;
   onReceipt: () => void;
+  /** 订单是否已登记收款（云端订单或本机收款事件）。 */
+  paid: boolean;
 }
 
 function Steps({ steps, offline }: { steps: Facts['steps']; offline: boolean }) {
@@ -107,16 +109,16 @@ function Alerts({ stage, facts, handedOff, onlineHandoffAtMs, onHandoff, onOnlin
   );
 }
 
-/** 收款完成后的弹窗（餐牌大字、三个独立事实、人工交接入口）。 */
+/** 下单完成后的弹窗（餐牌大字、三个独立事实、人工交接入口、独立的收款区）。 */
 export function OrderResultDialog(props: Props & { onClose: () => void; extra?: ReactNode }) {
   const { stage, onClose, onReceipt } = props;
   const tr = useT();
   const facts = useFacts(stage, props.kitchenAckAtMs, props.kitchenLastSeenMs, props.offsetMs, props.handedOff);
   const offline = stage.kind === 'local_accepted';
-  const title = offline ? tr('收款完成 · 已保存在本机', 'Paid · saved on this device')
-    : facts.ack === 'acked' ? tr('收款完成，后厨已收到', 'Paid — the kitchen has it')
-    : facts.ack === 'alarm' ? tr('收款完成，后厨还没确认', 'Paid — kitchen has not confirmed')
-    : tr('收款完成，正在送到后厨', 'Paid — sending to the kitchen');
+  const title = offline ? tr('订单已保存在本机 · 请人工传单', 'Order saved on this device · hand the ticket over')
+    : facts.ack === 'acked' ? tr('订单已保存，后厨已收到', 'Order saved — the kitchen has it')
+    : facts.ack === 'alarm' ? tr('订单已保存，后厨还没确认', 'Order saved — kitchen has not confirmed')
+    : tr('订单已保存，正在送到后厨', 'Order saved — sending to the kitchen');
   const s = stage.summary;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#1d2420]/55 p-4" role="dialog" aria-modal="true" aria-label={title} onKeyDown={(e) => e.key === 'Escape' && onClose()}>
@@ -126,8 +128,7 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
         </span>
         <h2 className="mt-4 text-2xl font-bold sm:text-[28px]" aria-live="polite">{title}</h2>
         <p className="mt-1 text-ink-2">
-          {s.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')} · {s.method === 'cash' ? tr('现金', 'Cash') : 'QR'} · {formatRM(stage.totalSen)}
-          {stage.changeSen !== null && stage.changeSen > 0 && <> · {tr('找零', 'change')} <b className="text-ink">{formatRM(stage.changeSen)}</b></>}
+          {s.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')} · {formatRM(stage.totalSen)} · {props.paid ? tr('已收款', 'Paid') : tr('待收款', 'Unpaid')}
         </p>
         <div className="mt-5 text-7xl font-black tabular-nums text-ok">{stage.tokenNumber}</div>
         <p className="mt-1 font-semibold">{tr('把这张餐牌交给客人', 'Give this token to the customer')}</p>
@@ -136,6 +137,7 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
         </p>
         <div className="mt-6"><Steps steps={facts.steps} offline={offline} /></div>
         <Alerts {...props} facts={facts} />
+        {props.extra}
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <button type="button" onClick={onReceipt} className="h-14 rounded-xl border border-line px-6 font-bold">{tr('收据', 'Receipt')}</button>
           <button type="button" onClick={onClose} autoFocus className="flex h-14 items-center gap-2 rounded-xl bg-ok px-7 font-bold text-white">{tr('下一单', 'Next order')}<Icon name="arrow" size={20} /></button>
@@ -154,7 +156,7 @@ export function RecentOrder(props: Props & { onOpen: () => void }) {
   return (
     <section className="mt-6 border-t border-line pt-4" aria-label={tr('刚刚送出的订单', 'Last order')}>
       <h3 className="mb-2 text-sm text-ink-2">{stage.kind === 'local_accepted' ? tr('刚刚本机接单', 'Just saved here') : tr('刚刚送到后厨', 'Just sent to the kitchen')}</h3>
-      <button type="button" onClick={onOpen} className="flex w-full items-center gap-3 rounded-xl px-1 py-2 text-left hover:bg-subtle">
+      <button type="button" onClick={onOpen} className="flex min-h-14 w-full items-center gap-3 rounded-xl px-1 py-2 text-left hover:bg-subtle">
         <b className="text-xl tabular-nums">{stage.tokenNumber}</b>
         <span className="min-w-0 flex-1 truncate text-sm">{stage.summary.firstItem}</span>
         <span className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-sm font-semibold ${last.done ? 'bg-ok-bg text-ok' : last.warn ? 'bg-warn-bg text-warn' : 'bg-subtle text-ink-2'}`}>

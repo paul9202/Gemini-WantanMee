@@ -37,7 +37,7 @@ test('O11 人工传单：收银登记，不改制作状态与版本；后厨仍�
   const ticket = (await admin().doc(`stores/${f.storeId}/kitchenTickets/${result.orderId}`).get()).data()!;
   assert.ok(ticket.manualHandoffAtMs);
   assert.equal(ticket.version, 1);
-  assert.equal(ticket.fulfillmentStatus, 'queued');
+  assert.equal(ticket.fulfillmentStatus, 'preparing', '人工传单不改制作状态（新单本来就是自动制作中）');
   await f.kitchen.call('serveOrder', { storeId: f.storeId, operationId: uuid(), orderId: result.orderId, expectedVersion: 1 });
   assert.equal(await f.cashier.code('recordManualHandoff', { storeId: f.storeId, operationId: uuid(), orderId: result.orderId, reason: '已出餐后不能登记' }), 'INVALID_TRANSITION');
 });
@@ -59,8 +59,7 @@ test('O12 新营业日仍有昨晚未完成单：后厨继续可见可做，保�
   // 后厨查询不按日期截断：两张都在
   const q = await getDocs(query(collection(f.kitchen.db, `stores/${f.storeId}/kitchenTickets`), where('kitchenRouting', '==', 'digital'), where('fulfillmentStatus', 'in', ['queued', 'preparing'])));
   assert.deepEqual(q.docs.map((x) => x.data().businessDate).sort(), [today, yesterday].sort());
-  await f.kitchen.call('startOrder', { storeId: f.storeId, operationId: uuid(), orderId: old.result.orderId, expectedVersion: 1 });
-  await f.kitchen.call('serveOrder', { storeId: f.storeId, operationId: uuid(), orderId: old.result.orderId, expectedVersion: 2 });
+  await f.kitchen.call('serveOrder', { storeId: f.storeId, operationId: uuid(), orderId: old.result.orderId, expectedVersion: 1 });
   const o = (await db.doc(`stores/${f.storeId}/orders/${old.result.orderId}`).get()).data()!;
   assert.equal(o.fulfillmentStatus, 'served');
   assert.equal(o.businessDate, yesterday, '保持原营业日');

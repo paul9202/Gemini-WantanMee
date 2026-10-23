@@ -1,7 +1,7 @@
 /** 账本 → 日结与报表（04 §5 固定样本、F04、F06、作废支出、产品结构、CSV）。 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BOM_V1, closeFigures, csvClose, csvExpenses, csvOrders, DEFAULT_FIXED_COST, describeDiff, dishRanking, LedgerDocs, OrderReportRow, productMix, receiptsTrend, wastageCostUnits } from './index';
+import { BOM_V1, closeFigures, closeFiguresV2, isCloseFiguresV2, csvClose, csvExpenses, csvOrders, DEFAULT_FIXED_COST, describeDiff, dishRanking, LedgerDocs, OrderReportRow, productMix, receiptsTrend, wastageCostUnits } from './index';
 
 const D = '2026-10-22';
 const docs = (): LedgerDocs => ({
@@ -92,4 +92,49 @@ test('收款走势：单日按门店时区整点（含退款、补齐空档）�
   const week = receiptsTrend(pays, refunds, { start: '2026-10-21', endExclusive: '2026-10-24' }, 'Asia/Kuala_Lumpur');
   assert.deepEqual(week.map((b) => [b.label, b.netSen]), [['10-21', 0], ['10-22', 2000], ['10-23', 0]]);
   assert.deepEqual(receiptsTrend([], [], { start: D, endExclusive: '2026-10-23' }, 'Asia/Kuala_Lumpur'), []);
+});
+
+test('§11-11/13 新版日结：只汇总统一收款（不拆现金/QR、不算钱箱）；跨日补登记计入登记日；未登记显式列出', () => {
+  const D0 = '2026-10-21';
+  const d: LedgerDocs = {
+    payments: [
+      { id: 'n1-p1', orderId: 'n1', businessDate: D, orderBusinessDate: D, method: 'unspecified', amountSen: 900, occurredAtMs: 10 },
+      // 前一营业日的旧单今天才补登记
+      { id: 'old-p1', orderId: 'old', businessDate: D, orderBusinessDate: D0, method: 'unspecified', amountSen: 700, occurredAtMs: 11 },
+      // 误登记后更正
+      { id: 'n2-p1', orderId: 'n2', businessDate: D, orderBusinessDate: D, method: 'unspecified', amountSen: 1800, occurredAtMs: 12 },
+      { id: 'n2-p1-rev', orderId: 'n2', businessDate: D, orderBusinessDate: D, method: 'unspecified', amountSen: -1800, occurredAtMs: 13, kind: 'reversal', reversesPaymentId: 'n2-p1' },
+    ],
+    refunds: [], costEvents: [{ id: 'c', orderId: 'n1', businessDate: D, costUnits: 20000, kind: 'allocate' }], wastage: [], expenses: [], cashMovements: [],
+    writeOffs: [
+      { id: 'x-w1', orderId: 'x', businessDate: D, orderBusinessDate: D0, amountSen: 800, kind: 'write_off', reason: '顾客未付离开', occurredAtMs: 20 },
+      { id: 'y-w1', orderId: 'y', businessDate: D, orderBusinessDate: D, amountSen: 500, kind: 'write_off', reason: '跑单', occurredAtMs: 21 },
+      { id: 'y-w1-reinstate', orderId: 'y', businessDate: D, orderBusinessDate: D, amountSen: -500, kind: 'reinstate', reason: '回来付了', occurredAtMs: 22 },
+    ],
+  };
+  const row = (id: string, businessDate: string, totalSen: number, fulfillmentStatus: 'preparing' | 'served' | 'cancelled', paymentState: 'unpaid' | 'paid' | 'not_due', portionCount = 1) =>
+    ({ id, receiptNumber: id, tokenNumber: 1, businessDate, totalSen, fulfillmentStatus, paymentState, portionCount });
+  const dayOrders = [row('n1', D, 900, 'served', 'paid'), row('n2', D, 1800, 'served', 'unpaid', 2), row('n3', D, 500, 'preparing', 'unpaid'), row('n4', D, 600, 'cancelled', 'not_due')];
+  const unpaid = [row('n2', D, 1800, 'served', 'unpaid'), row('n3', D, 500, 'preparing', 'unpaid'), row('older', D0, 1200, 'served', 'unpaid')];
+  const f = closeFiguresV2(d, dayOrders, unpaid, D, DEFAULT_FIXED_COST);
+  assert.equal(f.schemaVersion, 2);
+  assert.equal(f.validOrderCount, 3);
+  assert.equal(f.validOrderSen, 3200, '有效订单金额不含取消单');
+  assert.equal(f.servedPortions, 3);
+  assert.equal(f.registeredSen, 1600, '900 + 跨日 700 + 1800 − 更正 1800');
+  assert.equal(f.registeredForEarlierDaysSen, 700);
+  assert.equal(f.paymentCorrectionsSen, -1800);
+  assert.equal(f.netRegisteredSen, 1600);
+  assert.equal(f.sameDayUnpaidSen, 2300);
+  assert.equal(f.unpaid.count, 3, '含之前营业日结转来的未登记单');
+  assert.equal(f.unpaid.totalSen, 3500);
+  assert.equal(f.unpaid.orders[0].id, 'older');
+  assert.equal(f.summary.hasLegacyChannels, false);
+  assert.deepEqual([f.writtenOffSen, f.writtenOffCount], [800, 2], '放弃追收单独列出（扣除恢复），不进已登记收款');
+  assert.equal(f.registeredSen, 1600, '放弃追收不增加实收');
+  assert.ok(!('expectedCashSen' in f), '不推算钱箱应有');
+  const csv = csvClose(f, 1, '');
+  assert.ok(!/钱箱|现金|QR/.test(csv), csv);
+  assert.ok(csv.includes('人工登记'));
+  assert.ok(isCloseFiguresV2(f) && !isCloseFiguresV2(closeFigures(docs(), { businessDate: D, countedCashSen: 0, qrBankConfirmedSen: 0 }, DEFAULT_FIXED_COST)));
 });

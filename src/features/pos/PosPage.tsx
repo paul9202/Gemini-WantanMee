@@ -1,14 +1,16 @@
 /**
  * POS 点单页：同一画布完成常规点单（02 §4）；指定主收银机断网时本机接单（01 §7）。
+ * 下单即送厨，不需要先收款（2026-10-23 营业流程）：主按钮「下单送厨 · RM金额」。
  * 接单进度只显示有依据的事实：本机已记录 → 云端已接单 → 后厨已收到；
  * 断网时只完成第一步，后两步明确显示「未同步」与「请人工传单」。
+ * 收款是独立的事：下单后可立即确认，或送餐收钱后在常驻的「待登记收款」里按订单确认。
  */
 import { useEffect, useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, computeTotals, emptyCart, setLineQuantity, setServiceMode, updateLineConfig } from '../../domain/cart';
 import { defaultConfig, LineConfig, normalizeConfig } from '../../domain/lineItem';
-import { formatRM, parseRMInput } from '../../domain/money';
+import { formatRM } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, TokenStateName } from '../../domain/tokens';
 import { formatClock } from '../../domain/timing';
@@ -31,10 +33,10 @@ import { Icon } from '../../ui/visual';
 import { useLang, useT } from '../../app/i18n';
 import { ShellHeaderActions } from '../../app/Shell';
 import { lineName } from '../../domain/lineItem';
+import { PendingPaymentsDrawer, QuickPay, useUnpaidOrders } from './PendingPayments';
 import { CartPanel } from './CartPanel';
 import { Customizer } from './Customizer';
 import { OrderResultDialog, RecentOrder, ResultStage, ResultSummary } from './OrderResult';
-import { PaymentDrawer, PaymentInput } from './PaymentDrawer';
 import { ProductGrid } from './ProductGrid';
 import { TokenPicker } from './TokenPicker';
 import { ReceiptDialog, receiptFromLocal, receiptFromOrder } from '../receipt/ReceiptDialog';
@@ -45,7 +47,7 @@ interface CreateOrderResult {
   receiptNumber: string;
   tokenNumber: number;
   totalSen: number;
-  changeSen: number | null;
+  paymentState: 'unpaid';
   acceptedAtMs: number;
   replayed?: boolean;
 }
@@ -55,7 +57,7 @@ type Stage =
   | { kind: 'saving' }
   | { kind: 'submitting' }
   | { kind: 'accepted'; result: CreateOrderResult; summary: ResultSummary }
-  | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: number; changeSen: number | null; summary: ResultSummary }
+  | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: number; summary: ResultSummary }
   | { kind: 'rejected'; reason: string; code: string }
   | { kind: 'unknown'; operationId: string }
   | { kind: 'local_failed'; message: string };
@@ -100,7 +102,7 @@ export function PosPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   // 窄屏（<1024）本单收起为底部条，点开后全屏显示。
   const [cartOpen, setCartOpen] = useState(false);
-  const [payOpen, setPayOpen] = useState(false);
+  const [payListOpen, setPayListOpen] = useState(false);
   const [stage, setStage] = useState<Stage>({ kind: 'idle' });
   const [notice, setNotice] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<{ key: string; load: () => Promise<ReceiptSource> } | null>(null);
@@ -146,7 +148,8 @@ export function PosPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineMode, usingSnapshot, reg.status, reg.serverApplied, reg.shiftId, reg.claim?.registerEpoch, tokensFromServer, tokensQ.data, config, member]);
 
-  const lastOrder = useLiveDoc<{ kitchenAckAtMs: number | null; fulfillmentStatus: string; manualHandoffAtMs?: number | null }>(
+  const unpaid = useUnpaidOrders(menu ? (c) => lineName(menu, c, lang) : undefined);
+  const lastOrder = useLiveDoc<{ kitchenAckAtMs: number | null; fulfillmentStatus: string; manualHandoffAtMs?: number | null; paymentState?: string }>(
     stage.kind === 'accepted' ? storePath(`orders/${stage.result.orderId}`) : null,
   );
 
@@ -160,8 +163,8 @@ export function PosPage() {
 
   const payDisabledReason = writer !== 'held' ? tr('另一个标签页正在收银，这里只能查看', 'Another tab is the register — view only here')
     : cart.lines.length === 0 ? tr('先加入餐品', 'Add an item first')
-    : token === null ? tr('没有可用餐牌，请先回收餐牌', 'No free token — collect tokens first')
-    : !offlineMode && blockingOnline.length > 0 ? tr('有收款待你决定处理方式，请先到「同步」页处理', 'A payment needs your decision — open Sync first')
+    : token === null ? tr('没有可用餐牌：牌在出餐或取消成立后自动可用', 'No free token — tokens free up when orders are served or cancelled')
+    : !offlineMode && blockingOnline.length > 0 ? tr('有订单待你决定处理方式，请先到「同步」页处理', 'An order needs your decision — open Sync first')
     : null;
 
   function addOrSave() {
@@ -194,9 +197,8 @@ export function PosPage() {
     setEditingLineId(null);
   }
 
-  const summaryOf = (method: 'cash' | 'qr_manual'): ResultSummary => ({
+  const summaryOf = (): ResultSummary => ({
     serviceMode: cart.serviceMode,
-    method,
     firstItem: cart.lines.map((l) => `${lineName(menu, l.config, lang)}${l.quantity > 1 ? ` ×${l.quantity}` : ''}`).join('，'),
   });
 
@@ -206,33 +208,30 @@ export function PosPage() {
     setCart(emptyCart(cart.serviceMode));
     setEditingLineId(null);
     setUndo(null);
-    setPayOpen(false);
   }
 
   const lines = () => cart.lines.map((l) => ({ lineId: l.lineId, config: l.config, quantity: l.quantity }));
 
-  /** 断网：订单、收款事实、占牌、日志、序号在同一个 IndexedDB 事务里提交。 */
-  async function confirmOffline(p: PaymentInput) {
+  /** 断网：订单（未付款）、占牌、日志、序号在同一个 IndexedDB 事务里提交；收款另记事件。 */
+  async function confirmOffline() {
     if (!menu || !reg.claim || !reg.shiftId || token === null) return;
     const claim = reg.claim;
     const clientOrderId = crypto.randomUUID();
-    const changeSen = p.method === 'cash' && p.tenderedSen !== null ? p.tenderedSen - totals.totalSen : null;
     setStage({ kind: 'saving' });
     try {
       const { order } = await commitOfflineOrder(seqKey(claim.registerId, claim.registerEpoch), reg.serverApplied, (sequence) => {
         const payload = {
           clientOrderId, offlineReceiptNumber: offlineReceiptNumber(claim.registerId, sequence), tokenNumber: token, serviceMode: cart.serviceMode,
-          menuVersion: menu.version, lines: lines(), totalSen: totals.totalSen,
-          payment: { method: p.method, tenderedSen: p.tenderedSen, qrExternalVerificationNote: p.qrExternalVerificationNote },
+          menuVersion: menu.version, lines: lines(), totalSen: totals.totalSen, payment: null,
         };
         const event: OfflineEvent = {
           eventId: crypto.randomUUID(), ...claim, sequence, shiftId: reg.shiftId!, occurredAtDeviceMs: Date.now(),
           lastServerOffsetMs: rt.snapshot?.serverOffsetMs ?? 0, type: 'offline_order_created', payload,
         };
-        return { event, order: { ...payload, sequence, createdAtMs: Date.now(), changeSen } };
+        return { event, order: { ...payload, sequence, createdAtMs: Date.now(), changeSen: null } };
       });
       await reloadLocal();
-      setStage({ kind: 'local_accepted', clientOrderId, offlineReceiptNumber: order.offlineReceiptNumber, tokenNumber: token, totalSen: totals.totalSen, changeSen, summary: summaryOf(p.method) });
+      setStage({ kind: 'local_accepted', clientOrderId, offlineReceiptNumber: order.offlineReceiptNumber, tokenNumber: token, totalSen: totals.totalSen, summary: summaryOf() });
       setResultOpen(true);
       clearAfterAccept(token);
     } catch (e) {
@@ -240,13 +239,13 @@ export function PosPage() {
     }
   }
 
-  /** 人工交接 / 人工出餐 / 餐牌回收：追加不可变本机事件。 */
+  /** 人工交接 / 人工出餐 /（旧版）餐牌回收：追加不可变本机事件。 */
   const appendManual = (type: 'manual_handoff' | 'manual_served' | 'token_returned', clientOrderId: string, tokenNumber?: number) =>
     reg.claim && reg.shiftId
-      ? appendManualEvent({ claim: reg.claim, shiftId: reg.shiftId, serverApplied: reg.serverApplied }, type, clientOrderId, tokenNumber)
+      ? appendManualEvent({ claim: reg.claim, shiftId: reg.shiftId, serverApplied: reg.serverApplied }, type, clientOrderId, { tokenNumber })
       : Promise.resolve('收银机未就绪');
 
-  async function confirmOnline(p: PaymentInput) {
+  async function confirmOnline() {
     if (!menu || !reg.claim || !reg.shiftId || token === null) return;
     // 先补传离线日志，保证序号连续。
     if (unsynced.length) {
@@ -261,11 +260,10 @@ export function PosPage() {
     const payload = {
       operationId, ...claim, sequence, shiftId: reg.shiftId,
       order: { clientOrderId, tokenNumber: token, serviceMode: cart.serviceMode, menuVersion: menu.version, lines: lines(), expectedTotalSen: totals.totalSen, deviceAcceptedAtMs: Date.now() },
-      payment: { method: p.method, tenderedSen: p.tenderedSen, qrConfirmed: p.qrConfirmed },
     };
     const op: PendingOp = {
       operationId, name: 'createOrder', payload, status: 'submitting', createdAtMs: Date.now(), updatedAtMs: Date.now(),
-      summary: { tokenNumber: token, totalSen: totals.totalSen, method: p.method, tenderedSen: p.tenderedSen },
+      summary: { tokenNumber: token, totalSen: totals.totalSen },
     };
     setStage({ kind: 'saving' });
     try {
@@ -280,7 +278,7 @@ export function PosPage() {
       const result = await submit<CreateOrderResult>('createOrder', payload);
       await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
       if (!result.replayed) void recordServerOffset(result.acceptedAtMs - (sentAt + Date.now()) / 2);
-      setStage({ kind: 'accepted', result, summary: summaryOf(p.method) });
+      setStage({ kind: 'accepted', result, summary: summaryOf() });
       setResultOpen(true);
       clearAfterAccept(result.tokenNumber);
     } catch (e) {
@@ -293,12 +291,12 @@ export function PosPage() {
         // 结果不明：保留原 ID，等待核对；绝不改成新的人工单。
         await putPendingOp({ ...op, status: 'unknown_result', updatedAtMs: Date.now() });
         setStage({ kind: 'unknown', operationId });
-        setPayOpen(false);
       }
     }
     await reloadLocal();
   }
 
+  /** 旧版待回收牌（改版前出餐的单）：实体牌收回后逐张释放。新单出餐 / 取消即自动释放。 */
   async function releaseTokenAction(n: number, orderId: string): Promise<string | null> {
     if (!reg.claim || !reg.shiftId) return '收银机未就绪';
     const localUnsynced = rt.localOrders.some((o) => o.clientOrderId === orderId)
@@ -321,12 +319,15 @@ export function PosPage() {
   const oldest = queueQ.data.reduce((m, t) => Math.min(m, t.acceptedAtEffectiveMs), Infinity);
   const unknownOps = unresolved.filter((o) => o.status !== 'not_found');
   const reviewCount = rt.outbox.filter((r) => r.status === 'needs_review' || r.status === 'rejected').length;
-  const handedOff = stage.kind === 'local_accepted' && manualStatus(rt.outbox.map((r) => r.event), stage.clientOrderId).handedOff;
+  const localStatus = stage.kind === 'local_accepted' ? manualStatus(rt.outbox.map((r) => r.event), stage.clientOrderId) : null;
+  const handedOff = Boolean(localStatus?.handedOff);
+  const resultPaid = stage.kind === 'accepted' ? lastOrder.data?.paymentState === 'paid'
+    : stage.kind === 'local_accepted' ? Boolean(localStatus?.paid) || rt.outbox.some((r) => r.event.type === 'offline_payment_recorded' && r.event.payload.clientOrderId === stage.clientOrderId) : false;
 
   const resultStage: ResultStage | null = stage.kind === 'accepted'
-    ? { kind: 'accepted', orderId: stage.result.orderId, receiptNumber: stage.result.receiptNumber, tokenNumber: stage.result.tokenNumber, totalSen: stage.result.totalSen, changeSen: stage.result.changeSen, acceptedAtMs: stage.result.acceptedAtMs, summary: stage.summary }
+    ? { kind: 'accepted', orderId: stage.result.orderId, receiptNumber: stage.result.receiptNumber, tokenNumber: stage.result.tokenNumber, totalSen: stage.result.totalSen, acceptedAtMs: stage.result.acceptedAtMs, summary: stage.summary }
     : stage.kind === 'local_accepted'
-      ? { kind: 'local_accepted', clientOrderId: stage.clientOrderId, offlineReceiptNumber: stage.offlineReceiptNumber, tokenNumber: stage.tokenNumber, totalSen: stage.totalSen, changeSen: stage.changeSen, summary: stage.summary }
+      ? { kind: 'local_accepted', clientOrderId: stage.clientOrderId, offlineReceiptNumber: stage.offlineReceiptNumber, tokenNumber: stage.tokenNumber, totalSen: stage.totalSen, summary: stage.summary }
       : null;
   const resultProps = resultStage && {
     stage: resultStage,
@@ -334,6 +335,7 @@ export function PosPage() {
     kitchenLastSeenMs: opsStatus.data?.kitchenLastSeenAtMs ?? null,
     offsetMs: rt.serverOffsetMs ?? rt.snapshot?.serverOffsetMs ?? 0,
     handedOff,
+    paid: resultPaid,
     onlineHandoffAtMs: lastOrder.data?.manualHandoffAtMs ?? null,
     onReceipt: () => {
       if (stage.kind === 'accepted') setReceipt({ key: stage.result.orderId, load: () => receiptFromOrder(stage.result.orderId, config.name) });
@@ -347,7 +349,8 @@ export function PosPage() {
             const rec = rt.outbox.find((r) => r.event.type === 'offline_order_created' && r.event.payload.clientOrderId === id);
             const soldMenu = await menuForVersion(o.menuVersion);
             if (!soldMenu) throw new Error('本机没有这张单成交时的菜单版本');
-            return receiptFromLocal(o, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(rt.outbox.map((r) => r.event), id).served });
+            const st = manualStatus(rt.outbox.map((r) => r.event), id);
+            return receiptFromLocal(o, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: st.served, paid: st.paid });
           },
         });
       }
@@ -366,6 +369,11 @@ export function PosPage() {
       if (err) setNotice(err);
     },
   };
+  /** 下单送厨：不经过收款弹窗；防连点。 */
+  function submitOrder() {
+    if (busy || payDisabledReason) return;
+    void (offlineMode ? confirmOffline() : confirmOnline());
+  }
   const payError = stage.kind === 'local_failed'
     ? `${tr('本机保存失败，订单尚未确认', 'Could not save on this device — order not confirmed')}（${stage.message}）${tr('。本单已保留。', '. Order kept.')}`
     : null;
@@ -393,9 +401,15 @@ export function PosPage() {
           <span className="text-left text-[11px] leading-tight text-ink-2"><b className="block text-[13px] text-ink">{counts.available}</b>{tr('个可用', 'free')}</span>
           <Icon name="chevron-down" size={18} />
         </button>
+        <button type="button" onClick={() => setPayListOpen(true)} aria-haspopup="dialog"
+          className={`flex min-h-14 shrink-0 items-center gap-2 rounded-2xl px-3 text-left ${unpaid.orders.length ? 'bg-warn-bg text-warn' : 'border border-line bg-card text-ink-2'}`}>
+          <Icon name="wallet" size={24} />
+          <span className="leading-tight"><span className="block text-[12px] font-semibold">{tr('待登记收款', 'To record')}</span>
+            <b className="tabular-nums">{tr(`${unpaid.orders.length} 单 · ${formatRM(unpaid.totalSen)}`, `${unpaid.orders.length} · ${formatRM(unpaid.totalSen)}`)}</b></span>
+        </button>
         {counts.awaiting_return > 0 && (
           <button type="button" onClick={() => setPickerOpen(true)} className="min-h-14 shrink-0 rounded-xl bg-warn-bg px-3 text-sm font-semibold text-warn">
-            {tr(`${counts.awaiting_return} 个待回收`, `${counts.awaiting_return} to collect`)}
+            {tr(`${counts.awaiting_return} 个旧版待回收`, `${counts.awaiting_return} legacy to collect`)}
           </button>
         )}
         {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} />}
@@ -426,7 +440,7 @@ export function PosPage() {
         <div className="space-y-2 border-b border-warn/40 bg-warn-bg px-4 py-2 lg:px-6" role="alert">
           {unknownOps.map((op) => (
             <div key={op.operationId} className="flex flex-wrap items-center gap-3 text-warn">
-              <b>{tr(`${op.summary.tokenNumber}号 · ${formatRM(op.summary.totalSen)}：已记录收款，正在核对订单；请勿再次收钱。请问厨房是否收到这张单。`, `No. ${op.summary.tokenNumber} · ${formatRM(op.summary.totalSen)}: payment recorded, checking the order. Do NOT collect again. Ask the kitchen if they got it.`)}</b>
+              <b>{tr(`${op.summary.tokenNumber}号 · ${formatRM(op.summary.totalSen)}：下单结果未确认，正在核对；请勿重复下单。请问厨房是否收到这张单。`, `No. ${op.summary.tokenNumber} · ${formatRM(op.summary.totalSen)}: order result unconfirmed, checking. Do NOT re-submit. Ask the kitchen if they got it.`)}</b>
               {!offlineMode && <button type="button" onClick={() => void syncNow()} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">{tr('核对结果', 'Check result')}</button>}
               {!offlineMode && <button type="button" onClick={() => void setManualOffline(true)} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">{tr('云端连不上？改为离线营业', 'Cloud unreachable? Switch to offline')}</button>}
             </div>
@@ -454,7 +468,7 @@ export function PosPage() {
             {resultProps && <RecentOrder {...resultProps} onOpen={() => setResultOpen(true)} />}
             {!offlineMode && (
               <p className="mt-4 flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
-                <Icon name="clock" size={16} />{tr('厨房待做', 'Kitchen queue')} <b className="text-ink">{queueQ.data.length}</b> {tr('单', '')}
+                <Icon name="clock" size={16} />{tr('后厨制作中', 'Cooking now')} <b className="text-ink">{queueQ.data.length}</b> {tr('单', '')}
                 {Number.isFinite(oldest) && <QueueClock since={oldest} />}
               </p>
             )}
@@ -474,9 +488,17 @@ export function PosPage() {
           <div className="min-h-0 flex-1">
             <CartPanel menu={menu} cart={cart} totals={totals} tokenNumber={token} editingLineId={editingLineId}
               onEdit={editLine} onQuantity={changeQuantity} onClear={clearCart}
-              onPay={() => { setCartOpen(false); setPayOpen(true); }} payDisabledReason={payDisabledReason}>
-              {stage.kind === 'submitting' && <p className="mt-2 text-center text-sm text-warn">{tr('正在提交，请勿重复收钱或重复点击。', 'Submitting — do not collect again or tap again.')}</p>}
-              {stage.kind === 'unknown' && <p className="mt-2 text-center text-sm font-semibold text-warn">{tr('已记录收款，正在核对订单；请勿再次收钱。', 'Payment recorded, checking the order. Do NOT collect again.')}</p>}
+              onPay={() => { setCartOpen(false); submitOrder(); }} payDisabledReason={busy ? tr('正在送单…', 'Sending…') : payDisabledReason}>
+              {stage.kind === 'submitting' && <p className="mt-2 text-center text-sm text-warn">{tr('正在送单，请勿重复点击。', 'Sending — do not tap again.')}</p>}
+              {stage.kind === 'unknown' && <p className="mt-2 text-center text-sm font-semibold text-warn">{tr('下单结果未确认，正在核对；请勿重复下单。', 'Result unconfirmed, checking. Do not re-submit.')}</p>}
+              {payError && <p role="alert" className="mt-2 text-center text-sm font-semibold text-danger">{payError}</p>}
+              {stage.kind === 'rejected' && (
+                <div role="alert" className="mt-2 rounded-xl border-2 border-danger bg-danger-bg p-3 text-danger">
+                  <b>{tr('云端未接单：', 'Not accepted: ')}{stage.reason}</b>
+                  <p className="text-sm">{tr('这次没有生成订单、没有送厨。修正后再下单。', 'No order was created or sent. Fix and submit again.')}</p>
+                  <button type="button" onClick={() => setStage({ kind: 'idle' })} className="mt-1 h-11 rounded-lg border border-danger bg-card px-3 font-semibold">{tr('知道了', 'OK')}</button>
+                </div>
+              )}
             </CartPanel>
           </div>
         </aside>
@@ -494,25 +516,21 @@ export function PosPage() {
           <span className="font-bold">{tr('本单', 'Order')} {totals.portionCount} {tr('份', 'pcs')} · {formatRM(totals.totalSen)}</span>
           <span className="ml-auto text-sm text-ink-2">{tr('查看 / 修改', 'View / edit')}</span>
         </button>
-        <button type="button" onClick={() => setPayOpen(true)} disabled={Boolean(payDisabledReason)}
-          className="flex min-h-14 shrink-0 items-center gap-1.5 rounded-xl bg-ok px-4 text-lg font-bold text-white disabled:bg-control">{tr('去收款', 'Pay')}<span className="sr-only"> {formatRM(totals.totalSen)}</span><Icon name="arrow" size={20} /></button>
+        <button type="button" onClick={() => submitOrder()} disabled={Boolean(payDisabledReason) || busy}
+          className="flex min-h-14 shrink-0 items-center gap-1.5 rounded-xl bg-ok px-4 text-lg font-bold text-white disabled:bg-control">{tr('下单送厨', 'Send')}<span className="sr-only"> {formatRM(totals.totalSen)}</span><Icon name="arrow" size={20} /></button>
       </div>
 
       {receipt && <ReceiptDialog receiptKey={receipt.key} load={receipt.load} menuVersion={menu.version} timeZone={config.timeZone} onClose={() => setReceipt(null)} />}
       {pickerOpen && <TokenPicker board={board} current={token} onPick={setToken} onRelease={releaseTokenAction} onClose={() => setPickerOpen(false)} />}
-      {payOpen && token !== null && (
-        <PaymentDrawer menu={menu} cart={cart} totals={totals} tokenNumber={token}
-          qrPayee={config.qrPayee} online={!offlineMode} busy={busy} error={payError}
-          onConfirm={(p) => void (offlineMode ? confirmOffline(p) : confirmOnline(p))}
-          onClose={() => { setPayOpen(false); if (stage.kind === 'rejected' || stage.kind === 'local_failed') setStage({ kind: 'idle' }); }} />
+      {payListOpen && <PendingPaymentsDrawer onClose={() => setPayListOpen(false)} nameOf={(c) => lineName(menu, c, lang)} />}
+      {resultProps && resultOpen && !receipt && (
+        <OrderResultDialog {...resultProps} onClose={() => setResultOpen(false)}
+          extra={resultStage && (
+            <QuickPay key={resultStage.kind === 'accepted' ? resultStage.orderId : resultStage.clientOrderId}
+              orderId={resultStage.kind === 'accepted' ? resultStage.orderId : resultStage.clientOrderId} totalSen={resultStage.totalSen} paid={resultPaid}
+              label={resultStage.kind === 'accepted' ? `${resultStage.receiptNumber} · ${tr('原餐牌', 'token')} ${resultStage.tokenNumber}` : `${resultStage.offlineReceiptNumber} · ${tr('原餐牌', 'token')} ${resultStage.tokenNumber}`} />
+          )} />
       )}
-      {payOpen && stage.kind === 'rejected' && (
-        <div role="alert" className="fixed right-4 bottom-6 z-[60] max-w-[440px] rounded-xl border-2 border-danger bg-danger-bg p-4 text-danger shadow-xl">
-          <b>{tr('云端未接单：', 'Not accepted: ')}{stage.reason}</b>
-          <p className="text-sm">{tr('这次没有生成订单。若已收钱，请勿再次收钱，修正后再提交。', 'No order was created. If you already took money, do not collect again — fix and resubmit.')}</p>
-        </div>
-      )}
-      {resultProps && resultOpen && !receipt && <OrderResultDialog {...resultProps} onClose={() => setResultOpen(false)} />}
     </div>
   );
 }
@@ -540,7 +558,6 @@ function QueueClock({ since }: { since: number }) {
 /** 不是主收银机 / 未开班 / 离线资格过期时的说明页。 */
 function RegisterGate({ status, isOwner }: { status: string; isOwner: boolean }) {
   const reg = useRegister();
-  const [floatText, setFloatText] = useState('100');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const tr = useT();
@@ -566,18 +583,16 @@ function RegisterGate({ status, isOwner }: { status: string; isOwner: boolean })
   }
   return (
     <div className="mx-auto mt-10 max-w-lg rounded-2xl border border-line bg-card p-6">
-      <Icon name="cash" size={56} />
-      <h2 className="mt-2 text-2xl font-bold">{tr('开班', 'Open shift')}</h2>
-      <p className="mt-1 text-ink-2">{tr('点清钱箱里的备用金后开班。开班需要联网；开班后这台收银机断网也能接单（最多 24 小时）。', 'Count the float in the drawer, then open the shift. Needs internet; afterwards this register can take orders offline for up to 24 h.')}</p>
-      <label className="mt-4 block font-semibold" htmlFor="float">{tr('备用金 (RM)', 'Float (RM)')}</label>
-      <input id="float" inputMode="decimal" value={floatText} onChange={(e) => setFloatText(e.target.value)} className="mt-1 h-14 w-full rounded-lg border border-control px-3 text-2xl tabular-nums" />
+      <Icon name="register" size={56} />
+      <h2 className="mt-2 text-2xl font-bold">{tr('开始营业（开班）', 'Start trading (open shift)')}</h2>
+      <p className="mt-1 text-ink-2">{tr('不需要输入备用金。开班需要联网，用于确认主收银机与营业日；开班后这台收银机断网也能接单（最多 24 小时）。', 'No float needed. Opening needs internet to confirm the main register and business day; afterwards this register can take orders offline for up to 24 h.')}</p>
       {err && <p role="alert" className="mt-2 text-danger">{err}</p>}
-      <button type="button" disabled={busy || parseRMInput(floatText) === null || !reg.claim}
+      <button type="button" disabled={busy || !reg.claim}
         onClick={async () => {
           setBusy(true);
           setErr(null);
           try {
-            await submit('openShift', { operationId: newOperationId(), ...reg.claim!, openingFloatSen: parseRMInput(floatText)! });
+            await submit('openShift', { operationId: newOperationId(), ...reg.claim! });
           } catch (e) {
             setErr(e instanceof CommandFailure ? reasonText(e.reasonCode) : String(e));
           } finally {

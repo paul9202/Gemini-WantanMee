@@ -107,9 +107,10 @@ await session(`http://localhost:${PORT}`, async ({ evaluate, goto, shot }) => {
     __click('黑酱面'); await __sleep(80);
   })()`);
   for (const [w, h] of [[1366, 900], [1024, 768], [768, 1024], [390, 844]]) results.push(await shot(`pos-${w}x${h}`, w, h));
-  await evaluate(`${CLICK}(async () => { __click('收款RM'); await __sleep(300); __click('RM20'); await __sleep(150); })()`);
-  results.push(await shot('pos-payment-1366x900', 1366, 900));
-  results.push(await shot('pos-payment-390x844', 390, 844));
+  // 2026-10-23 起没有收款弹窗（下单送厨不收款）；改截「待登记收款」抽屉（只打开，不登记、不下单）。
+  await evaluate(`${CLICK}(async () => { __click('待登记收款'); await __sleep(600); })()`);
+  results.push(await shot('pos-pending-payments-1366x900', 1366, 900));
+  results.push(await shot('pos-pending-payments-390x844', 390, 844));
   await goto('/orders');
   results.push(await shot('orders-1366x900', 1366, 900));
   results.push(await shot('orders-390x844', 390, 844));

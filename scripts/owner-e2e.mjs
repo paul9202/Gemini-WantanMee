@@ -1,4 +1,6 @@
 // 阶段 E 端到端：老板处理离线待核对、收支损耗、关账、关账后迟到单与更正版本、CSV 导出。
+// 2026-10-23 起：下单送厨不收款，收款为不分渠道的人工全额登记（结果弹窗「确认已收款」）；日结不再输入钱箱实点 / QR，
+// 概览与日结显示「净登记收款」。离线补同步仍用旧格式（含 cash 付款）的事件，验证旧日志兼容。
 // 前提：干净的 Emulator 已启动并 seed；VITE_USE_EMULATORS=true 构建后在 4173 端口 vite preview。
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -34,7 +36,7 @@ const boss = await openChrome('http://127.0.0.1:4173');
 const save = async (tab, name) => writeFile(`${OUT}/${name}.png`, await tab.screenshot());
 
 try {
-  // ---- 收银开档并接 3 单（现金 7、QR 9、现金 11） ----
+  // ---- 收银开档并接 3 单（7、9、11），下单后在结果弹窗登记收款 ----
   await pos.goto('/login');
   await login(pos, 'owner');
   await pos.goto('/device');
@@ -42,14 +44,19 @@ try {
   await pos.page(`__click('退出'); await __sleep(2000);`);
   await login(pos, 'cashier');
   await pos.page(`if (await __waitFor('确认开班', 8000)) __click('确认开班'); await __waitFor('看图选餐', 25000);`);
-  const sell = (setup, pay) => pos.page(`
+  const SEND = `[...document.querySelectorAll('aside[aria-label="本单"] button')].find((b) => b.innerText.includes('下单送厨')).click();`;
+  const sell = (setup) => pos.page(`
     await __waitFor('看图选餐', 15000); ${setup}
-    __click('加入本单'); await __sleep(200); __click('收款RM'); await __sleep(400); ${pay}
-    await __waitFor('✓云端已接单', 40000); return (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText;`);
-  await sell(`__click('红酱面'); await __sleep(150);`, `__click('刚好'); await __sleep(200); __click('确认收款并接单');`);
-  await sell(`__click('黑酱面'); await __sleep(150); __click('1½'); await __sleep(150);`, `__click('DuitNowQR'); await __sleep(200); document.querySelector('[aria-label="收款"] input[type=checkbox]').click(); await __sleep(200); __click('确认收款并接单');`);
-  await sell(`__click('白酱面'); await __sleep(150); __click('大·RM11'); await __sleep(150);`, `__click('刚好'); await __sleep(200); __click('确认收款并接单');`);
-  check('收银接 3 单', (await fsList('orders')).length === 3);
+    __click('加入本单'); await __sleep(200); ${SEND}
+    await __waitFor('✓云端已接单', 40000);
+    [...document.querySelectorAll('[role=dialog] button')].find((b) => b.innerText.includes('确认已收款')).click();
+    await __waitFor('已登记收款', 30000); await __sleep(300);
+    const t = document.querySelector('[role=dialog]').innerText; __click('下一单'); await __sleep(300); return t;`);
+  await sell(`__click('红酱面'); await __sleep(150);`);
+  await sell(`__click('黑酱面'); await __sleep(150); __click('1½'); await __sleep(150);`);
+  await sell(`__click('白酱面'); await __sleep(150); __click('大·RM11'); await __sleep(150);`);
+  const sold = await fsList('orders');
+  check('收银接 3 单并登记收款（不分渠道）', sold.length === 3 && sold.every((o) => o.paymentState === 'paid') && (await fsList('payments')).every((p) => p.method === 'unspecified'), sold.map((o) => o.paymentState).join(','));
 
   // ---- 收银机补同步两条会被判待核对的离线单：餐牌冲突、金额不符 ----
   const cashierToken = await idToken('cashier');
@@ -62,8 +69,8 @@ try {
   await boss.goto('/login');
   check('老板登录后进入概览', (await login(boss, 'owner')) === '/owner');
   await boss.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }).catch(() => boss.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DL }));
-  const ov = await boss.page(`await __waitFor('净收款', 15000); await __sleep(2500); return document.querySelector('main').innerText;`);
-  check('概览：净收款 RM27.00（未含待核对金额）', ov.includes('RM27.00'), ov.match(/净收款[^\n]*\n([^\n]+)/)?.[1]);
+  const ov = await boss.page(`await __waitFor('净登记收款', 15000); await __sleep(2500); return document.querySelector('main').innerText;`);
+  check('概览：净登记收款 RM27.00（未含待核对金额）', ov.includes('RM27.00') && !ov.replace(/净登记收款/g, '').includes('净收款'), ov.match(/净登记收款[^\n]*\n([^\n]+)/)?.[1]);
   check('概览：醒目提示 2 条待核对与未入账金额', ov.includes('离线记录待核对 2 条') && ov.includes('RM13.00'));
   check('概览：8 分钟达标率无样本显示「—」', /8 分钟内出餐率\s*—/.test(ov));
   await save(boss, 'overview-1366');
@@ -116,27 +123,23 @@ try {
   check('损耗：1 面球（0.5 步长两次）', wst.length === 1 && wst[0].noodleHalfUnits === 2);
   await save(boss, 'finance-1366');
 
-  // ---- 日结：有例外须确认；关账后写屏障 ----
+  // ---- 日结：不再输入钱箱实点 / QR；有例外须确认；关账后写屏障 ----
   await boss.goto('/owner/close');
   await boss.page(`await __waitFor('逐步核对', 15000); await __sleep(2000);`);
-  // 钱箱应有 = 备用金100 + 现金(7+11+7+6) − 进货300（钱箱付）− 存银行10 = −179 → 用屏幕预览值作为实点（再少 RM1）
-  const closeText = await boss.page(`
-    const set = (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };
-    const inputs = [...document.querySelectorAll('input[inputmode="decimal"]')];
-    set(inputs[0], '0'); set(inputs[1], '9'); await __sleep(500);
-    return document.querySelector('main').innerText;`);
-  const expected = closeText.match(/钱箱应有\s*(-?RM[\d,.]+)/)?.[1];
-  check('日结预览：钱箱应有可见、QR 差额一致', Boolean(expected) && /QR 差额\s*一致/.test(closeText), `钱箱应有 ${expected}`);
+  const closeText = await boss.page(`return { text: document.querySelector('main').innerText, money: document.querySelectorAll('main input[inputmode="decimal"]').length };`);
+  check('日结预览：没有钱箱实点 / QR 输入与差额，显示待登记收款与净登记收款', closeText.money === 0 && !closeText.text.includes('钱箱') && !closeText.text.includes('QR 差额') && closeText.text.includes('待登记收款') && closeText.text.includes('净登记收款'), `金额输入 ${closeText.money}`);
   await save(boss, 'close-before-1366');
   await boss.page(`
-    const set = (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };
-    document.querySelector('input[type=checkbox]').click(); await __sleep(150);
-    set(document.querySelector('input[placeholder="结转说明（必填）"]'), '3 单未出餐，明早继续'); await __sleep(150);
+    const set = (el, v) => { const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };
+    for (const box of document.querySelectorAll('main input[type=checkbox]')) if (!box.checked) { box.click(); await __sleep(150); }
+    const other = document.querySelector('input[placeholder="结转说明（必填）"]'); if (other) set(other, '3 单未出餐，明早继续');
+    const unpaid = document.querySelector('input[placeholder^="未登记结转原因"]'); if (unpaid) set(unpaid, '顾客明天来付');
+    await __sleep(200);
     __click('关账并冻结'); await __waitFor('已冻结', 30000); await __sleep(2500);`);
   const day = await fsGet(`businessDays/${(await fsList('orders'))[0].businessDate}`);
   check('关账：营业日 closed，版本 1', day?.state === 'closed' && day?.closedVersion === 1);
   const blocked = await pos.page(`
-    __click('红酱面'); await __sleep(150); __click('加入本单'); await __sleep(200); __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款并接单');
+    __click('红酱面'); await __sleep(150); __click('加入本单'); await __sleep(200); ${SEND}
     await __waitFor('营业日已关账', 30000); return __has('营业日已关账');`);
   check('关账后收银下单被拒绝（营业日已关账）', blocked);
 
@@ -152,8 +155,8 @@ try {
     input.dispatchEvent(new Event('input', { bubbles: true })); await __sleep(200);
     [...card.querySelectorAll('button')].find(b => b.innerText.includes('补入账')).click(); await __waitFor('请到日结页做更正版本', 30000);`);
   await boss.goto('/owner/close');
-  const pend = await boss.page(`return await __waitFor('关账后待调整1项', 15000);`);
-  check('日结页显示关账后待调整 1 项', pend);
+  const pend = await boss.page(`await __waitFor('已关账', 40000); return await __waitFor('关账后待调整1项', 20000);`);
+  check('日结页显示关账后待调整 1 项', pend, pend ? '' : (await boss.page(`return location.pathname + ' | ' + document.body.innerText.replace(/\s+/g, ' ').slice(0, 400);`)));
   await boss.page(`
     const set = (el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); };
     set(document.querySelector('input[placeholder="更正原因（必填）"]'), '补入断网单 O-F01-930'); await __sleep(150);
@@ -167,7 +170,7 @@ try {
   // ---- CSV 导出（真实下载到文件） ----
   await boss.page(`[...document.querySelectorAll('button')].filter(b => b.innerText.includes('导出 CSV'))[0].click(); await __sleep(2500);`);
   await boss.goto('/owner');
-  await boss.page(`await __waitFor('净收款', 15000); await __sleep(2500); __click('导出CSV'); await __sleep(4000);`);
+  await boss.page(`await __waitFor('净登记收款', 15000); await __sleep(2500); __click('导出CSV'); await __sleep(4000);`);
   const files = await readdir(DL);
   check('CSV 下载：日结 + 汇总 + 订单 + 收款退款 + 支出 + 损耗', ['日结_', '汇总_', '订单_', '收款退款_', '支出_', '损耗_'].every((p) => files.some((f) => f.startsWith(p))), files.join(', '));
   const ordersCsv = files.find((f) => f.startsWith('订单_'));
@@ -177,7 +180,7 @@ try {
   // ---- 手机老板概览 ----
   await boss.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await boss.goto('/owner');
-  const overflow = await boss.page(`await __waitFor('净收款', 15000); await __sleep(2500); return document.documentElement.scrollWidth - document.documentElement.clientWidth;`);
+  const overflow = await boss.page(`await __waitFor('净登记收款', 15000); await __sleep(2500); return document.documentElement.scrollWidth - document.documentElement.clientWidth;`);
   check('手机 390：老板概览无横向溢出、底部导航', overflow === 0 && (await boss.page(`return __has('概览') && __has('日结');`)), `溢出 ${overflow}px`);
   await save(boss, 'overview-390');
 } catch (e) {

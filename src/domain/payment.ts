@@ -1,13 +1,20 @@
 /**
- * 收款核对。QR 首版没有银行网关：只能由员工在收款端核对后人工确认，
- * 断网时还需另一台已联网收款端核实并写明说明。
+ * 收款。新流程只记录「员工确认已全额收到」，不区分现金 / TNG / QR，不要求实收与找零：
+ * method = 'unspecified'，confirmationMode = 'manual'。系统没有支付网关或到账回调，
+ * 显示、扫描、关闭收款码都不等于到账。
+ * 旧订单的真实 cash / qr_manual 记录保留可读，不改写；checkPayment 只用于导入旧格式离线日志。
  */
 import type { Sen } from './money';
 
-export type PaymentMethod = 'cash' | 'qr_manual';
+/** 旧版（下单即收款）记录的真实渠道。 */
+export type LegacyPaymentMethod = 'cash' | 'qr_manual';
+export type PaymentMethod = LegacyPaymentMethod | 'unspecified';
+export type ConfirmationMode = 'manual';
+
+export const PAYMENT_METHOD_ZH: Record<PaymentMethod, string> = { cash: '现金', qr_manual: 'DuitNow QR', unspecified: '已确认收款' };
 
 export interface PaymentDraft {
-  method: PaymentMethod;
+  method: LegacyPaymentMethod;
   dueSen: Sen;
   /** 现金实收；QR 为 null。 */
   tenderedSen: Sen | null;
@@ -27,6 +34,7 @@ export interface PaymentCheck {
   changeSen: Sen | null;
 }
 
+/** 旧格式（下单即收款）离线日志的收款核对。新流程不再调用。 */
 export function checkPayment(draft: PaymentDraft, ctx: { online: boolean; qrConfigured: boolean }): PaymentCheck {
   const blocks: PaymentBlock[] = [];
   if (draft.dueSen <= 0) blocks.push('EMPTY_ORDER');
@@ -45,8 +53,14 @@ export function checkPayment(draft: PaymentDraft, ctx: { online: boolean; qrConf
   return { ok: blocks.length === 0, blocks, changeSen };
 }
 
-/** 现金快捷键：刚好 + 不少于应收的 RM10/20/50/100。 */
-export function quickTenderOptions(dueSen: Sen): Sen[] {
-  const notes = [1000, 2000, 5000, 10000].filter((n) => n > dueSen);
-  return [dueSen, ...notes];
+/** 收款流水 ID：同一订单第 n 次登记（更正后可再次登记）。确定性 ID 保证并发时只能生成一笔。 */
+export function paymentIdFor(orderId: string, seq: number): string {
+  return `${orderId}-p${seq}`;
 }
+
+/** 店家收款码（用户提供的原图，字节未改动）。图片标示的收款人；二维码 payload 未解码核实。 */
+export const RECEIVING_QR = {
+  src: '/payment/tng-receiving-original.jpg',
+  payeeLabel: 'TAN CHUN HAO',
+  sha256: '08223503ac18f4345632311d6bd2ad8b02a155e8545329c16721c8034e7567fc',
+} as const;

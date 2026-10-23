@@ -30,7 +30,7 @@ export default defineConfig(() => {
           ],
         },
         workbox: {
-          globPatterns: ['**/*.{js,css,html,webp,png,svg,woff2}'],
+          globPatterns: ['**/*.{js,css,html,webp,png,svg,woff2}', 'payment/*.jpg'],
           navigateFallback: '/index.html',
           navigateFallbackDenylist: [/^\/__\//],
           runtimeCaching: [],

@@ -1,19 +1,21 @@
 /**
- * 收支与损耗（01 §10）：进货/支出、损耗、钱箱资金往来。
+ * 收支与损耗（01 §10）：当日收款登记与成本、进货/支出、损耗、资金往来。
+ * 新收款不分现金 / QR，只汇总已登记 / 未登记；新开班不再有备用金，旧备用金记录只读显示。
  * 快捷模板只是预填表单，必须确认实际金额、是否已付、付款来源后才保存；记录不删除，只作废并可更正。
  */
 import { FormEvent, useState } from 'react';
-import { collection, getDocs, limit, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, query, where } from 'firebase/firestore';
 import { db, storePath } from '../../data/firebase/client';
 import { businessDateOf } from '../../domain/businessDay';
 import { BOM_V1 } from '../../domain/bom';
-import { wastageCostUnits } from '../../domain/ledger';
-import { formatCostRM, formatRM, parseRMInput } from '../../domain/money';
+import { DEFAULT_FIXED_COST, FixedCostPolicy, summarizePeriod } from '../../domain/finance';
+import { ledgerEvents, wastageCostUnits } from '../../domain/ledger';
+import { costUnitsToSen, formatCostRM, formatRM, parseRMInput } from '../../domain/money';
 import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
 import { reasonText } from '../../data/firebase/reasons';
 import { useNow } from '../../data/firebase/live';
 import { useSession } from '../../app/session';
-import { loadLedger, useLoad } from './data';
+import { loadLedger, orderPaymentOverview, useLoad } from './data';
 import { OwnerTabs, Section } from './ui';
 
 const CATEGORY_ZH = { purchase: '进货', fixed_payment: '固定费用付款（房租等）', opex: '其他营业费用', capital: '资本设备' } as const;
@@ -37,6 +39,7 @@ export function FinancePage() {
   const day = date || today;
   // 门店配置载入前营业日为空：先不查询。
   const ledger = useLoad(() => (day ? loadLedger({ start: day, endExclusive: nextDay(day) }) : Promise.resolve(null)), `fin-${day}`);
+  const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data()?.fixedCostPolicy as FixedCostPolicy | undefined, 'fin-config');
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -58,6 +61,9 @@ export function FinancePage() {
 
   if (!config) return null;
   const docs = ledger.data?.docs;
+  const fixed = finance.data ?? DEFAULT_FIXED_COST;
+  const summary = docs && day ? summarizePeriod(ledgerEvents(docs), { start: day, endExclusive: nextDay(day) }, fixed) : null;
+  const orderPay = ledger.data ? orderPaymentOverview(ledger.data.orders) : null;
 
   return (
     <div className="mx-auto max-w-[1200px] p-4 pb-8 lg:p-8">
@@ -70,6 +76,38 @@ export function FinancePage() {
         <span className="text-sm text-ink-2">已关账的营业日不能再记账，差错请走日结更正版本。</span>
       </div>
       {msg && <p role={msg.ok ? 'status' : 'alert'} className={`mb-3 rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>{msg.text}</p>}
+
+      <div className="mb-4">
+        <Section title={`当日收款与成本 · ${day}`} hint="收款为员工人工登记，未与钱包或银行自动核对；利润按已登记收款估算">
+          {summary && orderPay ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              <table className="w-full text-sm"><tbody>
+                {([
+                  [`有效订单金额（${orderPay.validCount} 单）`, orderPay.validSen],
+                  ['已登记收款（含跨日补登记）', summary.receipts.totalSen],
+                  ...(summary.receipts.correctionsSen ? [['　其中误登记更正', summary.receipts.correctionsSen]] : []),
+                  [`未登记（本日订单 ${orderPay.unpaidCount} 单，不算已收）`, orderPay.unpaidSen],
+                  ['已登记退款', -summary.refunds.totalSen],
+                  ['净登记收款', summary.netReceiptsSen],
+                ] as [string, number][]).map(([l, v]) => <tr key={l} className="border-b border-line"><td className="py-1">{l}</td><td className="text-right tabular-nums">{formatRM(v)}</td></tr>)}
+              </tbody></table>
+              <table className="w-full text-sm"><tbody>
+                {([
+                  ['理论食材与包装成本', -costUnitsToSen(summary.allocatedCostUnits)], ['损耗（不重复）', -costUnitsToSen(summary.wastageCostUnits)],
+                  ['固定费用摊销', -summary.fixedCostSen], ['其他营业费用', -summary.otherOpexSen],
+                  ['估算经营利润（按已登记收款估算）', summary.estimatedProfitSen],
+                  ['已付进货', -summary.cash.purchasesPaidSen], ['已付营业费用', -summary.cash.opexPaidSen],
+                ] as [string, number][]).map(([l, v]) => <tr key={l} className="border-b border-line"><td className="py-1">{l}</td><td className="text-right tabular-nums">{formatRM(v)}</td></tr>)}
+              </tbody></table>
+            </div>
+          ) : <p className="text-ink-2">{ledger.loading ? '正在载入…' : '没有数据'}</p>}
+          {summary?.hasLegacyChannels && (
+            <p className="mt-2 rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">
+              旧版记录：现金收款 {formatRM(summary.receipts.cashSen)} · QR 收款 {formatRM(summary.receipts.qrSen)} · 现金退款 {formatRM(summary.refunds.cashSen)} · QR 退款 {formatRM(summary.refunds.qrSen)}（已含在上面合计内）
+            </p>
+          )}
+        </Section>
+      </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
         <ExpenseForm busy={busy} day={day} today={today}
@@ -109,7 +147,7 @@ export function FinancePage() {
           <ul className="divide-y divide-line">
             {docs?.cashMovements.map((c) => (
               <li key={c.id} className="flex items-center gap-2 py-2">
-                <span className="flex-1">{c.type === 'opening_float' ? '开班备用金' : CASH_ZH[c.type as keyof typeof CASH_ZH]}{c.reason ? ` · ${c.reason}` : ''}</span>
+                <span className="flex-1">{c.type === 'opening_float' ? '开班备用金（旧版记录）' : CASH_ZH[c.type as keyof typeof CASH_ZH]}{c.reason ? ` · ${c.reason}` : ''}</span>
                 <b className="tabular-nums">{formatRM(c.amountSen)}</b>
               </li>
             ))}

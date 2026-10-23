@@ -3,17 +3,20 @@
  */
 import { useState } from 'react';
 import { formatRM } from '../../domain/money';
+import { PAYMENT_METHOD_ZH, PaymentMethod } from '../../domain/payment';
 import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
 import { reasonText } from '../../data/firebase/reasons';
 import { InboxRow, loadOpenReviews, useLoad } from './data';
 import { OwnerTabs, Section } from './ui';
 
 const REASON: Record<string, { zh: string; importable: boolean; hint: string }> = {
-  REGISTER_REVOKED: { zh: '来自已被更换的旧收银机', importable: true, hint: '确认这笔钱确实收到后可补入账' },
+  REGISTER_REVOKED: { zh: '来自已被更换的旧收银机', importable: true, hint: '确认这笔钱确实收到后可补入账（新单可能未收款，以订单收款状态为准）' },
   TIME_ANOMALY: { zh: '设备时间异常', importable: true, hint: '补入后不计入出餐时效统计' },
-  OFFLINE_CAPABILITY_EXPIRED: { zh: '超出 24 小时离线营业资格', importable: true, hint: '核对纸单与钱箱后可补入账' },
+  OFFLINE_CAPABILITY_EXPIRED: { zh: '超出 24 小时离线营业资格', importable: true, hint: '核对纸单与收款登记后可补入账' },
   TOKEN_CONFLICT: { zh: '餐牌与云端记录冲突', importable: true, hint: '补入后只记历史账，不占用当前餐牌' },
-  PAYMENT_UNVERIFIED: { zh: 'QR 收款没有核实依据', importable: true, hint: '必须先在银行端确认到账' },
+  PAYMENT_UNVERIFIED: { zh: '旧版记录：QR 收款没有核实依据', importable: true, hint: '必须先在银行端确认到账' },
+  ALREADY_PAID: { zh: '这张单已经登记过收款', importable: false, hint: '可能是重复登记，核对后不入账，不要再向顾客收钱' },
+  AMOUNT_MISMATCH: { zh: '登记金额与订单金额不符', importable: false, hint: '核对后不入账，再在订单页按整单金额重新确认' },
   PRICE_MISMATCH: { zh: '金额与菜单价格不符', importable: true, hint: '按实际收到的钱入账，差额会记录下来，不追收' },
   DAY_CLOSED_LATE: { zh: '营业日已关账后才同步', importable: true, hint: '补入后需在日结页做更正版本，原关账版本不变' },
   DEPENDS_ON_REVIEW: { zh: '所属订单仍待核对', importable: true, hint: '先处理所属订单，再补上这条' },
@@ -25,7 +28,7 @@ const REASON: Record<string, { zh: string; importable: boolean; hint: string }> 
   SEQUENCE_GAP: { zh: '前面的记录缺失（阻塞）', importable: false, hint: '请先让收银机补传前面的记录' },
   EVENT_CONFLICT: { zh: '同一记录内容被改动', importable: false, hint: '核对后不入账' },
 };
-const TYPE_ZH: Record<string, string> = { offline_order_created: '离线接单', manual_handoff: '人工交接', manual_served: '人工出餐', token_returned: '实体牌收回', sequence_void: '作废序号' };
+const TYPE_ZH: Record<string, string> = { offline_order_created: '离线接单', manual_handoff: '人工交接', manual_served: '人工出餐', token_returned: '实体牌收回', sequence_void: '作废序号', offline_payment_recorded: '离线收款登记' };
 
 export function ReviewPage() {
   const reviews = useLoad(loadOpenReviews, 'review-page');
@@ -79,7 +82,7 @@ function ReviewCard({ r, onDone }: { r: InboxRow; onDone: (text: string, ok: boo
         <b className="text-lg">{TYPE_ZH[r.type] ?? r.type}</b>
         {p.tokenNumber !== undefined && <span className="rounded bg-subtle px-2">餐牌 {p.tokenNumber}</span>}
         {p.offlineReceiptNumber && <span className="rounded bg-subtle px-2">{p.offlineReceiptNumber}</span>}
-        {r.amountSen !== null && <b className="ml-auto text-xl tabular-nums">{formatRM(r.amountSen)}{p.payment ? ` · ${p.payment.method === 'cash' ? '现金' : 'QR'}` : ''}</b>}
+        {r.amountSen !== null && <b className="ml-auto text-xl tabular-nums">{formatRM(r.amountSen)}{p.payment ? ` · ${PAYMENT_METHOD_ZH[p.payment.method as PaymentMethod] ?? p.payment.method}` : r.type === 'offline_order_created' ? ' · 未收款' : ''}</b>}
       </div>
       <p className="mt-1 text-sm text-ink-2">
         {r.registerId} · 序号 {r.sequence} · 本机时间 {new Date(r.payload.occurredAtDeviceMs).toLocaleString('zh-CN', { hour12: false })}

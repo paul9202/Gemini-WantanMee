@@ -31,20 +31,21 @@ export async function receiptFromOrder(orderId: string, storeName: string): Prom
       config: Object.fromEntries(CONFIG_KEYS.map((k) => [k, i[k]])) as unknown as LineConfig,
       quantity: i.quantity as number, unitPriceSen: i.unitPriceSen as number,
     })),
-    totalSen: o.totalSen, paymentMethod: o.paymentMethod, tenderedSen: o.cashTenderedSen ?? null, changeSen: o.changeSen ?? null, synced: true,
+    totalSen: o.totalSen, paymentMethod: o.paymentMethod ?? null, tenderedSen: o.cashTenderedSen ?? null, changeSen: o.changeSen ?? null, synced: true,
   };
 }
 
 /** 本机离线单（补同步前也能打印，标明尚未同步）。 */
 /** menu 须为该离线单成交时的菜单版本（单价按它计算）。 */
-export function receiptFromLocal(o: LocalOrder, menu: MenuVersion, storeName: string, sync: { synced: boolean; receiptNumber: string | null; served: boolean }): ReceiptSource {
+export function receiptFromLocal(o: LocalOrder, menu: MenuVersion, storeName: string, sync: { synced: boolean; receiptNumber: string | null; served: boolean; paid: boolean }): ReceiptSource {
   return {
     storeName, receiptNumber: sync.receiptNumber, offlineReceiptNumber: o.offlineReceiptNumber, tokenNumber: o.tokenNumber,
     serviceMode: o.serviceMode, source: 'offline', acceptedAtMs: o.createdAtMs, timeQuality: 'device_estimated',
     // 人工出餐时间只在本机日志里，不在收据上编造具体时刻。
-    fulfillmentStatus: sync.served ? 'served' : 'queued', servedAtMs: null, paymentState: 'paid',
+    // 新格式离线单下单未付款；只有本机确有收款确认事件（或旧格式下单即收款）才标已收款。
+    fulfillmentStatus: sync.served ? 'served' : 'queued', servedAtMs: null, paymentState: sync.paid ? 'paid' : 'unpaid',
     lines: o.lines.map((l) => ({ config: l.config, quantity: l.quantity, unitPriceSen: priceOf(menu, l.config) })),
-    totalSen: o.totalSen, paymentMethod: o.payment.method, tenderedSen: o.payment.tenderedSen, changeSen: o.changeSen, synced: sync.synced,
+    totalSen: o.totalSen, paymentMethod: o.payment?.method ?? (sync.paid ? 'unspecified' : null), tenderedSen: o.payment?.tenderedSen ?? null, changeSen: o.changeSen, synced: sync.synced,
   };
 }
 

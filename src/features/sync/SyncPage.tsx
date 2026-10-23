@@ -39,6 +39,8 @@ const REVIEW_ZH: Record<OfflineReviewReason, string> = {
   DEPENDS_ON_REVIEW: '所属订单仍待核对',
   ORDER_STATE: '订单状态不允许',
   EVENT_CONFLICT: '同一记录内容被改动',
+  ALREADY_PAID: '这张单已登记过收款（未重复入账）',
+  AMOUNT_MISMATCH: '收款金额与订单不一致',
 };
 
 const STATUS_ZH: Record<OutboxRecord['status'], string> = {
@@ -46,7 +48,8 @@ const STATUS_ZH: Record<OutboxRecord['status'], string> = {
 };
 
 const TYPE_ZH: Record<OfflineEvent['type'], string> = {
-  offline_order_created: '本机接单', manual_handoff: '人工交接', manual_served: '人工出餐', token_returned: '实体牌收回', sequence_void: '作废序号',
+  offline_order_created: '本机接单', offline_payment_recorded: '确认已收款', manual_handoff: '人工交接', manual_served: '人工出餐（释放餐牌）',
+  token_returned: '实体牌收回（旧版）', sequence_void: '作废序号',
 };
 
 export function SyncPage() {
@@ -126,12 +129,13 @@ export function SyncPage() {
                 const p = op.payload as unknown as {
                   registerId: string; deviceId: string; registerEpoch: number; sequence: number; shiftId: string;
                   order: { clientOrderId: string; tokenNumber: number; serviceMode: 'dine_in' | 'takeaway'; menuVersion: string; lines: LocalOrder['lines']; expectedTotalSen: number; deviceAcceptedAtMs: number };
-                  payment: { method: 'cash' | 'qr_manual'; tenderedSen: number | null };
+                  /** 只有改版前的旧请求才有（下单即收款）。 */
+                  payment?: { method: 'cash' | 'qr_manual'; tenderedSen: number | null };
                 };
                 const payload = {
                   clientOrderId: p.order.clientOrderId, offlineReceiptNumber: offlineReceiptNumber(p.registerId, p.sequence), tokenNumber: p.order.tokenNumber,
                   serviceMode: p.order.serviceMode, menuVersion: p.order.menuVersion, lines: p.order.lines, totalSen: p.order.expectedTotalSen,
-                  payment: { method: p.payment.method, tenderedSen: p.payment.tenderedSen, qrExternalVerificationNote: p.payment.method === 'qr_manual' ? '在线时已在收款端核对到账（结果不明后转人工补账）' : null },
+                  payment: p.payment ? { method: p.payment.method, tenderedSen: p.payment.tenderedSen, qrExternalVerificationNote: p.payment.method === 'qr_manual' ? '在线时已在收款端核对到账（结果不明后转人工补账）' : null } : null,
                 };
                 const event: OfflineEvent = {
                   eventId: crypto.randomUUID(), registerId: p.registerId, deviceId: p.deviceId, registerEpoch: p.registerEpoch, sequence: p.sequence,
@@ -139,7 +143,7 @@ export function SyncPage() {
                   type: 'offline_order_created', payload,
                 };
                 await convertPendingToOffline(op, event, { ...payload, sequence: p.sequence, createdAtMs: op.createdAtMs, changeSen: null });
-                return '已转为人工单补账。请在下方登记人工出餐与实体牌收回。';
+                return '已转为人工单补账。请在下方登记人工出餐；收到钱后确认收款。';
               })} />
           ))}
         </section>
@@ -157,7 +161,7 @@ export function SyncPage() {
               <div key={o.clientOrderId} className="flex flex-wrap items-center gap-3 py-3">
                 <span className="w-12 text-center text-3xl font-black tabular-nums">{o.tokenNumber}</span>
                 <div className="min-w-0 flex-1">
-                  <div className="font-semibold">{o.offlineReceiptNumber} · {formatRM(o.totalSen)} · {o.payment.method === 'cash' ? '现金' : 'QR（外部核实）'}</div>
+                  <div className="font-semibold">{o.offlineReceiptNumber} · {formatRM(o.totalSen)} · {o.payment ? (o.payment.method === 'cash' ? '现金（旧版）' : 'QR（旧版，外部核实）') : m.paid ? '已登记收款' : '未收款'}</div>
                   <div className="text-sm text-ink-2">
                     {new Date(o.createdAtMs).toLocaleTimeString('zh-CN', { hour12: false })} · {o.lines.reduce((s, l) => s + l.quantity, 0)} 份 ·
                     <span className={rec?.status === 'accepted' ? ' text-ok' : rec?.status === 'needs_review' ? ' text-danger' : ' text-warn'}> {rec ? STATUS_ZH[rec.status] : '—'}</span>
@@ -169,8 +173,8 @@ export function SyncPage() {
                   onClick={() => run(o.clientOrderId, () => appendManualEvent(ctx!, 'manual_handoff', o.clientOrderId))} />
                 <Step done={m.served} label="已人工出餐" disabled={!ctx || busy !== null}
                   onClick={() => run(o.clientOrderId, () => appendManualEvent(ctx!, 'manual_served', o.clientOrderId))} />
-                <Step done={m.tokenReturned} label="实体牌已收回" disabled={!ctx || busy !== null || !m.served}
-                  onClick={() => run(o.clientOrderId, () => appendManualEvent(ctx!, 'token_returned', o.clientOrderId, o.tokenNumber))} />
+                <Step done={m.paid} label={m.paid ? '已确认收款' : `确认已收款 ${formatRM(o.totalSen)}`} disabled={!ctx || busy !== null || m.paid}
+                  onClick={() => run(o.clientOrderId, () => appendManualEvent(ctx!, 'offline_payment_recorded', o.clientOrderId, { amountSen: o.totalSen }))} />
                 <button type="button" onClick={() => setReceiptOrder(o)} className="h-11 rounded-lg border border-control px-3 text-sm font-semibold">收据</button>
                 {accepted && !m.served && !offline && (
                   <button type="button" disabled={busy !== null}
@@ -201,7 +205,7 @@ export function SyncPage() {
                   <td>{TYPE_ZH[r.event.type]}</td>
                   <td className="tabular-nums">{r.event.type === 'offline_order_created' || r.event.type === 'token_returned' ? r.event.payload.tokenNumber : ''}</td>
                   <td className={r.status === 'accepted' ? 'text-ok' : r.status === 'needs_review' || r.status === 'rejected' ? 'text-danger' : 'text-warn'}>{STATUS_ZH[r.status]}</td>
-                  <td>{r.result?.reasonCode ? REVIEW_ZH[r.result.reasonCode] : ''}{r.event.type === 'offline_order_created' && r.status === 'needs_review' ? ` · 已收 ${formatRM(r.event.payload.totalSen)} 尚未入云端账` : ''}</td>
+                  <td>{r.result?.reasonCode ? REVIEW_ZH[r.result.reasonCode] : ''}{r.event.type === 'offline_order_created' && r.status === 'needs_review' ? ` · 订单 ${formatRM(r.event.payload.totalSen)}${r.event.payload.payment ? '（已收）' : ''} 尚未入云端账` : ''}{r.event.type === 'offline_payment_recorded' && r.status === 'needs_review' ? ` · 已收 ${formatRM(r.event.payload.amountSen)} 尚未入云端账` : ''}</td>
                 </tr>
               ))}
             </tbody>
@@ -216,7 +220,7 @@ export function SyncPage() {
             load={async () => {
               const soldMenu = await menuForVersion(receiptOrder.menuVersion);
               if (!soldMenu) throw new Error('本机没有这张单成交时的菜单版本');
-              return receiptFromLocal(receiptOrder, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(events, receiptOrder.clientOrderId).served });
+              return receiptFromLocal(receiptOrder, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(events, receiptOrder.clientOrderId).served, paid: manualStatus(events, receiptOrder.clientOrderId).paid });
             }} />
         );
       })()}
