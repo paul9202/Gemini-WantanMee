@@ -1,6 +1,6 @@
 # 实施状态（豪云吞面 OS）
 
-最后更新：2026-10-23 · 新版 UI 落地 + 档口平板预检（本地，未部署；平板实机未测）· 分支 `claude/phase-a-domain`
+最后更新：2026-10-23 · 新版 UI + 档口平板预检，已部署 wantan-staging（Hosting）；平板实机未测 · 分支 `claude/phase-a-domain`
 
 ## 当前阶段
 
@@ -15,6 +15,16 @@
 | E 财务与关账 | ✅ 账本、关账快照、更正版本、离线待核对处理、报表、CSV；Emulator 与浏览器端到端验证 |
 | F 测试云与试营业 | 🟡 `cc830b9` 已部署到 wantan-staging，不登录的冒烟检查 7/7；需要登录的线上流程、实体设备联调、试营业未做 |
 | G 生产切换 | ⛔ 需用户授权 |
+
+## 测试云部署：新版 UI + 平板适配（wantan-staging，2026-10-23）
+
+- 用户要求部署后，把 `48f8432` 部署到测试项目 `wantan-staging`（不是生产）。命令：`npx vite build --mode staging`，然后 `firebase deploy --only hosting --project wantan-staging`，退出码 0。
+- 只部署 Hosting：从上次部署的 `cc830b9` 到现在，`functions/`、Rules、索引、`firebase.json` 都没有改动。
+- 部署前：tsc 退出码 0，单元测试 60/60。
+- 冒烟检查（`node scripts/staging-smoke.mjs wantan-staging index-D7w96uOK.js`，不登录、不写数据）：✅ 7/7，网站提供的是本次构建的版本，前端连接本项目、未连 Emulator，Callable 拒绝未登录调用，Rules 拒绝匿名读取。
+- 浏览器打开线上登录页：载入新包，viewport 含 `interactive-widget=resizes-content`；没有登录。
+- 曾打开过旧版本的设备，会先显示旧版本并提示「有新版本可用」，需要点「更新并重新载入」。
+- **未执行**：登录后的线上流程（没有测试云账号密码，也不代为输入）；红米平板实机测试。
 
 ## 档口平板适配（2026-10-23，依据 `docs/ui-mockups-2026-10-23/DEVICE-BASELINE.md`）
 
