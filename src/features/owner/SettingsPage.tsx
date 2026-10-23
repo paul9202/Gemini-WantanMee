@@ -35,7 +35,7 @@ async function run<T>(name: Parameters<typeof submit>[0], payload: Record<string
 export function SettingsPage() {
   const [msg, setMsg] = useState<Msg>(null);
   return (
-    <div className="mx-auto max-w-[1100px] space-y-4 p-4 pb-24 md:pb-6">
+    <div className="mx-auto max-w-[1100px] space-y-4 p-4 pb-8 lg:p-8">
       <OwnerTabs current="/owner/settings" />
       <h1 className="text-2xl font-bold">设置</h1>
       {msg && <p role={msg.ok ? 'status' : 'alert'} className={`rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>{msg.text}</p>}

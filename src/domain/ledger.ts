@@ -2,7 +2,8 @@
  * 账本文档 → 财务事件（finance.LedgerEvent），以及日结汇总、报表与 CSV。
  * 前端老板页与服务端关账共用同一套口径，保证屏幕数字与冻结快照一致。
  */
-import { DateRange } from './businessDay';
+import { addDays, DateRange, wallClock } from './businessDay';
+import { ENTRY_TILES } from './menu';
 import { CsvCell, toCsv } from './csv';
 import { expectedCashDrawer, ExpenseCategory, FixedCostPolicy, LedgerEvent, PeriodSummary, summarizePeriod } from './finance';
 import { costUnitsToSen, CostUnits, formatRM, Sen } from './money';
@@ -142,6 +143,57 @@ export function productMix(orders: OrderReportRow[]): ProductMix {
     bySauce: count((i) => i.sauce, SAUCE_LABEL),
     byNoodle: count((i) => i.noodleType, NOODLE_LABEL),
   };
+}
+
+/** 畅销品按 6 张餐品入口排行（干捞面按酱料分开），只统计实际已出餐的份数。净面计入原餐品。 */
+export function dishRanking(orders: OrderReportRow[]): { key: string; label: string; photoId: string; portions: number }[] {
+  const m = new Map<string, number>();
+  for (const o of orders) {
+    if (o.fulfillmentStatus !== 'served') continue;
+    for (const i of o.items) {
+      const tile = ENTRY_TILES.find((t) => t.productKind === i.productKind && (t.productKind !== 'dry_noodle' || t.sauce === i.sauce));
+      if (tile) m.set(tile.id, (m.get(tile.id) ?? 0) + i.quantity);
+    }
+  }
+  return [...m.entries()]
+    .map(([id, portions]) => {
+      const t = ENTRY_TILES.find((x) => x.id === id)!;
+      return { key: id, label: t.nameZh, photoId: t.photoId, portions };
+    })
+    .sort((a, b) => b.portions - a.portions || a.key.localeCompare(b.key));
+}
+
+export interface TrendBucket { key: string; label: string; netSen: Sen }
+
+/**
+ * 收款走势（实际收款 − 实际退款）。单个营业日按门店时区的整点分组，只覆盖有记录的时段；
+ * 多日按营业日分组，区间内没有记录的日子显示为 0。
+ */
+export function receiptsTrend(payments: PaymentDoc[], refunds: RefundDoc[], range: DateRange, timeZone: string): TrendBucket[] {
+  const signed = [...payments.map((p) => ({ ms: p.occurredAtMs, date: p.businessDate, sen: p.amountSen })), ...refunds.map((r) => ({ ms: r.occurredAtMs, date: r.businessDate, sen: -r.amountSen }))]
+    .filter((x) => x.date >= range.start && x.date < range.endExclusive);
+  if (addDays(range.start, 1) === range.endExclusive) {
+    if (!signed.length) return [];
+    const byHour = new Map<number, number>();
+    for (const x of signed) {
+      const h = wallClock(x.ms, timeZone).hh;
+      byHour.set(h, (byHour.get(h) ?? 0) + x.sen);
+    }
+    // 营业日跨零点（例如 04:00 切日）时，凌晨时段排在最后。
+    const order = (h: number) => (h < 4 ? h + 24 : h);
+    const hours = [...byHour.keys()].map(order);
+    const out: TrendBucket[] = [];
+    for (let k = Math.min(...hours); k <= Math.max(...hours); k++) {
+      const h = k % 24;
+      out.push({ key: String(h), label: `${String(h).padStart(2, '0')}:00`, netSen: byHour.get(h) ?? 0 });
+    }
+    return out;
+  }
+  const out: TrendBucket[] = [];
+  for (let d = range.start; d < range.endExclusive; d = addDays(d, 1)) {
+    out.push({ key: d, label: d.slice(5), netSen: signed.filter((x) => x.date === d).reduce((s, x) => s + x.sen, 0) });
+  }
+  return out;
 }
 
 export function orderServiceStats(orders: OrderReportRow[]): ServiceStats {

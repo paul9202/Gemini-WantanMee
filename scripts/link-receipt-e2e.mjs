@@ -19,14 +19,14 @@ const order = (tile) => pos.page(`
   __click('${tile}'); await __sleep(150); __click('加入本单'); await __sleep(200);
   __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款并接单');
   await __waitFor('✓云端已接单', 40000);
-  return document.querySelector('aside').innerText;`);
+  return (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText;`);
 
 try {
   // ---- 准备：老板指定主收银机，收银开班；后厨登录 ----
   await pos.goto('/login');
   await login(pos, 'owner');
   await pos.goto('/device');
-  await pos.page(`await __waitFor('设为主收银机'); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
+  await pos.page(`await __waitFor('设为主收银机'); for (let i = 0; i < 60 && ![...document.querySelectorAll('button')].some((b) => !b.disabled && b.innerText.includes('设为主收银机')); i++) await __sleep(250); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
   await pos.page(`__click('退出'); await __sleep(2000);`);
   await login(pos, 'cashier');
   await pos.page(`if (await __waitFor('确认开班', 8000)) __click('确认开班'); await __waitFor('看图选餐', 25000);`);
@@ -34,7 +34,7 @@ try {
   check('后厨登录直达后厨屏', (await login(kds, 'kitchen')) === '/kitchen');
 
   // ---- O11：后厨在线 → 回执 ----
-  check('POS 显示后厨屏在线', await pos.page(`return await __waitFor('后厨屏在线', 30000);`));
+  check('POS 显示后厨屏在线', await pos.page(`return await __waitFor('后厨已连接', 30000);`));
   const t1 = await order('红酱面');
   const acked = await pos.page(`return await __waitFor('✓后厨已收到', 30000);`);
   check('O11 后厨在线：显示「后厨已收到」', acked, t1.match(/(\d+)号 · 票号 [\d-]+/)?.[0]);

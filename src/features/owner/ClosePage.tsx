@@ -133,7 +133,7 @@ export function ClosePage() {
   );
 
   return (
-    <div className="mx-auto max-w-[1100px] p-4 pb-24 md:pb-6">
+    <div className="mx-auto max-w-[1100px] p-4 pb-8 lg:p-8">
       <OwnerTabs current="/owner/close" />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-bold">日结</h1>

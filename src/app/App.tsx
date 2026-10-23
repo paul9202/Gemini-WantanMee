@@ -60,10 +60,10 @@ function Routes() {
   if (route === '/orders') return <Shell route="/orders"><OrdersPage /></Shell>;
   if (route === '/sync') return <Shell route="/sync"><SyncPage /></Shell>;
   if (route === '/owner') return <Shell route="/owner"><OverviewPage /></Shell>;
-  if (route === '/owner/finance') return <Shell route="/owner"><FinancePage /></Shell>;
-  if (route === '/owner/review') return <Shell route="/owner"><ReviewPage /></Shell>;
-  if (route === '/owner/close') return <Shell route="/owner"><ClosePage /></Shell>;
-  if (route === '/owner/settings') return <Shell route="/owner"><SettingsPage /></Shell>;
+  if (route === '/owner/finance') return <Shell route="/owner" title="/owner/finance"><FinancePage /></Shell>;
+  if (route === '/owner/review') return <Shell route="/owner" title="/owner/review"><ReviewPage /></Shell>;
+  if (route === '/owner/close') return <Shell route="/owner" title="/owner/close"><ClosePage /></Shell>;
+  if (route === '/owner/settings') return <Shell route="/owner" title="/owner/settings"><SettingsPage /></Shell>;
   if (route === '/device') return <Shell route="/device"><DevicePage /></Shell>;
   if (route === '/training') return <Shell route="/training"><TrainingPage /></Shell>;
   return <Shell route="/pos"><PosPage /></Shell>;

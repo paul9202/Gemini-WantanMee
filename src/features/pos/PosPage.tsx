@@ -7,12 +7,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, computeTotals, emptyCart, setLineQuantity, setServiceMode, updateLineConfig } from '../../domain/cart';
-import { defaultConfig, LineConfig } from '../../domain/lineItem';
+import { defaultConfig, LineConfig, normalizeConfig } from '../../domain/lineItem';
 import { formatRM, parseRMInput } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, TokenStateName } from '../../domain/tokens';
 import { formatClock } from '../../domain/timing';
-import { AckState, ackState, kitchenHealth } from '../../domain/kitchenLink';
+import { kitchenHealth } from '../../domain/kitchenLink';
 import { useHeartbeat } from '../../data/heartbeat';
 import { db, storePath } from '../../data/firebase/client';
 import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
@@ -28,10 +28,14 @@ import { menuForVersion, useMenu } from '../../data/menu';
 import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
 import { Icon } from '../../ui/visual';
-import { useT } from '../../app/i18n';
+import { useLang, useT } from '../../app/i18n';
+import { ShellHeaderActions } from '../../app/Shell';
+import { lineName } from '../../domain/lineItem';
 import { CartPanel } from './CartPanel';
+import { Customizer } from './Customizer';
+import { OrderResultDialog, RecentOrder, ResultStage, ResultSummary } from './OrderResult';
 import { PaymentDrawer, PaymentInput } from './PaymentDrawer';
-import { ProductPanel } from './ProductPanel';
+import { ProductGrid } from './ProductGrid';
 import { TokenPicker } from './TokenPicker';
 import { ReceiptDialog, receiptFromLocal, receiptFromOrder } from '../receipt/ReceiptDialog';
 import type { ReceiptSource } from '../../domain/receipt';
@@ -50,8 +54,8 @@ type Stage =
   | { kind: 'idle' }
   | { kind: 'saving' }
   | { kind: 'submitting' }
-  | { kind: 'accepted'; result: CreateOrderResult; method: string }
-  | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: number; changeSen: number | null }
+  | { kind: 'accepted'; result: CreateOrderResult; summary: ResultSummary }
+  | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: number; changeSen: number | null; summary: ResultSummary }
   | { kind: 'rejected'; reason: string; code: string }
   | { kind: 'unknown'; operationId: string }
   | { kind: 'local_failed'; message: string };
@@ -64,6 +68,7 @@ export function PosPage() {
   const offlineMode = !browserOnline || rt.manualOffline;
   const writer = useWriterLock(true);
   const tr = useT();
+  const lang = useLang();
   useHeartbeat(deviceId, !offlineMode);
   const opsStatus = useLiveDoc<{ kitchenLastSeenAtMs?: number }>(storePath('operationsStatus/current'));
   const menu = useMenu(config?.activeMenuVersion);
@@ -86,6 +91,8 @@ export function PosPage() {
 
   const [cart, setCart] = useState<Cart>(emptyCart());
   const [draft, setDraft] = useState<LineConfig | null>(null);
+  const [draftQty, setDraftQty] = useState(1);
+  const [resultOpen, setResultOpen] = useState(false);
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [undo, setUndo] = useState<{ cart: Cart; label: string } | null>(null);
   const [token, setToken] = useState<number | null>(null);
@@ -164,7 +171,8 @@ export function PosPage() {
       setEditingLineId(null);
     } else {
       setUndo({ cart, label: tr('已加入本单', 'Added') });
-      setCart(addLine(menu, cart, draft, crypto.randomUUID()));
+      setCart(addLine(menu, cart, draft, crypto.randomUUID(), draftQty));
+      setDraftQty(1);
     }
     // 每次加入后特殊选项归默认，防止上一位顾客的走青或 Kosong 残留；保留所选餐品与面种。
     const keep = defaultConfig(menu, draft.productKind, draft.sauce);
@@ -178,6 +186,19 @@ export function PosPage() {
     setCart(setLineQuantity(cart, lineId, q));
     if (q === 0 && editingLineId === lineId) setEditingLineId(null);
   }
+
+  function clearCart() {
+    if (!cart.lines.length) return;
+    setUndo({ cart, label: tr('已清空本单', 'Order cleared') });
+    setCart(emptyCart(cart.serviceMode));
+    setEditingLineId(null);
+  }
+
+  const summaryOf = (method: 'cash' | 'qr_manual'): ResultSummary => ({
+    serviceMode: cart.serviceMode,
+    method,
+    firstItem: cart.lines.map((l) => `${lineName(menu, l.config, lang)}${l.quantity > 1 ? ` ×${l.quantity}` : ''}`).join('，'),
+  });
 
   function clearAfterAccept(tokenNumber: number) {
     rememberIssued(tokenNumber);
@@ -211,7 +232,8 @@ export function PosPage() {
         return { event, order: { ...payload, sequence, createdAtMs: Date.now(), changeSen } };
       });
       await reloadLocal();
-      setStage({ kind: 'local_accepted', clientOrderId, offlineReceiptNumber: order.offlineReceiptNumber, tokenNumber: token, totalSen: totals.totalSen, changeSen });
+      setStage({ kind: 'local_accepted', clientOrderId, offlineReceiptNumber: order.offlineReceiptNumber, tokenNumber: token, totalSen: totals.totalSen, changeSen, summary: summaryOf(p.method) });
+      setResultOpen(true);
       clearAfterAccept(token);
     } catch (e) {
       setStage({ kind: 'local_failed', message: e instanceof Error ? e.message : String(e) });
@@ -258,7 +280,8 @@ export function PosPage() {
       const result = await submit<CreateOrderResult>('createOrder', payload);
       await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
       if (!result.replayed) void recordServerOffset(result.acceptedAtMs - (sentAt + Date.now()) / 2);
-      setStage({ kind: 'accepted', result, method: p.method });
+      setStage({ kind: 'accepted', result, summary: summaryOf(p.method) });
+      setResultOpen(true);
       clearAfterAccept(result.tokenNumber);
     } catch (e) {
       const f = e instanceof CommandFailure ? e : new CommandFailure('unknown', 'UNKNOWN_RESULT', String(e));
@@ -300,11 +323,87 @@ export function PosPage() {
   const reviewCount = rt.outbox.filter((r) => r.status === 'needs_review' || r.status === 'rejected').length;
   const handedOff = stage.kind === 'local_accepted' && manualStatus(rt.outbox.map((r) => r.event), stage.clientOrderId).handedOff;
 
+  const resultStage: ResultStage | null = stage.kind === 'accepted'
+    ? { kind: 'accepted', orderId: stage.result.orderId, receiptNumber: stage.result.receiptNumber, tokenNumber: stage.result.tokenNumber, totalSen: stage.result.totalSen, changeSen: stage.result.changeSen, acceptedAtMs: stage.result.acceptedAtMs, summary: stage.summary }
+    : stage.kind === 'local_accepted'
+      ? { kind: 'local_accepted', clientOrderId: stage.clientOrderId, offlineReceiptNumber: stage.offlineReceiptNumber, tokenNumber: stage.tokenNumber, totalSen: stage.totalSen, changeSen: stage.changeSen, summary: stage.summary }
+      : null;
+  const resultProps = resultStage && {
+    stage: resultStage,
+    kitchenAckAtMs: lastOrder.data?.kitchenAckAtMs ?? null,
+    kitchenLastSeenMs: opsStatus.data?.kitchenLastSeenAtMs ?? null,
+    offsetMs: rt.serverOffsetMs ?? rt.snapshot?.serverOffsetMs ?? 0,
+    handedOff,
+    onlineHandoffAtMs: lastOrder.data?.manualHandoffAtMs ?? null,
+    onReceipt: () => {
+      if (stage.kind === 'accepted') setReceipt({ key: stage.result.orderId, load: () => receiptFromOrder(stage.result.orderId, config.name) });
+      if (stage.kind === 'local_accepted') {
+        const id = stage.clientOrderId;
+        setReceipt({
+          key: id,
+          load: async () => {
+            const o = rt.localOrders.find((x) => x.clientOrderId === id);
+            if (!o) throw new Error('找不到本机订单');
+            const rec = rt.outbox.find((r) => r.event.type === 'offline_order_created' && r.event.payload.clientOrderId === id);
+            const soldMenu = await menuForVersion(o.menuVersion);
+            if (!soldMenu) throw new Error('本机没有这张单成交时的菜单版本');
+            return receiptFromLocal(o, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(rt.outbox.map((r) => r.event), id).served });
+          },
+        });
+      }
+    },
+    onOnlineHandoff: async () => {
+      if (stage.kind !== 'accepted') return;
+      try {
+        await submit('recordManualHandoff', { operationId: newOperationId(), orderId: stage.result.orderId, reason: '后厨屏未确认，收银已递纸单' });
+      } catch (e) {
+        setNotice(e instanceof CommandFailure ? reasonText(e.reasonCode) : String(e));
+      }
+    },
+    onHandoff: async () => {
+      if (stage.kind !== 'local_accepted') return;
+      const err = await appendManual('manual_handoff', stage.clientOrderId);
+      if (err) setNotice(err);
+    },
+  };
+  const payError = stage.kind === 'local_failed'
+    ? `${tr('本机保存失败，订单尚未确认', 'Could not save on this device — order not confirmed')}（${stage.message}）${tr('。本单已保留。', '. Order kept.')}`
+    : null;
+  const editLine = (id: string) => {
+    const l = cart.lines.find((x) => x.lineId === id);
+    if (!l) return;
+    setEditingLineId(id);
+    setDraft(l.config);
+    setCartOpen(false);
+  };
+
   return (
-    <div className="flex h-[calc(100vh-4rem)] flex-col">
+    <div className="flex h-full flex-col">
+      <ShellHeaderActions>
+        <div className="flex rounded-2xl bg-subtle p-1" role="group" aria-label={tr('就餐方式', 'Service')}>
+          {(['dine_in', 'takeaway'] as const).map((m) => (
+            <button key={m} type="button" aria-pressed={cart.serviceMode === m} onClick={() => setCart(setServiceMode(cart, m))}
+              className={`flex h-12 items-center gap-2 rounded-xl px-4 text-lg font-bold ${cart.serviceMode === m ? 'bg-card shadow' : 'text-ink-2'}`}>
+              <Icon name={m === 'dine_in' ? 'table' : 'bag'} size={28} />{m === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
+            </button>
+          ))}
+        </div>
+        <button type="button" onClick={() => setPickerOpen(true)} aria-haspopup="dialog" className="flex h-14 items-center gap-3 rounded-2xl border border-line bg-card px-4">
+          <span className="text-sm text-ink-2">{tr('餐牌', 'Token')}</span><b className="text-3xl tabular-nums">{token ?? tr('满', 'Full')}</b><Icon name="chevron-down" size={18} />
+        </button>
+        <span className="text-[13px] text-ink-2">{tr(`${counts.available} 个可用`, `${counts.available} free`)}</span>
+        {counts.awaiting_return > 0 && (
+          <button type="button" onClick={() => setPickerOpen(true)} className="min-h-10 rounded-lg bg-warn-bg px-2.5 text-sm font-semibold text-warn">
+            {tr(`${counts.awaiting_return} 个待回收`, `${counts.awaiting_return} to collect`)}
+          </button>
+        )}
+        {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} />}
+        {!tokensFromServer && <span className="text-sm text-warn">{tr('餐牌为本机记录', 'Tokens from this device')}{rt.snapshot ? `（快照 ${new Date(rt.snapshot.savedAtMs).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}</span>}
+      </ShellHeaderActions>
+
       {offlineMode && (
-        <div role="alert" className="flex flex-wrap items-center gap-3 border-b-2 border-warn bg-warn-bg px-4 py-2 text-warn">
-          <Icon name="handoff" size={36} />
+        <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-warn/40 bg-warn-bg px-4 py-2.5 text-warn lg:px-6">
+          <Icon name="handoff" size={34} />
           <div className="min-w-0 flex-1">
             <b className="text-lg">{tr(`离线营业 · 仅本机保存 · 未同步 ${unsynced.length} 条`, `Offline · saved on this device only · ${unsynced.length} not synced`)}</b>
             <div className="text-sm">{tr('后厨屏不会自动收到，请把纸单递给厨师（人工传单）。', 'The kitchen screen will not get these — hand the paper ticket to the cook. ')}{reg.fromSnapshot ? `${tr('离线营业资格到', 'Offline allowed until')} ${new Date(reg.shift!.offlineCapabilityExpiresAtMs).toLocaleString('zh-CN', { hour12: false })}` : ''}</div>
@@ -316,141 +415,103 @@ export function PosPage() {
         </div>
       )}
       {!offlineMode && (unsynced.length > 0 || reviewCount > 0 || rt.syncing) && (
-        <div role="status" className="flex flex-wrap items-center gap-3 border-b border-warn bg-warn-bg px-4 py-2 text-warn">
+        <div role="status" className="flex flex-wrap items-center gap-3 border-b border-warn/40 bg-warn-bg px-4 py-2 text-warn lg:px-6">
           <b>{rt.syncing ? tr('正在补同步本机记录…', 'Syncing local records…') : tr(`本机还有 ${unsynced.length} 条未同步`, `${unsynced.length} local record(s) not synced`)}{reviewCount ? tr(` · ${reviewCount} 条待老板核对`, ` · ${reviewCount} need owner review`) : ''}</b>
           <button type="button" onClick={() => navigate('/sync')} className="ml-auto h-10 rounded-lg border border-warn bg-card px-3 font-semibold">{tr('同步中心', 'Sync')}</button>
         </div>
       )}
-      {writer === 'busy' && <div role="alert" className="border-b border-danger bg-danger-bg px-4 py-2 font-semibold text-danger">{tr('另一个标签页正在收银。为避免重复记录，这个标签页只能查看。', 'Another tab is the register. This tab is view-only to avoid duplicates.')}</div>}
-
-      <div className="flex flex-wrap items-center gap-3 border-b border-line bg-canvas px-4 py-2">
-        <div className="flex rounded-xl bg-subtle p-1" role="group" aria-label={tr('就餐方式', 'Service')}>
-          {(['dine_in', 'takeaway'] as const).map((m) => (
-            <button key={m} type="button" aria-pressed={cart.serviceMode === m} onClick={() => setCart(setServiceMode(cart, m))}
-              className={`flex h-12 items-center gap-2 rounded-lg px-4 text-lg font-bold ${cart.serviceMode === m ? 'bg-card shadow' : 'text-ink-2'}`}>
-              <Icon name={m === 'dine_in' ? 'table' : 'bag'} size={30} />{m === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
-            </button>
-          ))}
-        </div>
-        <button type="button" onClick={() => setPickerOpen(true)} className="flex h-14 items-center gap-3 rounded-xl border-2 border-control bg-card px-4">
-          <span className="text-lg">{tr('餐牌', 'Token')}</span><b className="text-3xl tabular-nums">{token ?? tr('满', 'Full')}</b><span aria-hidden>▾</span>
-        </button>
-        <span className="rounded-lg bg-ok-bg px-2 py-1 text-sm font-semibold text-ok">{tr(`${counts.available}个可用`, `${counts.available} free`)}</span>
-        {counts.awaiting_return > 0 && (
-          <button type="button" onClick={() => setPickerOpen(true)} className="rounded-lg bg-warn-bg px-2 py-1 text-sm font-semibold text-warn">
-            {tr(`${counts.awaiting_return}个待回收`, `${counts.awaiting_return} to collect`)}
-          </button>
-        )}
-        {!tokensFromServer && <span className="text-sm text-warn">{tr('餐牌为本机记录', 'Tokens from this device')}{rt.snapshot ? `（快照 ${new Date(rt.snapshot.savedAtMs).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}</span>}
-      </div>
-
+      {writer === 'busy' && <div role="alert" className="border-b border-danger bg-danger-bg px-4 py-2 font-semibold text-danger lg:px-6">{tr('另一个标签页正在收银。为避免重复记录，这个标签页只能查看。', 'Another tab is the register. This tab is view-only to avoid duplicates.')}</div>}
       {(unknownOps.length > 0 || notice) && (
-        <div className="space-y-2 border-b border-warn bg-warn-bg px-4 py-2" role="alert">
+        <div className="space-y-2 border-b border-warn/40 bg-warn-bg px-4 py-2 lg:px-6" role="alert">
           {unknownOps.map((op) => (
             <div key={op.operationId} className="flex flex-wrap items-center gap-3 text-warn">
               <b>{tr(`${op.summary.tokenNumber}号 · ${formatRM(op.summary.totalSen)}：已记录收款，正在核对订单；请勿再次收钱。请问厨房是否收到这张单。`, `No. ${op.summary.tokenNumber} · ${formatRM(op.summary.totalSen)}: payment recorded, checking the order. Do NOT collect again. Ask the kitchen if they got it.`)}</b>
               {!offlineMode && <button type="button" onClick={() => void syncNow()} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">{tr('核对结果', 'Check result')}</button>}
-              {!offlineMode && <button type="button" onClick={() => void setManualOffline(true)} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">云端连不上？改为离线营业</button>}
+              {!offlineMode && <button type="button" onClick={() => void setManualOffline(true)} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">{tr('云端连不上？改为离线营业', 'Cloud unreachable? Switch to offline')}</button>}
             </div>
           ))}
           {notice && (
             <div className="flex items-center gap-3 text-ink"><span>{notice}</span>
-              <button type="button" onClick={() => setNotice(null)} className="ml-auto h-10 rounded-lg border border-control px-3">{tr('知道了', 'OK')}</button>
+              <button type="button" onClick={() => setNotice(null)} className="ml-auto h-10 rounded-lg border border-control bg-card px-3">{tr('知道了', 'OK')}</button>
             </div>
           )}
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <section className="min-h-0 flex-1 lg:flex-[62] lg:border-r lg:border-line">
-          <ProductPanel menu={menu} config={draft} onChange={setDraft} editing={Boolean(editingLineId)} onSubmit={addOrSave}
-            onCancelEdit={() => { setEditingLineId(null); setDraft(defaultConfig(menu, draft.productKind, draft.sauce)); }} />
-        </section>
-        <aside className={`${cartOpen ? 'fixed inset-x-0 top-16 bottom-0 z-30 flex' : 'hidden'} min-h-0 flex-col bg-card lg:static lg:z-auto lg:flex lg:max-w-[560px] lg:min-w-[340px] lg:flex-[38]`}>
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto xl:flex-row xl:overflow-hidden">
+          <section className="border-line bg-canvas px-4 pt-5 pb-4 lg:px-6 xl:w-[38%] xl:max-w-[600px] xl:shrink-0 xl:overflow-y-auto xl:border-r" aria-label={tr('选餐', 'Dishes')}>
+            <div className="mb-3 flex items-baseline">
+              <h2 className="text-xl font-bold">{tr('看图选餐', 'Pick the dish')}</h2>
+              <span className="ml-auto text-[11px] font-semibold tracking-[0.16em] text-ink-2">01 / SELECT</span>
+            </div>
+            <ProductGrid menu={menu} config={draft}
+              onPick={(t) => setDraft(normalizeConfig(menu, { ...draft, productKind: t.productKind, sauce: t.productKind === 'dry_noodle' ? t.sauce : draft.sauce }))} />
+            <p className="mt-4 hidden items-start gap-2 rounded-2xl border border-line bg-subtle/70 px-4 py-3 text-[13px] text-ink-2 sm:flex">
+              <Icon name="help" size={18} />{tr('选餐后调整面种和份量。普通配料已预设，有特别要求再更改。', 'After picking a dish, choose noodles and size. Standard toppings are preset — change only for special requests.')}
+            </p>
+            {resultProps && <RecentOrder {...resultProps} onOpen={() => setResultOpen(true)} />}
+            {!offlineMode && (
+              <p className="mt-4 flex flex-wrap items-center gap-x-2 text-sm text-ink-2">
+                <Icon name="clock" size={16} />{tr('厨房待做', 'Kitchen queue')} <b className="text-ink">{queueQ.data.length}</b> {tr('单', '')}
+                {Number.isFinite(oldest) && <QueueClock since={oldest} />}
+              </p>
+            )}
+          </section>
+          <section className="min-w-0 flex-1 bg-card xl:overflow-y-auto" aria-label={tr('当前配置', 'Customize')}>
+            <Customizer menu={menu} config={draft} onChange={setDraft} quantity={draftQty} onQuantity={setDraftQty}
+              editing={Boolean(editingLineId)} onSubmit={addOrSave}
+              onCancelEdit={() => { setEditingLineId(null); setDraft(defaultConfig(menu, draft.productKind, draft.sauce)); }} />
+          </section>
+        </div>
+        <aside className={`${cartOpen ? 'fixed inset-0 z-40 flex' : 'hidden'} min-h-0 flex-col border-l border-line bg-[#fdfcf8] lg:static lg:z-auto lg:flex lg:w-[380px] lg:shrink-0 xl:w-[400px]`} aria-label={tr('本单', 'Order')}>
           {cartOpen && (
-            <button type="button" onClick={() => setCartOpen(false)} className="h-12 border-b border-line font-semibold text-ink-2 lg:hidden">{tr('▼ 收起本单，继续点餐', '▼ Hide order, keep ordering')}</button>
+            <button type="button" onClick={() => setCartOpen(false)} className="flex h-14 shrink-0 items-center justify-center gap-2 border-b border-line font-semibold text-ink-2 lg:hidden">
+              <Icon name="chevron-down" size={18} />{tr('收起本单，继续点餐', 'Hide order, keep ordering')}
+            </button>
           )}
           <div className="min-h-0 flex-1">
             <CartPanel menu={menu} cart={cart} totals={totals} tokenNumber={token} editingLineId={editingLineId}
-              onEdit={(id) => { const l = cart.lines.find((x) => x.lineId === id); if (l) { setEditingLineId(id); setDraft(l.config); setCartOpen(false); } }}
-              onQuantity={changeQuantity} onPay={() => setPayOpen(true)} payDisabledReason={payDisabledReason}>
-              <SubmitSteps stage={stage} kitchenAckAtMs={lastOrder.data?.kitchenAckAtMs ?? null} handedOff={handedOff}
-                kitchenLastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} offsetMs={rt.serverOffsetMs ?? rt.snapshot?.serverOffsetMs ?? 0}
-                onlineHandoffAtMs={lastOrder.data?.manualHandoffAtMs ?? null}
-                onReceipt={() => {
-                  if (stage.kind === 'accepted') setReceipt({ key: stage.result.orderId, load: () => receiptFromOrder(stage.result.orderId, config.name) });
-                  if (stage.kind === 'local_accepted') {
-                    const id = stage.clientOrderId;
-                    setReceipt({
-                      key: id,
-                      load: async () => {
-                        const o = rt.localOrders.find((x) => x.clientOrderId === id);
-                        if (!o) throw new Error('找不到本机订单');
-                        const rec = rt.outbox.find((r) => r.event.type === 'offline_order_created' && r.event.payload.clientOrderId === id);
-                        const soldMenu = await menuForVersion(o.menuVersion);
-                        if (!soldMenu) throw new Error('本机没有这张单成交时的菜单版本');
-                        return receiptFromLocal(o, soldMenu, config.name, { synced: rec?.status === 'accepted', receiptNumber: rec?.result?.receiptNumber ?? null, served: manualStatus(rt.outbox.map((r) => r.event), id).served });
-                      },
-                    });
-                  }
-                }}
-                onOnlineHandoff={async () => {
-                  if (stage.kind !== 'accepted') return;
-                  try {
-                    await submit('recordManualHandoff', { operationId: newOperationId(), orderId: stage.result.orderId, reason: '后厨屏未确认，收银已递纸单' });
-                  } catch (e) {
-                    setNotice(e instanceof CommandFailure ? reasonText(e.reasonCode) : String(e));
-                  }
-                }}
-                onHandoff={async () => {
-                  if (stage.kind !== 'local_accepted') return;
-                  const err = await appendManual('manual_handoff', stage.clientOrderId);
-                  if (err) setNotice(err);
-                }} />
+              onEdit={editLine} onQuantity={changeQuantity} onClear={clearCart}
+              onPay={() => { setCartOpen(false); setPayOpen(true); }} payDisabledReason={payDisabledReason}>
+              {stage.kind === 'submitting' && <p className="mt-2 text-center text-sm text-warn">{tr('正在提交，请勿重复收钱或重复点击。', 'Submitting — do not collect again or tap again.')}</p>}
+              {stage.kind === 'unknown' && <p className="mt-2 text-center text-sm font-semibold text-warn">{tr('已记录收款，正在核对订单；请勿再次收钱。', 'Payment recorded, checking the order. Do NOT collect again.')}</p>}
             </CartPanel>
           </div>
         </aside>
       </div>
 
-      <div className="flex items-center gap-2 border-t border-line bg-card p-2 lg:hidden">
-        <button type="button" onClick={() => setCartOpen(true)} aria-expanded={cartOpen} className="flex h-14 min-w-0 flex-1 items-center gap-2 rounded-xl border-2 border-control px-3 text-left">
-          <span className="text-lg font-bold">{tr('本单', 'Order')} · {token ?? '—'}</span>
-          <span className="text-ink-2">{tr(`${totals.portionCount}份`, `${totals.portionCount} pcs`)}</span>
-          {stage.kind === 'accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-ok">✓ {tr(`${stage.result.tokenNumber}号已接单`, `No. ${stage.result.tokenNumber} accepted`)}</span>}
-          {stage.kind === 'local_accepted' && totals.portionCount === 0 && <span className="truncate text-sm text-warn">{tr('本机已接单 · 请人工传单', 'Saved here · hand ticket over')}</span>}
-          <span className="ml-auto text-sm text-ink-2">{tr('查看 ▲', 'View ▲')}</span>
+      {undo && (
+        <div role="status" className="fixed bottom-40 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-ink px-4 py-2 whitespace-nowrap text-white shadow-xl lg:bottom-6">
+          {undo.label}
+          <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); setEditingLineId(null); }} className="h-10 rounded-lg border border-white/40 px-3 font-semibold">{tr('撤销', 'Undo')}</button>
+        </div>
+      )}
+
+      <div className="flex shrink-0 items-stretch gap-2 border-t border-line bg-card p-2 lg:hidden">
+        <button type="button" onClick={() => setCartOpen(true)} aria-expanded={cartOpen} className="flex min-h-14 min-w-0 flex-1 items-center gap-2 rounded-xl border border-line px-3 text-left">
+          <span className="font-bold">{tr('本单', 'Order')} {totals.portionCount} {tr('份', 'pcs')} · {formatRM(totals.totalSen)}</span>
+          <span className="ml-auto text-sm text-ink-2">{tr('查看 / 修改', 'View / edit')}</span>
         </button>
         <button type="button" onClick={() => setPayOpen(true)} disabled={Boolean(payDisabledReason)}
-          className="h-14 shrink-0 rounded-xl bg-brand px-4 text-lg font-bold text-white disabled:bg-control">{tr('收款', 'Pay')} {formatRM(totals.totalSen)}</button>
+          className="flex min-h-14 shrink-0 items-center gap-1.5 rounded-xl bg-ok px-4 text-lg font-bold text-white disabled:bg-control">{tr('去收款', 'Pay')}<span className="sr-only"> {formatRM(totals.totalSen)}</span><Icon name="arrow" size={20} /></button>
       </div>
-
-      <footer className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line bg-card px-4 py-2 text-base">
-        <Icon name="clock" size={20} />
-        {offlineMode ? <span className="text-warn">{tr('断网中：厨房队列无法更新', 'Offline: kitchen queue not updating')}</span> : <span>{tr('厨房待做', 'Kitchen queue')} <b>{queueQ.data.length}</b> {tr('单', '')}</span>}
-        {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} />}
-        {!offlineMode && Number.isFinite(oldest) && <QueueClock since={oldest} />}
-        {undo && (
-          <span className="ml-auto flex items-center gap-2 rounded-lg bg-subtle px-3 py-1">
-            {undo.label}
-            <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); setEditingLineId(null); }} className="h-10 rounded-lg border border-control px-3 font-semibold">{tr('撤销', 'Undo')}</button>
-          </span>
-        )}
-      </footer>
 
       {receipt && <ReceiptDialog receiptKey={receipt.key} load={receipt.load} menuVersion={menu.version} timeZone={config.timeZone} onClose={() => setReceipt(null)} />}
       {pickerOpen && <TokenPicker board={board} current={token} onPick={setToken} onRelease={releaseTokenAction} onClose={() => setPickerOpen(false)} />}
       {payOpen && token !== null && (
-        <PaymentDrawer dueSen={totals.totalSen} tokenNumber={token} portions={totals.portionCount} serviceMode={cart.serviceMode}
-          qrPayee={config.qrPayee} online={!offlineMode} busy={busy}
+        <PaymentDrawer menu={menu} cart={cart} totals={totals} tokenNumber={token}
+          qrPayee={config.qrPayee} online={!offlineMode} busy={busy} error={payError}
           onConfirm={(p) => void (offlineMode ? confirmOffline(p) : confirmOnline(p))}
-          onClose={() => { setPayOpen(false); if (stage.kind === 'rejected') setStage({ kind: 'idle' }); }} />
+          onClose={() => { setPayOpen(false); if (stage.kind === 'rejected' || stage.kind === 'local_failed') setStage({ kind: 'idle' }); }} />
       )}
       {payOpen && stage.kind === 'rejected' && (
-        <div role="alert" className="fixed bottom-28 right-4 z-50 max-w-[440px] rounded-xl border-2 border-danger bg-danger-bg p-4 text-danger shadow-xl">
+        <div role="alert" className="fixed right-4 bottom-6 z-[60] max-w-[440px] rounded-xl border-2 border-danger bg-danger-bg p-4 text-danger shadow-xl">
           <b>{tr('云端未接单：', 'Not accepted: ')}{stage.reason}</b>
           <p className="text-sm">{tr('这次没有生成订单。若已收钱，请勿再次收钱，修正后再提交。', 'No order was created. If you already took money, do not collect again — fix and resubmit.')}</p>
         </div>
       )}
+      {resultProps && resultOpen && !receipt && <OrderResultDialog {...resultProps} onClose={() => setResultOpen(false)} />}
     </div>
   );
 }
@@ -460,100 +521,19 @@ function KitchenHealthBadge({ lastSeenMs }: { lastSeenMs: number | null }) {
   const rt = useOfflineRuntime();
   const tr = useT();
   const h = kitchenHealth(lastSeenMs, serverNow(rt));
-  if (h === 'online') return <span className="text-ok">· {tr('后厨屏在线', 'Kitchen online')}</span>;
-  return <span className="font-semibold text-danger">· {h === 'unknown' ? tr('后厨屏未连接', 'Kitchen not connected') : tr(`后厨屏离线（最后 ${formatClock(serverNow(rt) - lastSeenMs!)} 前）`, `Kitchen offline (last seen ${formatClock(serverNow(rt) - lastSeenMs!)} ago)`)}</span>;
+  if (h === 'online') return <span className="inline-flex items-center gap-1.5 rounded-lg bg-ok-bg px-2.5 py-1.5 text-[13px] font-semibold text-ok"><span className="h-2 w-2 rounded-full bg-ok" />{tr('后厨已连接', 'Kitchen online')}</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-lg bg-danger-bg px-2.5 py-1.5 text-[13px] font-semibold text-danger">
+      <span className="h-2 w-2 rounded-full bg-danger" />
+      {h === 'unknown' ? tr('后厨屏未连接', 'Kitchen not connected') : tr(`后厨屏离线（${formatClock(serverNow(rt) - lastSeenMs!)} 前）`, `Kitchen offline (${formatClock(serverNow(rt) - lastSeenMs!)} ago)`)}
+    </span>
+  );
 }
 
 function QueueClock({ since }: { since: number }) {
   const now = useNow();
   const tr = useT();
-  return <span>· {tr('最久', 'Longest')} <b>{formatClock(now - since)}</b></span>;
-}
-
-/**
- * 三个事实分别有依据才点亮：本机已记录（IndexedDB 事务完成）、云端已接单（服务器事务提交）、后厨已收到（KDS 回执）。
- * 断网接单只点亮第一步；后厨一步改为人工传单。
- */
-function SubmitSteps({ stage, kitchenAckAtMs, handedOff, onHandoff, kitchenLastSeenMs, offsetMs, onlineHandoffAtMs, onOnlineHandoff, onReceipt }: {
-  stage: Stage; kitchenAckAtMs: number | null; handedOff: boolean; onHandoff: () => void;
-  kitchenLastSeenMs: number | null; offsetMs: number; onlineHandoffAtMs: number | null; onOnlineHandoff: () => void; onReceipt: () => void;
-}) {
-  const now = useNow(1000);
-  const tr = useT();
-  if (stage.kind === 'idle') return null;
-  const ack: AckState | null = stage.kind === 'accepted'
-    ? ackState({ acceptedAtMs: stage.result.acceptedAtMs, kitchenAckAtMs, nowServerMs: now + offsetMs, kitchenLastSeenMs })
-    : null;
-  const kitchenAck = ack === 'acked';
-  const offline = stage.kind === 'local_accepted';
-  const local = stage.kind !== 'saving' && stage.kind !== 'local_failed';
-  const cloud = stage.kind === 'accepted';
-  const steps: { label: string; done: boolean; icon: 'register' | 'cloud' | 'cook' | 'handoff'; warn?: boolean }[] = offline
-    ? [
-        { label: tr('本机已接单', 'Saved here'), done: true, icon: 'register' },
-        { label: tr('云端未同步（断网）', 'Not synced (offline)'), done: false, icon: 'cloud', warn: true },
-        { label: handedOff ? tr('已人工交接', 'Handed over') : tr('请人工传单', 'Hand ticket over'), done: handedOff, icon: 'handoff', warn: !handedOff },
-      ]
-    : [
-        { label: tr('本机已记录', 'Saved here'), done: local, icon: 'register' },
-        { label: tr('云端已接单', 'Accepted online'), done: cloud, icon: 'cloud' },
-        {
-          label: kitchenAck ? tr('后厨已收到', 'Kitchen got it') : ack === 'alarm' ? tr('后厨屏可能离线', 'Kitchen may be offline') : ack === 'waiting' ? tr('等待厨房确认', 'Waiting for kitchen') : tr('正在送到后厨', 'Sending to kitchen'),
-          done: cloud && kitchenAck, icon: 'cook', warn: ack === 'waiting' || ack === 'alarm',
-        },
-      ];
-  return (
-    <div className="mt-3 rounded-xl bg-subtle p-3" aria-live="polite">
-      <div className="flex items-center justify-between">
-        {steps.map((s, i) => (
-          <div key={s.label} className="flex flex-1 items-center">
-            <div className={`flex flex-col items-center text-center text-sm ${s.done ? 'text-ok' : s.warn ? 'text-warn' : 'text-ink-2 opacity-60'}`}>
-              <Icon name={s.icon} size={34} />
-              <span className="font-semibold">{s.done ? '✓ ' : ''}{s.label}</span>
-            </div>
-            {i < 2 && <span className={`mx-1 flex-1 text-center ${offline && i === 0 ? 'text-warn' : 'text-ink-2'}`}>{offline && i === 0 ? '✕' : '→'}</span>}
-          </div>
-        ))}
-      </div>
-      {ack === 'alarm' && (
-        <div role="alert" className="mt-2 rounded-lg border-2 border-danger bg-danger-bg p-2 text-center text-danger">
-          <b>{tr('已超过 15 秒没有后厨回执，后厨屏可能离线。请把纸单递给厨师。', 'No kitchen receipt after 15 s — the kitchen screen may be offline. Hand the paper ticket to the cook.')}</b>
-          {onlineHandoffAtMs
-            ? <p className="mt-1 font-semibold">✓ {tr('已登记人工传单；后厨屏恢复后会看到提示，避免做两份。', 'Hand-over recorded; the kitchen screen will show it to avoid cooking twice.')}</p>
-            : <button type="button" onClick={onOnlineHandoff} className="mt-2 inline-flex h-12 items-center gap-2 rounded-xl bg-danger px-4 font-bold text-white"><Icon name="handoff" size={28} />{tr('我已递纸单给厨师', 'I gave the ticket to the cook')}</button>}
-        </div>
-      )}
-      {stage.kind === 'accepted' && (
-        <p className="mt-2 text-center font-semibold">
-          {tr(`${stage.result.tokenNumber}号 · 票号 ${stage.result.receiptNumber}`, `No. ${stage.result.tokenNumber} · receipt ${stage.result.receiptNumber}`)} · {formatRM(stage.result.totalSen)}
-          {stage.result.changeSen !== null && stage.result.changeSen > 0 && <> · {tr('找零', 'change')} <span className="text-xl">{formatRM(stage.result.changeSen)}</span></>}
-        </p>
-      )}
-      {offline && (
-        <div className="mt-2 text-center">
-          <p className="font-semibold">
-            {tr(`${stage.tokenNumber}号 · 临时号 ${stage.offlineReceiptNumber}`, `No. ${stage.tokenNumber} · temp ${stage.offlineReceiptNumber}`)} · {formatRM(stage.totalSen)}
-            {stage.changeSen !== null && stage.changeSen > 0 && <> · {tr('找零', 'change')} <span className="text-xl">{formatRM(stage.changeSen)}</span></>}
-          </p>
-          <p className="text-sm text-warn">{tr('已保存在本机；后厨屏不会收到。请把纸单递给厨师。', 'Saved on this device; the kitchen screen will not get it. Hand the ticket to the cook.')}</p>
-          {!handedOff && (
-            <button type="button" onClick={onHandoff} className="mt-2 inline-flex h-12 items-center gap-2 rounded-xl bg-warn px-4 font-bold text-white">
-              <Icon name="handoff" size={28} />{tr('我已把单交给厨师', 'I handed it to the cook')}
-            </button>
-          )}
-        </div>
-      )}
-      {(stage.kind === 'accepted' || offline) && (
-        <div className="mt-2 text-center">
-          <button type="button" onClick={onReceipt} className="h-11 rounded-lg border border-control bg-card px-4 font-semibold">{tr('收据', 'Receipt')}</button>
-        </div>
-      )}
-      {stage.kind === 'submitting' && <p className="mt-2 text-center text-warn">{tr('正在提交，请勿重复收钱或重复点击。', 'Submitting — do not collect again or tap again.')}</p>}
-      {stage.kind === 'unknown' && <p className="mt-2 text-center font-semibold text-warn">{tr('已记录收款，正在核对订单；请勿再次收钱。', 'Payment recorded, checking the order. Do NOT collect again.')}</p>}
-      {stage.kind === 'local_failed' && <p className="mt-2 text-center font-semibold text-danger">{tr('本机保存失败，订单尚未确认', 'Could not save on this device — order not confirmed')}（{stage.message}）{tr('。购物车已保留。', '. Cart kept.')}</p>}
-      {stage.kind === 'rejected' && <p className="mt-2 text-center font-semibold text-danger">{tr('云端未接单：', 'Not accepted: ')}{stage.reason}</p>}
-    </div>
-  );
+  return <span>· {tr('最久', 'Longest')} <b className="text-ink">{formatClock(now - since)}</b></span>;
 }
 
 /** 不是主收银机 / 未开班 / 离线资格过期时的说明页。 */

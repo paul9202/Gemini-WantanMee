@@ -10,28 +10,24 @@ const TABS: { route: Route; label: string }[] = [
   { route: '/owner/settings', label: '设置' },
 ];
 
-/** 桌面为页内标签；手机为底部导航（64px + 安全区）。 */
+/** 老板子页标签：所有宽度都在页内横向排列（窄屏可横向滑动）；底部导航由外壳统一提供。 */
 export function OwnerTabs({ current, badge }: { current: Route; badge?: Partial<Record<Route, number>> }) {
-  const item = (t: (typeof TABS)[number], mobile: boolean) => (
-    <button key={t.route} type="button" onClick={() => navigate(t.route)} aria-current={current === t.route ? 'page' : undefined}
-      className={mobile
-        ? `relative flex-1 text-base font-semibold ${current === t.route ? 'text-brand' : 'text-ink-2'}`
-        : `relative h-11 rounded-lg px-4 font-semibold ${current === t.route ? 'bg-ink text-white' : 'text-ink-2 hover:bg-subtle'}`}>
-      {t.label}
-      {badge?.[t.route] ? <span className="absolute -top-1 right-1 rounded-full bg-danger px-1.5 text-xs text-white">{badge[t.route]}</span> : null}
-    </button>
-  );
   return (
-    <>
-      <nav aria-label="老板页面" className="mb-4 hidden gap-2 md:flex">{TABS.map((t) => item(t, false))}</nav>
-      <nav aria-label="老板页面" className="fixed inset-x-0 bottom-0 z-30 flex h-16 border-t border-line bg-card pb-[env(safe-area-inset-bottom)] md:hidden">{TABS.map((t) => item(t, true))}</nav>
-    </>
+    <nav aria-label="老板页面" className="-mx-4 mb-5 flex gap-2 overflow-x-auto px-4 pb-1 lg:mx-0 lg:px-0">
+      {TABS.map((t) => (
+        <button key={t.route} type="button" onClick={() => navigate(t.route)} aria-current={current === t.route ? 'page' : undefined}
+          className={`relative h-11 shrink-0 rounded-xl border px-4 font-semibold ${current === t.route ? 'border-ink bg-ink text-white' : 'border-line bg-card text-ink-2 hover:text-ink'}`}>
+          {t.label}
+          {badge?.[t.route] ? <span className="ml-1.5 rounded-full bg-danger px-1.5 text-xs text-white">{badge[t.route]}</span> : null}
+        </button>
+      ))}
+    </nav>
   );
 }
 
 export function Section({ title, hint, children, actions }: { title: string; hint?: string; children: ReactNode; actions?: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-line bg-card p-4">
+    <section className="rounded-2xl border border-line bg-card p-5 shadow-card">
       <div className="mb-3 flex flex-wrap items-baseline gap-2">
         <h2 className="text-lg font-bold">{title}</h2>
         {hint && <span className="text-sm text-ink-2">{hint}</span>}
@@ -45,7 +41,7 @@ export function Section({ title, hint, children, actions }: { title: string; hin
 export function Kpi({ label, value, sub, tone = 'normal' }: { label: string; value: string; sub?: string; tone?: 'normal' | 'warn' | 'bad' | 'good' }) {
   const color = tone === 'bad' ? 'text-danger' : tone === 'warn' ? 'text-warn' : tone === 'good' ? 'text-ok' : 'text-ink';
   return (
-    <div className="rounded-2xl border border-line bg-card p-4">
+    <div className="rounded-2xl border border-line bg-card p-5 shadow-card">
       <div className="text-sm text-ink-2">{label}</div>
       <div className={`mt-1 text-3xl font-black tabular-nums ${color}`}>{value}</div>
       {sub && <div className="mt-1 text-xs text-ink-2">{sub}</div>}
@@ -62,7 +58,7 @@ export function BarList({ rows, format }: { rows: { label: string; value: number
       {rows.map((r) => (
         <li key={r.label} className="grid grid-cols-[6rem_1fr_6rem] items-center gap-2">
           <span className="truncate text-sm">{r.label}</span>
-          <span className="h-3 rounded bg-subtle"><span className="block h-3 rounded bg-brand" style={{ width: `${(Math.abs(r.value) / max) * 100}%` }} /></span>
+          <span className="h-3 rounded bg-subtle"><span className="block h-3 rounded bg-ok/70" style={{ width: `${(Math.abs(r.value) / max) * 100}%` }} /></span>
           <span className="text-right text-sm font-semibold tabular-nums">{format(r.value)}</span>
         </li>
       ))}

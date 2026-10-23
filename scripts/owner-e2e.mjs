@@ -38,17 +38,17 @@ try {
   await pos.goto('/login');
   await login(pos, 'owner');
   await pos.goto('/device');
-  await pos.page(`await __waitFor('设为主收银机'); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
+  await pos.page(`await __waitFor('设为主收银机'); for (let i = 0; i < 60 && ![...document.querySelectorAll('button')].some((b) => !b.disabled && b.innerText.includes('设为主收银机')); i++) await __sleep(250); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
   await pos.page(`__click('退出'); await __sleep(2000);`);
   await login(pos, 'cashier');
   await pos.page(`if (await __waitFor('确认开班', 8000)) __click('确认开班'); await __waitFor('看图选餐', 25000);`);
   const sell = (setup, pay) => pos.page(`
     await __waitFor('看图选餐', 15000); ${setup}
     __click('加入本单'); await __sleep(200); __click('收款RM'); await __sleep(400); ${pay}
-    await __waitFor('✓云端已接单', 40000); return document.querySelector('aside').innerText;`);
+    await __waitFor('✓云端已接单', 40000); return (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText;`);
   await sell(`__click('红酱面'); await __sleep(150);`, `__click('刚好'); await __sleep(200); __click('确认收款并接单');`);
   await sell(`__click('黑酱面'); await __sleep(150); __click('1½'); await __sleep(150);`, `__click('DuitNowQR'); await __sleep(200); document.querySelector('[aria-label="收款"] input[type=checkbox]').click(); await __sleep(200); __click('确认收款并接单');`);
-  await sell(`__click('白酱面'); await __sleep(150); __click('大RM11'); await __sleep(150);`, `__click('刚好'); await __sleep(200); __click('确认收款并接单');`);
+  await sell(`__click('白酱面'); await __sleep(150); __click('大·RM11'); await __sleep(150);`, `__click('刚好'); await __sleep(200); __click('确认收款并接单');`);
   check('收银接 3 单', (await fsList('orders')).length === 3);
 
   // ---- 收银机补同步两条会被判待核对的离线单：餐牌冲突、金额不符 ----
@@ -65,7 +65,7 @@ try {
   const ov = await boss.page(`await __waitFor('净收款', 15000); await __sleep(2500); return document.querySelector('main').innerText;`);
   check('概览：净收款 RM27.00（未含待核对金额）', ov.includes('RM27.00'), ov.match(/净收款[^\n]*\n([^\n]+)/)?.[1]);
   check('概览：醒目提示 2 条待核对与未入账金额', ov.includes('离线记录待核对 2 条') && ov.includes('RM13.00'));
-  check('概览：8 分钟达标率无样本显示「—」', /8 分钟内达标率\s*—/.test(ov));
+  check('概览：8 分钟达标率无样本显示「—」', /8 分钟内出餐率\s*—/.test(ov));
   await save(boss, 'overview-1366');
 
   // ---- 待核对：补入账 ----

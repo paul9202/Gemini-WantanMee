@@ -1,30 +1,65 @@
 @import "tailwindcss";
 
-/* 设计 Token（02 §2）。营业时不依赖外部字体，使用系统中文字体回退。 */
+/*
+ * 设计 Token：2026-10-23 新版 UI（奶油白、砖红、松绿）。营业时不依赖外部字体，使用系统中文字体回退。
+ * 旧名称（ink-2、ok、warn…）保留，让未单独改版的页面自动换成新色板。
+ */
 @theme {
-  --font-sans: Inter, "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
 
-  --color-canvas: #f6f3ec;
+  --color-canvas: #f5f3ed;
   --color-card: #ffffff;
-  --color-subtle: #eeeae1;
-  --color-ink: #202821;
-  --color-ink-2: #566057;
-  --color-line: #d9ded6;
-  --color-control: #7c887e;
-  --color-brand: #b93825;
-  --color-brand-pressed: #922b1d;
-  --color-focus: #176c55;
-  --color-ok: #176c55;
-  --color-ok-bg: #e5f2ea;
-  --color-warn: #80500d;
-  --color-warn-bg: #fff1cc;
-  --color-danger: #b42318;
-  --color-danger-bg: #fde9e5;
-  --color-kds: #131b18;
-  --color-kds-card: #202d26;
-  --color-kds-text: #f4f5e9;
-  --color-kds-muted: #bdcbc0;
-  --color-kds-action: #e8c97a;
+  --color-subtle: #efede5;
+  --color-ink: #252d29;
+  --color-ink-2: #71766e;
+  --color-line: #e4e5dc;
+  --color-control: #8f948a;
+  --color-brand: #a93824;
+  --color-brand-pressed: #8a2c1c;
+  --color-brand-soft: #f7e9e2;
+  --color-focus: #418ccb;
+  --color-ok: #28644c;
+  --color-ok-pressed: #1f5240;
+  --color-ok-bg: #e8f0e9;
+  --color-warn: #885719;
+  --color-warn-bg: #fcf0ce;
+  --color-danger: #a93228;
+  --color-danger-bg: #fbe4db;
+
+  /* 后厨：默认深色；浅色由 .kds-light 覆盖同名变量（设备偏好）。 */
+  --color-kds: #141e1c;
+  --color-kds-card: #202e29;
+  --color-kds-line: #3b4a42;
+  --color-kds-soft: #2e3e34;
+  --color-kds-text: #f6f5e9;
+  --color-kds-muted: #b5c4b9;
+  --color-kds-action: #efd18b;
+  --color-kds-action-ink: #2c3024;
+  --color-kds-serve: #b5d3b8;
+  --color-kds-danger: #ffb9a1;
+  --color-kds-danger-bg: #6e3a2a;
+  --color-kds-warning: #f3d596;
+  --color-kds-warning-bg: #3d3824;
+  --color-kds-live: #8fd6a8;
+
+  --shadow-card: 0 5px 20px #28312808;
+}
+
+.kds-light {
+  --color-kds: #f3f1ea;
+  --color-kds-card: #ffffff;
+  --color-kds-line: #dcdcd2;
+  --color-kds-soft: #efede5;
+  --color-kds-text: #252d29;
+  --color-kds-muted: #5f665e;
+  --color-kds-action: #e9c46f;
+  --color-kds-action-ink: #2c3024;
+  --color-kds-serve: #a8cfae;
+  --color-kds-danger: #a93228;
+  --color-kds-danger-bg: #fbe4db;
+  --color-kds-warning: #885719;
+  --color-kds-warning-bg: #fcf0ce;
+  --color-kds-live: #28644c;
 }
 
 @layer base {
@@ -37,11 +72,11 @@
     background: var(--color-canvas);
     color: var(--color-ink);
   }
-  button { cursor: pointer; }
+  button { cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   button:disabled { cursor: not-allowed; }
   :focus-visible {
-    outline: 2px solid var(--color-focus);
-    outline-offset: 2px;
+    outline: 3px solid var(--color-focus);
+    outline-offset: 3px;
   }
   @media (prefers-reduced-motion: reduce) {
     *, ::before, ::after { transition-duration: 0ms !important; animation-duration: 0ms !important; }

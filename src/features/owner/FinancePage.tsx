@@ -60,7 +60,7 @@ export function FinancePage() {
   const docs = ledger.data?.docs;
 
   return (
-    <div className="mx-auto max-w-[1200px] p-4 pb-24 md:pb-6">
+    <div className="mx-auto max-w-[1200px] p-4 pb-8 lg:p-8">
       <OwnerTabs current="/owner/finance" />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-bold">收支与损耗</h1>

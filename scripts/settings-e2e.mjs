@@ -57,19 +57,19 @@ try {
 
   // ---- 后厨切换英文 ----
   await staff.goto('/device');
-  await staff.page(`await __waitFor('设备与连接'); __click('English'); await __sleep(500);`);
-  check('设备页切换英文', await staff.page(`return __has('Device&connection') && __has('Language');`));
+  await staff.page(`await __waitFor('连接与设备'); __click('English'); await __sleep(500);`);
+  check('设备页切换英文', await staff.page(`return __has('Connection&device') && __has('Language');`));
   await save(staff, 'device-en-1366');
 
   // ---- 收银开班 ----
   await pos.goto('/login');
   await login(pos, 'owner');
   await pos.goto('/device');
-  await pos.page(`await __waitFor('设为主收银机'); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
+  await pos.page(`await __waitFor('设为主收银机'); for (let i = 0; i < 60 && ![...document.querySelectorAll('button')].some((b) => !b.disabled && b.innerText.includes('设为主收银机')); i++) await __sleep(250); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
   await pos.page(`__click('退出'); await __sleep(2000);`);
   await login(pos, 'cashier');
   await pos.page(`if (await __waitFor('确认开班', 8000)) __click('确认开班'); await __waitFor('看图选餐', 25000);`);
-  check('发布前：红酱面 RM7 起', await pos.page(`return __has('RM7起');`));
+  check('发布前：红酱面 RM7 起', await pos.page(`return __has('RM7.00起');`));
 
   // ---- 老板发布菜单：小份面 RM8（净面 RM4）、干捞云吞售罄 ----
   const before = (await fsGet('config/public')).activeMenuVersion;
@@ -88,21 +88,21 @@ try {
 
   // ---- 收银机自动改用新价、售罄入口不可点 ----
   const posState = await pos.page(`
-    await __waitFor('RM8起', 20000);
+    await __waitFor('RM8.00起', 20000);
     const wanton = [...document.querySelectorAll('button[aria-label="干捞云吞"]')][0];
-    return { price: __has('RM8起'), soldOut: __has('已售罄'), disabled: wanton?.disabled ?? null };`);
+    return { price: __has('RM8.00起'), soldOut: __has('已售罄'), disabled: wanton?.disabled ?? null };`);
   check('收银机自动显示新价 RM8 起', posState.price);
   check('售罄入口显示「已售罄」并不可点', posState.soldOut && posState.disabled === true, JSON.stringify(posState));
 
   // ---- 收银切换英文后按新价收款 ----
   await pos.goto('/device');
-  await pos.page(`await __waitFor('设备与连接'); __click('English'); await __sleep(400);`);
+  await pos.page(`await __waitFor('连接与设备'); __click('English'); await __sleep(400);`);
   await pos.goto('/pos');
-  const en = await pos.page(`await __waitFor('Pickthedish', 15000); return { sold: __has('Soldout'), from: __has('fromRM8'), pay: __has('Pay') };`);
+  const en = await pos.page(`await __waitFor('Pickthedish', 15000); return { sold: __has('Soldout'), from: __has('RM8.00from'), pay: __has('Takepayment') };`);
   check('POS 英文：Sold out / from RM8 / Pay', en.sold && en.from && en.pay, JSON.stringify(en));
   await pos.page(`__click('RedSauce'); await __sleep(200);`);
   await save(pos, 'pos-en-1366');
-  await pos.page(`__click('Add'); await __sleep(300); __click('PayRM8'); await __sleep(400); __click('Exact'); await __sleep(200); __click('Confirmpayment&send'); await __waitFor('Acceptedonline', 90000);`);
+  await pos.page(`__click('Add'); await __sleep(300); __click('paymentRM8'); await __sleep(400); __click('Exact'); await __sleep(200); __click('Confirmpayment&send'); await __waitFor('Acceptedonline', 90000);`);
   let o;
   for (let i = 0; i < 30 && !o; i++) { o = (await fsList('orders')).find((x) => x.menuVersion === cfg.activeMenuVersion); if (!o) await new Promise((r) => setTimeout(r, 1000)); }
   check('新单按新菜单版本 RM8 成交', o && o.totalSen === 800, o ? `${o.menuVersion} ${o.totalSen}` : 'none');
@@ -110,7 +110,7 @@ try {
 
   // ---- 后厨英文 KDS ----
   await staff.goto('/kitchen', 5000);
-  const kds = await staff.page(`await __waitFor('Start', 20000); return { start: __has('Start'), name: __has('RedSauceNoodles·Small'), noodle: __has('Tocook·Thinegg') };`);
+  const kds = await staff.page(`await __waitFor('Start', 20000); return { start: __has('Start'), name: __has('RedSauceNoodles·Small'), noodle: __has('Tocook·Thin') };`);
   check('KDS 英文：菜名、待下锅、开始制作', kds.start && kds.name && kds.noodle, JSON.stringify(kds));
   await save(staff, 'kds-en-1366');
 
@@ -121,7 +121,7 @@ try {
   await pos.goto('/device');
   await pos.page(`await __waitFor('Device'); __click('中文'); await __sleep(400);`);
   await pos.goto('/training');
-  const zh = await pos.page(`await __waitFor('六种餐品', 10000); await __sleep(1500); return { noodles: __has('细面') && __has('面薄'), price: __has('RM8.00'), kosong: __has('半价·不能加肉') };`);
+  const zh = await pos.page(`await __waitFor('六种餐品', 30000); await __sleep(1500); return { noodles: __has('细面') && __has('面薄'), price: __has('RM8.00'), kosong: __has('半价·不能加肉') };`);
   check('图卡页（中文）：面条、当前价格、净面规则', zh.noodles && zh.price && zh.kosong, JSON.stringify(zh));
   await save(pos, 'training-zh-1366');
   await pos.send('Emulation.setEmulatedMedia', { media: 'print' });

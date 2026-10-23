@@ -1,13 +1,33 @@
-/** 右侧本单：行项目照片 + 偏离默认的图卡 + 数量；点行可修改。 */
+/** 第三栏：本单明细。每行可改数量、编辑、删除（删除可短暂撤销），底部应收合计与去收款。 */
+import { ReactNode } from 'react';
 import { Cart, OrderTotals } from '../../domain/cart';
-import { lineName, linePhotoId } from '../../domain/lineItem';
+import { LineConfig, lineName, linePhotoId } from '../../domain/lineItem';
 import { useLang, useT } from '../../app/i18n';
-import { MenuVersion } from '../../domain/menu';
+import { MenuVersion, NOODLE_TYPE_NAMES, SAUCE_NAMES } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
-import { linePictograms } from '../../domain/pictograms';
-import { Icon, Photo, Picto } from '../../ui/visual';
+import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
+import { Icon, Photo } from '../../ui/visual';
+import { Eyebrow, Stepper } from './parts';
 
-export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEdit, onQuantity, onPay, payDisabledReason, children }: {
+/** 「面薄 · 中 · 少辣」这类细节行，以及偏离默认的特别要求。 */
+export function useLineText(menu: MenuVersion) {
+  const tr = useT();
+  const lang = useLang();
+  return (cfg: LineConfig, serviceMode: Cart['serviceMode']) => {
+    const size = menu.products[cfg.productKind].sizes.find((s) => s.id === cfg.size);
+    const sz = size ? tr(size.nameZh, size.nameEn) : '';
+    const full = lineName(menu, cfg, lang);
+    const name = sz && full.endsWith(` · ${sz}`) ? full.slice(0, -(sz.length + 3)) : full;
+    const sauce = cfg.productKind === 'dry_wanton' && cfg.sauce ? tr(SAUCE_NAMES[cfg.sauce].zh, SAUCE_NAMES[cfg.sauce].en) : null;
+    const detail = [cfg.noodleType ? tr(NOODLE_TYPE_NAMES[cfg.noodleType].zh, NOODLE_TYPE_NAMES[cfg.noodleType].en) : null, sauce, sz || null].filter(Boolean).join(' · ');
+    const special = linePictograms(menu, cfg, serviceMode)
+      .filter((p) => p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'takeaway:no_side_soup')
+      .map((p) => (lang === 'en' ? PICTOGRAMS[p.id].en : PICTOGRAMS[p.id].zh));
+    return { name, detail, special: special.join(' · ') };
+  };
+}
+
+export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEdit, onQuantity, onClear, onPay, payDisabledReason, children }: {
   menu: MenuVersion;
   cart: Cart;
   totals: OrderTotals;
@@ -15,62 +35,75 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
   editingLineId: string | null;
   onEdit: (lineId: string) => void;
   onQuantity: (lineId: string, q: number) => void;
+  onClear: () => void;
   onPay: () => void;
   payDisabledReason: string | null;
-  children?: React.ReactNode;
+  children?: ReactNode;
 }) {
   const tr = useT();
-  const lang = useLang();
+  const text = useLineText(menu);
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-3">
-        <h2 className="text-2xl font-bold">{tr('本单', 'Order')} · <span className="text-3xl tabular-nums">{tokenNumber ?? '—'}</span></h2>
-        <span className="ml-auto inline-flex items-center gap-1 rounded-lg bg-subtle px-2 py-1 font-semibold">
-          <Icon name={cart.serviceMode === 'dine_in' ? 'table' : 'bag'} size={22} />{cart.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
+      <div className="flex items-start gap-2 px-5 pt-5 pb-3">
+        <div>
+          <Eyebrow>03 / CHECKOUT</Eyebrow>
+          <h2 className="mt-1 text-xl font-bold">{tr('本单明细', 'This order')}</h2>
+        </div>
+        <span className="ml-auto rounded-xl border border-line px-3 py-1.5 text-sm font-semibold" aria-label={tr(`餐牌 ${tokenNumber ?? '—'}`, `Token ${tokenNumber ?? '—'}`)}>
+          {tr('餐牌', 'Token')} <b className="text-base tabular-nums">{tokenNumber ?? '—'}</b>
         </span>
       </div>
-      <ul className="flex-1 space-y-2 overflow-y-auto p-3" aria-label={tr('本单餐品', 'Order items')}>
-        {cart.lines.length === 0 && <li className="py-10 text-center text-ink-2">{tr('还没有餐品。点左边的照片加入。', 'No items yet. Tap a photo to add.')}</li>}
+      <ul className="min-h-0 flex-1 overflow-y-auto px-5" aria-label={tr('本单餐品', 'Order items')}>
+        {cart.lines.length === 0 && (
+          <li className="flex flex-col items-center gap-2 py-12 text-center text-ink-2">
+            <Icon name="bowl" size={40} />{tr('还没有餐品。选好后点「加入本单」。', 'No items yet. Choose a dish, then “Add to order”.')}
+          </li>
+        )}
         {cart.lines.map((l) => {
           const t = totals.lines.find((x) => x.lineId === l.lineId)!;
-          const pics = linePictograms(menu, l.config, cart.serviceMode).filter((p) => p.emphasized || p.id.startsWith('noodle:') || p.id === 'soup:base');
+          const x = text(l.config, cart.serviceMode);
+          const editing = editingLineId === l.lineId;
           return (
-            <li key={l.lineId} className={`rounded-xl border-2 bg-card p-2 ${editingLineId === l.lineId ? 'border-brand' : 'border-line'}`}>
-              <button type="button" onClick={() => onEdit(l.lineId)} className="flex w-full items-start gap-3 text-left" aria-label={`${tr('修改', 'Edit')} ${lineName(menu, l.config, lang)}`}>
-                <Photo id={linePhotoId(l.config)} size={72} rounded={10} />
+            <li key={l.lineId} className={`border-b border-dashed border-line py-4 ${editing ? '-mx-2 rounded-xl border-transparent bg-brand-soft px-2' : ''}`}>
+              <div className="flex items-start gap-3">
+                <Photo id={linePhotoId(l.config)} size={52} rounded={26} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-start gap-2">
-                    <b className="text-lg leading-tight">{lineName(menu, l.config, lang)}</b>
-                    <b className="ml-auto text-lg tabular-nums">{formatRM(t.lineTotalSen)}</b>
+                    <b className="leading-tight">{x.name}</b>
+                    <b className="ml-auto tabular-nums">{formatRM(t.lineTotalSen).replace('RM', '')}</b>
                   </div>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {pics.map((p) => <Picto key={p.id} id={p.id} size={20} />)}
+                  {x.detail && <p className="text-[13px] text-ink-2">{x.detail}</p>}
+                  {x.special && <p className="mt-0.5 text-[13px] font-semibold text-brand">{x.special}</p>}
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <Stepper size="sm" min={0} value={l.quantity} onChange={(q) => onQuantity(l.lineId, q)} labelLess={tr('减一份', 'One less')} labelMore={tr('加一份', 'One more')} />
+                    {editing
+                      ? <span className="text-sm font-semibold text-brand">{tr('正在修改…', 'Editing…')}</span>
+                      : <button type="button" onClick={() => onEdit(l.lineId)} className="min-h-11 px-1 text-sm underline underline-offset-4">{tr('编辑', 'Edit')}</button>}
+                    <button type="button" onClick={() => onQuantity(l.lineId, 0)} className="min-h-11 px-1 text-sm text-ink-2 underline underline-offset-4">{tr('删除', 'Remove')}</button>
+                    {l.quantity > 1 && <span className="ml-auto text-xs text-ink-2">{tr(`单价 ${formatRM(t.unitPriceSen)}`, `${formatRM(t.unitPriceSen)} each`)}</span>}
                   </div>
-                </div>
-              </button>
-              <div className="mt-2 flex items-center gap-2">
-                <span className="text-sm text-ink-2">{editingLineId === l.lineId ? tr('正在修改…', 'Editing…') : tr(`单价 ${formatRM(t.unitPriceSen)} · 点图片可修改`, `${formatRM(t.unitPriceSen)} each · tap photo to edit`)}</span>
-                <div className="ml-auto flex items-center rounded-lg border border-control">
-                  <button type="button" aria-label={tr('减一份', 'One less')} onClick={() => onQuantity(l.lineId, l.quantity - 1)} className="h-12 w-12 text-2xl">−</button>
-                  <span className="w-8 text-center text-xl font-bold tabular-nums" aria-live="polite">{l.quantity}</span>
-                  <button type="button" aria-label={tr('加一份', 'One more')} onClick={() => onQuantity(l.lineId, l.quantity + 1)} className="h-12 w-12 text-2xl">＋</button>
                 </div>
               </div>
             </li>
           );
         })}
       </ul>
-      <div className="border-t border-line bg-card p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.04)]">
-        <div className="flex justify-between text-ink-2"><span>{tr(`共 ${totals.portionCount} 份`, `${totals.portionCount} portion(s)`)}</span>{cart.serviceMode === 'takeaway' && <span>{tr('打包不另收包装费', 'No packaging charge')}</span>}</div>
-        <div className="my-2 flex items-baseline justify-between">
-          <span className="text-lg font-semibold">{tr('应收', 'Total')}</span>
-          <span className="text-4xl font-black tabular-nums">{formatRM(totals.totalSen)}</span>
+      <div className="border-t border-line px-5 py-4">
+        <div className="flex items-center text-sm text-ink-2">
+          <span>{cart.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')} · {tr(`${totals.portionCount} 份餐品`, `${totals.portionCount} item(s)`)}</span>
+          {cart.lines.length > 0 && <button type="button" onClick={onClear} className="ml-auto min-h-10 underline underline-offset-4">{tr('清空本单', 'Clear order')}</button>}
+        </div>
+        <div className="my-3 flex items-baseline justify-between">
+          <span className="font-semibold">{tr('应收合计', 'Total')}</span>
+          <span className="text-4xl font-black tabular-nums"><span className="mr-1 text-base font-bold">RM</span>{formatRM(totals.totalSen).replace('RM', '')}</span>
         </div>
         <button type="button" onClick={onPay} disabled={Boolean(payDisabledReason)}
-          className="flex h-16 w-full items-center justify-center gap-2 rounded-xl bg-brand text-xl font-bold text-white hover:bg-brand-pressed disabled:bg-control">
-          <Icon name="cash" size={28} />{tr('收款', 'Pay')} {formatRM(totals.totalSen)} →
+          className="flex h-16 w-full items-center justify-center gap-3 rounded-xl bg-ok text-xl font-bold text-white hover:bg-ok-pressed disabled:bg-control">
+          <Icon name="cash" size={30} />{tr('去收款', 'Take payment')} <span className="sr-only">{formatRM(totals.totalSen)}</span><Icon name="arrow" size={22} />
         </button>
-        {payDisabledReason && <p className="mt-2 text-sm text-warn">{payDisabledReason}</p>}
+        {payDisabledReason
+          ? <p className="mt-2 text-sm text-warn">{payDisabledReason}</p>
+          : <p className="mt-2 flex items-center justify-center gap-1.5 text-xs text-ink-2">{tr('核对金额', 'Check total')}<Icon name="chevron-right" size={12} />{tr('确认收款', 'Confirm payment')}<Icon name="chevron-right" size={12} />{tr('发送后厨', 'Send to kitchen')}</p>}
         {children}
       </div>
     </div>

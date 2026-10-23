@@ -1,0 +1,211 @@
+{
+  "at": "2026-10-23T11:43:41.806Z",
+  "env": "local Firebase Emulator + vite preview (VITE_USE_EMULATORS=true)",
+  "results": [
+    {
+      "name": "kitchen-phone",
+      "width": 390,
+      "height": 844,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 1
+    },
+    {
+      "name": "kitchen-tablet",
+      "width": 768,
+      "height": 1024,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 3
+    },
+    {
+      "name": "kitchen-tabletL",
+      "width": 1024,
+      "height": 768,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 2
+    },
+    {
+      "name": "kitchen-laptop",
+      "width": 1366,
+      "height": 900,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 3
+    },
+    {
+      "name": "kitchen-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 6
+    },
+    {
+      "name": "kitchen-fhd",
+      "width": 1920,
+      "height": 1080,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 6
+    },
+    {
+      "name": "kitchen-light-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 6
+    },
+    {
+      "name": "kitchen-offline-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 6,
+      "actionsVisible": 6
+    },
+    {
+      "name": "kitchen-offline-freeze",
+      "banner": true,
+      "allDisabled": true
+    },
+    {
+      "name": "kitchen-busy-fhd",
+      "width": 1920,
+      "height": 1080,
+      "overflow": 0,
+      "actions": 7,
+      "actionsVisible": 6
+    },
+    {
+      "name": "pos-phone",
+      "width": 390,
+      "height": 844,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "pos-tablet",
+      "width": 768,
+      "height": 1024,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "pos-tabletL",
+      "width": 1024,
+      "height": 768,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "pos-laptop",
+      "width": 1366,
+      "height": 900,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "pos-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "payment-cash-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "payment-cash-phone",
+      "width": 390,
+      "height": 844,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "payment-result-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "orders-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "orders-phone",
+      "width": 390,
+      "height": 844,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "owner-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "owner-phone",
+      "width": 390,
+      "height": 844,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "device-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "device-phone",
+      "width": 390,
+      "height": 844,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "pos-en-laptop",
+      "width": 1366,
+      "height": 900,
+      "overflow": 0,
+      "actions": 0,
+      "actionsVisible": 0
+    },
+    {
+      "name": "kitchen-en-wide",
+      "width": 1600,
+      "height": 1120,
+      "overflow": 0,
+      "actions": 8,
+      "actionsVisible": 6
+    }
+  ]
+}

@@ -14,7 +14,7 @@ export const DEFAULT_BUSINESS_DAY: BusinessDayPolicy = { timeZone: 'Asia/Kuala_L
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
 
-function wallClock(epochMs: number, timeZone: string) {
+export function wallClock(epochMs: number, timeZone: string) {
   let f = formatters.get(timeZone);
   if (!f) {
     f = new Intl.DateTimeFormat('en-CA', {

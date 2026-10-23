@@ -86,7 +86,7 @@ try {
   await goto('/login');
   check('老板登录（进入老板概览）', (await login('owner')) === '/owner');
   await goto('/device');
-  await page(`await __waitFor('设为主收银机'); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
+  await page(`await __waitFor('设为主收银机'); for (let i = 0; i < 60 && ![...document.querySelectorAll('button')].some((b) => !b.disabled && b.innerText.includes('设为主收银机')); i++) await __sleep(250); __click('设为主收银机'); await __waitFor('就是本机', 25000);`);
   await logout();
   check('收银登录', (await login('cashier')) === '/pos');
   await page(`if (await __waitFor('确认开班', 8000)) { __click('确认开班'); } await __waitFor('看图选餐', 25000);`);
@@ -105,9 +105,9 @@ try {
   check('断网后显示离线营业横条', await page(`return await __waitFor('离线营业·仅本机保存', 8000);`));
   const order1 = await page(`
     __click('红酱面'); await __sleep(150); __click('加入本单'); await __sleep(200);
-    const token = Number(document.querySelector('aside h2').innerText.match(/(\\d+)/)[1]);
+    const token = Number(document.querySelector('aside [aria-label^="餐牌"]').getAttribute('aria-label').match(/(\\d+)/)[1]);
     __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款·本机接单'); await __sleep(1500);
-    return { token, text: document.querySelector('aside').innerText };`);
+    return { token, text: (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText };`);
   check('D01 断网现金接单：本机已接单、显示临时号与人工传单', order1.text.includes('本机已接单') && /O-F\d+-\d{4}/.test(order1.text) && order1.text.includes('请人工传单'), `餐牌 ${order1.token}`);
   await shot('offline-pos-accepted');
   await page(`__click('我已把单交给厨师'); await __sleep(800);`);
@@ -135,12 +135,12 @@ try {
     btn.click(); await __sleep(300);
     __click('云吞汤'); await __sleep(150); __click('加入本单'); await __sleep(200);
     __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款·本机接单'); await __sleep(1500);
-    return { state, text: document.querySelector('aside').innerText };`);
+    return { state, text: (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText };`);
   check('D03 回收后同一张牌可再离线接单', order2.state.includes('可用') && order2.text.includes('本机已接单'), order2.state);
   const order3 = await page(`
     __click('白酱面'); await __sleep(150); __click('加入本单'); await __sleep(200);
     __click('收款RM'); await __sleep(400); __click('刚好'); await __sleep(200); __click('确认收款·本机接单'); await __sleep(1500);
-    return document.querySelector('aside').innerText.match(/(\\d+)号 · 临时号/)?.[1];`);
+    return (document.querySelector('[role=dialog]') ?? document.querySelector('aside')).innerText.match(/(\\d+)号 · 临时号/)?.[1];`);
   check('第三张离线单（尚未制作）', Boolean(order3), `餐牌 ${order3}`);
   const qrBlocked = await page(`
     __click('黑酱面'); await __sleep(150); __click('加入本单'); await __sleep(200);

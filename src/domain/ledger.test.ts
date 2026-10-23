@@ -1,7 +1,7 @@
 /** 账本 → 日结与报表（04 §5 固定样本、F04、F06、作废支出、产品结构、CSV）。 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BOM_V1, closeFigures, csvClose, csvExpenses, csvOrders, DEFAULT_FIXED_COST, describeDiff, LedgerDocs, OrderReportRow, productMix, wastageCostUnits } from './index';
+import { BOM_V1, closeFigures, csvClose, csvExpenses, csvOrders, DEFAULT_FIXED_COST, describeDiff, dishRanking, LedgerDocs, OrderReportRow, productMix, receiptsTrend, wastageCostUnits } from './index';
 
 const D = '2026-10-22';
 const docs = (): LedgerDocs => ({
@@ -67,4 +67,29 @@ test('F12 导出：UTF-8 BOM、时区、金额单位、公式注入防护', () =
   assert.ok(e.includes("'+SUM(A1)"));
   const c = csvClose(closeFigures(docs(), { businessDate: D, countedCashSen: 11300, qrBankConfirmedSen: 4000 }, DEFAULT_FIXED_COST), 1, '少了两块，已记录');
   assert.ok(c.includes('实际比应有少 RM2.00'));
+});
+
+test('畅销品按 6 张入口排行：干捞面分酱料，净面计入原餐品，未出餐不计', () => {
+  const r = dishRanking([
+    order({}),
+    order({ id: 'k', items: [{ productKind: 'dry_noodle', sauce: 'black', noodleType: 'mee_poh', isKosong: true, quantity: 1, nameZh: '净面 · 黑酱面 · 小' }] }),
+    order({ id: 'r', items: [{ productKind: 'dry_noodle', sauce: 'red', noodleType: 'thin_egg', isKosong: false, quantity: 1, nameZh: '红酱面 · 小' }] }),
+    order({ id: 'x', fulfillmentStatus: 'queued', items: [{ productKind: 'wanton_soup', sauce: null, noodleType: null, isKosong: false, quantity: 5, nameZh: '云吞汤 · 10粒' }] }),
+  ]);
+  assert.deepEqual(r.map((x) => [x.label, x.portions, x.photoId]), [['黑酱面', 3, 'dish.dry_noodle.black'], ['红酱面', 1, 'dish.dry_noodle.red']]);
+});
+
+test('收款走势：单日按门店时区整点（含退款、补齐空档），多日按营业日补零', () => {
+  const at = (h: number, m = 0) => Date.UTC(2026, 9, 22, h - 8, m); // 吉隆坡 UTC+8
+  const pays = [
+    { id: 'a', orderId: 'o', businessDate: D, method: 'cash' as const, amountSen: 700, occurredAtMs: at(7, 10) },
+    { id: 'b', orderId: 'o', businessDate: D, method: 'cash' as const, amountSen: 900, occurredAtMs: at(7, 55) },
+    { id: 'c', orderId: 'o', businessDate: D, method: 'qr_manual' as const, amountSen: 1100, occurredAtMs: at(9, 5) },
+  ];
+  const refunds = [{ id: 'r', orderId: 'o', businessDate: D, method: 'cash' as const, amountSen: 700, occurredAtMs: at(9, 30), reason: 'x' }];
+  const day = receiptsTrend(pays, refunds, { start: D, endExclusive: '2026-10-23' }, 'Asia/Kuala_Lumpur');
+  assert.deepEqual(day.map((b) => [b.label, b.netSen]), [['07:00', 1600], ['08:00', 0], ['09:00', 400]]);
+  const week = receiptsTrend(pays, refunds, { start: '2026-10-21', endExclusive: '2026-10-24' }, 'Asia/Kuala_Lumpur');
+  assert.deepEqual(week.map((b) => [b.label, b.netSen]), [['10-21', 0], ['10-22', 2000], ['10-23', 0]]);
+  assert.deepEqual(receiptsTrend([], [], { start: D, endExclusive: '2026-10-23' }, 'Asia/Kuala_Lumpur'), []);
 });
