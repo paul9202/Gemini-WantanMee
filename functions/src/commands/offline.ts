@@ -13,7 +13,7 @@
  */
 import { Firestore, Transaction } from 'firebase-admin/firestore';
 import { businessDateOf } from '../../../src/domain/businessDay';
-import { computeTotals } from '../../../src/domain/cart';
+import { CartLine, computeTotals, resolveLines } from '../../../src/domain/cart';
 import { canonicalJson, isUuid, payloadHash } from '../../../src/domain/idempotency';
 import { isValidQuantity, parseLineConfig, LineConfig } from '../../../src/domain/lineItem';
 import { SERVICE_MODES } from '../../../src/domain/menu';
@@ -26,7 +26,7 @@ import { checkPayment } from '../../../src/domain/payment';
 import { holdToken, isTokenNumber, releaseHeldToken, TokenBoard } from '../../../src/domain/tokens';
 import { runCommand, storeRefs, StoreRefs } from '../core/command';
 import { CommandError } from '../core/errors';
-import { bad, int, obj, str, storeId, uuid } from '../core/input';
+import { bad, int, obj, optOneOf, str, storeId, uuid } from '../core/input';
 import { loadStoreConfig, StoreConfig } from '../core/store';
 import { receiptNumberFor, writeAcceptedOrder, writePaymentRegistration } from '../core/orderWrites';
 import { paymentSeqOf, paymentStateOf } from './payment';
@@ -49,9 +49,12 @@ function parseEvent(raw: unknown, i: number): OfflineEvent {
     const p = obj(o.payload, ['clientOrderId', 'offlineReceiptNumber', 'tokenNumber', 'serviceMode', 'menuVersion', 'lines', 'totalSen', 'payment'], `events[${i}].payload`);
     if (!Array.isArray(p.lines) || p.lines.length < 1 || p.lines.length > 30) throw bad('lines 需 1–30 行');
     const lines = p.lines.map((l, j) => {
-      const line = obj(l, ['lineId', 'config', 'quantity'], `lines[${j}]`);
+      const line = obj(l, ['lineId', 'config', 'quantity', 'serviceMode'], `lines[${j}]`);
       if (!isValidQuantity(line.quantity)) throw bad(`lines[${j}].quantity 非法`);
-      return { lineId: str(line, 'lineId', 64), config: line.config as LineConfig, quantity: line.quantity as number };
+      return {
+        lineId: str(line, 'lineId', 64), config: line.config as LineConfig, quantity: line.quantity as number,
+        serviceMode: optOneOf(line, 'serviceMode', SERVICE_MODES),
+      };
     });
     // 新格式：payment=null（下单未付款）。旧格式：下单即收款的真实渠道记录，照原样解析。
     let payment: OfflineOrderPayload['payment'] = null;
@@ -154,11 +157,11 @@ async function decide(
     const menu = await loadMenu(tx, store, p.menuVersion);
     const bom = await loadBom(tx, store, config.activeBomVersion);
     if (!menu || !bom) return review('MENU_UNKNOWN', orderId);
-    const lines: { lineId: string; config: LineConfig; quantity: number }[] = [];
-    for (const l of p.lines) {
+    const lines: CartLine[] = [];
+    for (const l of resolveLines(p.lines, p.serviceMode)) {
       const parsed = parseLineConfig({ ...menu, soldOut: [] }, l.config); // 离线时只能用缓存售罄状态，成交事实优先，售罄差异由老板核对
       if (!parsed.ok) return review('INVALID_MODIFIER', orderId);
-      lines.push({ lineId: l.lineId, config: parsed.value, quantity: l.quantity });
+      lines.push({ lineId: l.lineId, config: parsed.value, quantity: l.quantity, serviceMode: l.serviceMode });
     }
     const totals = computeTotals(menu, bom, { serviceMode: p.serviceMode, lines });
     if (totals.totalSen !== p.totalSen) return review('PRICE_MISMATCH', orderId);

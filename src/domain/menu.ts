@@ -14,6 +14,8 @@ export type Sauce = 'black' | 'white' | 'red';
 export type Spice = 'none' | 'less' | 'normal' | 'extra';
 export type Level = 'normal' | 'extra' | 'none';
 export type ServiceMode = 'dine_in' | 'takeaway';
+/** 整单的就餐方式：同一单可以部分堂食、部分打包（例如店里吃完再打包带走，一次结账）。 */
+export type OrderServiceMode = ServiceMode | 'mixed';
 export type AddOnId = 'char_siew' | 'wanton_3';
 
 export const PRODUCT_KINDS: readonly ProductKind[] = ['dry_noodle', 'soup_noodle', 'dry_wanton', 'wanton_soup'];
@@ -144,6 +146,18 @@ export const ENTRY_TILES: readonly EntryTile[] = [
   { id: 'wanton_soup', productKind: 'wanton_soup', sauce: null, nameZh: '云吞汤', nameEn: 'Wantan Soup', photoId: 'dish.wanton_soup' },
   { id: 'dry_wanton', productKind: 'dry_wanton', sauce: 'black', nameZh: '干捞云吞', nameEn: 'Dry Wantan', photoId: 'dish.dry_wanton' },
 ];
+
+export const SERVICE_MODE_NAMES: Record<OrderServiceMode, { zh: string; en: string }> = {
+  dine_in: { zh: '堂食', en: 'Dine in' },
+  takeaway: { zh: '打包', en: 'Takeaway' },
+  mixed: { zh: '堂食+打包', en: 'Dine in + Takeaway' },
+};
+
+/** 由各行的就餐方式得出整单就餐方式；空单按 fallback。 */
+export function orderServiceMode(lineModes: readonly ServiceMode[], fallback: ServiceMode = 'dine_in'): OrderServiceMode {
+  if (lineModes.length === 0) return fallback;
+  return lineModes.every((m) => m === lineModes[0]) ? lineModes[0] : 'mixed';
+}
 
 export const SAUCE_NAMES: Record<Sauce, { zh: string; en: string }> = {
   black: { zh: '黑酱', en: 'Black' },

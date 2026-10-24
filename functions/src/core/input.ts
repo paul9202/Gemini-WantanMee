@@ -52,6 +52,10 @@ export function oneOf<T extends string>(o: Raw, k: string, values: readonly T[])
   return v as T;
 }
 
+export function optOneOf<T extends string>(o: Raw, k: string, values: readonly T[]): T | undefined {
+  return o[k] === undefined ? undefined : oneOf(o, k, values);
+}
+
 export function uuid(o: Raw, k: string): string {
   if (!isUuid(o[k])) throw bad(`${k} 必须是 UUID`);
   return o[k] as string;

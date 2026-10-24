@@ -3,17 +3,19 @@
  * 不收款、不写付款流水：订单待收款（paidSen=0），收款由 recordPayment 另行确认。
  * 服务器按菜单版本重算价格与配置；前端传入的总价只用于比对，不是权威。
  * 旧客户端带 payment 字段（下单即收款）会被拒绝，避免把未付款新单当成已付。
+ * 加单（addOnToOrderId）：客人吃完再加（多为打包），照常是一张新单、新厨单、新票号，
+ * 但挂到仍未收款的原单上，收款时一次结清（recordGroupPayment）。原单须未收款、未取消、没有取消待确认。
  */
 import { businessDateOf } from '../../../src/domain/businessDay';
-import { Cart, computeTotals } from '../../../src/domain/cart';
-import { isValidQuantity, parseLineConfig, LineConfig } from '../../../src/domain/lineItem';
+import { Cart, CartLine, computeTotals } from '../../../src/domain/cart';
+import { isValidQuantity, parseLineConfig } from '../../../src/domain/lineItem';
 import { SERVICE_MODES } from '../../../src/domain/menu';
 import { loadBom, loadMenu } from '../core/catalog';
 import { holdToken, isTokenNumber, TokenBoard } from '../../../src/domain/tokens';
 import { CommandContext, runCommand } from '../core/command';
-import { receiptNumberFor, writeAcceptedOrder } from '../core/orderWrites';
+import { AddOnLink, receiptNumberFor, writeAcceptedOrder } from '../core/orderWrites';
 import { CommandError } from '../core/errors';
-import { int, obj, oneOf, str, storeId, uuid, bad } from '../core/input';
+import { int, obj, oneOf, optOneOf, str, storeId, uuid, bad } from '../core/input';
 import { loadStoreConfig, parseRegisterClaim, REGISTER_CLAIM_FIELDS, requireActiveRegister, requireDayOpen, requireNextSequence } from '../core/store';
 import type { Firestore } from 'firebase-admin/firestore';
 
@@ -32,12 +34,16 @@ export interface CreateOrderResult {
 
 export function parseCreateOrder(raw: unknown) {
   const o = obj(raw, ['storeId', 'operationId', ...REGISTER_CLAIM_FIELDS, 'sequence', 'shiftId', 'order']);
-  const order = obj(o.order, ['clientOrderId', 'tokenNumber', 'serviceMode', 'menuVersion', 'lines', 'expectedTotalSen', 'deviceAcceptedAtMs'], 'order');
+  const order = obj(o.order, ['clientOrderId', 'tokenNumber', 'serviceMode', 'menuVersion', 'lines', 'expectedTotalSen', 'deviceAcceptedAtMs', 'addOnToOrderId'], 'order');
   if (!Array.isArray(order.lines) || order.lines.length < 1 || order.lines.length > MAX_LINES) throw bad(`lines 需 1–${MAX_LINES} 行`);
   const lines = order.lines.map((l, i) => {
-    const line = obj(l, ['lineId', 'config', 'quantity'], `lines[${i}]`);
+    const line = obj(l, ['lineId', 'config', 'quantity', 'serviceMode'], `lines[${i}]`);
     if (!isValidQuantity(line.quantity)) throw bad(`lines[${i}].quantity 非法`);
-    return { lineId: str(line, 'lineId', 64), config: line.config as unknown, quantity: line.quantity as number };
+    return {
+      lineId: str(line, 'lineId', 64), config: line.config as unknown, quantity: line.quantity as number,
+      // 行级堂食/打包（同一单可混合）；旧客户端不传，按整单 serviceMode。
+      serviceMode: optOneOf(line, 'serviceMode', SERVICE_MODES),
+    };
   });
   if (new Set(lines.map((l) => l.lineId)).size !== lines.length) throw bad('lineId 重复');
   const tokenNumber = int(order, 'tokenNumber', 1, 50);
@@ -55,6 +61,7 @@ export function parseCreateOrder(raw: unknown) {
       lines,
       expectedTotalSen: int(order, 'expectedTotalSen', 0, 10_000_000),
       deviceAcceptedAtMs: int(order, 'deviceAcceptedAtMs', 0, Number.MAX_SAFE_INTEGER),
+      addOnToOrderId: order.addOnToOrderId === undefined || order.addOnToOrderId === null ? null : uuid(order, 'addOnToOrderId'),
     },
   };
 }
@@ -82,6 +89,7 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   const shift = shiftSnap.data();
   const orderSnap = await tx.get(store.order(o.clientOrderId));
   const tokenSnap = await tx.get(store.token(o.tokenNumber));
+  const parent = o.addOnToOrderId ? (await tx.get(store.order(o.addOnToOrderId))).data() : null;
   const businessDate = businessDateOf(nowMs, config.businessDay);
   const day = await requireDayOpen(tx, store, businessDate);
 
@@ -94,15 +102,25 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   if (o.menuVersion !== config.activeMenuVersion) {
     throw new CommandError('MENU_CHANGED', '菜单已更新，请重新确认价格', { activeMenuVersion: config.activeMenuVersion });
   }
+  let addOnTo: AddOnLink | null = null;
+  if (o.addOnToOrderId) {
+    if (!parent) throw new CommandError('NOT_FOUND', '原单不存在');
+    if (parent.paymentState !== 'unpaid' || parent.fulfillmentStatus === 'cancelled' || parent.kitchenCancelRequested) {
+      throw new CommandError('ADD_ON_NOT_ALLOWED', '原单已收款、已取消或取消待确认', { paymentState: parent.paymentState, fulfillmentStatus: parent.fulfillmentStatus });
+    }
+    // 加单的加单仍挂到最早那张原单，一组只有一个根。
+    addOnTo = (parent.addOnTo as AddOnLink | null | undefined)
+      ?? { orderId: o.addOnToOrderId, tokenNumber: parent.tokenNumber as number, receiptNumber: (parent.receiptNumber as string | null) ?? null };
+  }
   const menu = await loadMenu(tx, store, o.menuVersion);
   const bom = await loadBom(tx, store, config.activeBomVersion);
   if (!menu || !bom) throw new CommandError('STORE_NOT_CONFIGURED', '菜单或 BOM 版本不可用');
 
-  const lines: { lineId: string; config: LineConfig; quantity: number }[] = [];
+  const lines: CartLine[] = [];
   for (const [i, l] of o.lines.entries()) {
     const parsed = parseLineConfig(menu, l.config);
     if (!parsed.ok) throw new CommandError('INVALID_MODIFIER', `第 ${i + 1} 行配置非法`, { line: i, issues: parsed.issues });
-    lines.push({ lineId: l.lineId, config: parsed.value, quantity: l.quantity });
+    lines.push({ lineId: l.lineId, config: parsed.value, quantity: l.quantity, serviceMode: l.serviceMode ?? o.serviceMode });
   }
   const cart: Cart = { serviceMode: o.serviceMode, lines };
   const totals = computeTotals(menu, bom, cart);
@@ -128,7 +146,7 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
     legacyPayment: null,
     acceptedAtEffectiveMs: nowMs, deviceAcceptedAtMs: o.deviceAcceptedAtMs, cloudReceivedAtMs: nowMs, timeQuality: 'server', businessDate,
     registerId: input.claim.registerId, registerEpoch: input.claim.registerEpoch, shiftId: input.shiftId, sequence: input.sequence,
-    createdBy: actor.uid, allocationEventId: `${input.operationId}-alloc`,
+    createdBy: actor.uid, allocationEventId: `${input.operationId}-alloc`, addOnTo,
   });
   tx.set(store.token(o.tokenNumber), { ...held.token, updatedAtMs: nowMs });
   tx.update(store.register(input.claim.registerId), { lastAppliedSequence: input.sequence, lastSeenAtMs: nowMs });
@@ -137,5 +155,5 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   const result: CreateOrderResult = {
     orderId, receiptNumber, tokenNumber: o.tokenNumber, totalSen: totals.totalSen, paymentState: 'unpaid', fulfillmentStatus: 'preparing', businessDate, acceptedAtMs: nowMs,
   };
-  return { result, audit: { entityId: orderId, after: { totalSen: totals.totalSen, tokenNumber: o.tokenNumber, paymentState: 'unpaid' } } };
+  return { result, audit: { entityId: orderId, after: { totalSen: totals.totalSen, tokenNumber: o.tokenNumber, paymentState: 'unpaid', addOnToOrderId: addOnTo?.orderId ?? null } } };
 }

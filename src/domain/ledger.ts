@@ -3,7 +3,7 @@
  * 前端老板页与服务端关账共用同一套口径，保证屏幕数字与冻结快照一致。
  */
 import { addDays, DateRange, wallClock } from './businessDay';
-import { ENTRY_TILES } from './menu';
+import { ENTRY_TILES, OrderServiceMode, SERVICE_MODE_NAMES } from './menu';
 import { CsvCell, toCsv } from './csv';
 import { expectedCashDrawer, ExpenseCategory, FixedCostPolicy, LedgerEvent, PeriodSummary, summarizePeriod } from './finance';
 import { costUnitsToSen, CostUnits, formatRM, Sen } from './money';
@@ -200,7 +200,7 @@ export interface OrderReportRow {
   receiptNumber: string;
   businessDate: string;
   tokenNumber: number;
-  serviceMode: 'dine_in' | 'takeaway';
+  serviceMode: OrderServiceMode;
   source: 'online' | 'offline';
   fulfillmentStatus: Fulfillment;
   paymentState: PaymentState;
@@ -328,7 +328,7 @@ export function csvOrders(orders: OrderReportRow[], timeZone: string): string {
   return toCsv([
     ['营业日', '票号', '餐牌', '就餐', '来源', '制作状态', '付款状态', '付款方式', '金额_sen', '接单时间', '出餐时间', '时间质量', '餐品'],
     ...orders.map((o) => [
-      o.businessDate, o.receiptNumber, o.tokenNumber, o.serviceMode === 'dine_in' ? '堂食' : '打包', o.source === 'offline' ? '离线' : '在线',
+      o.businessDate, o.receiptNumber, o.tokenNumber, SERVICE_MODE_NAMES[o.serviceMode].zh, o.source === 'offline' ? '离线' : '在线',
       o.fulfillmentStatus, o.paymentState, o.paymentMethod ?? '', o.totalSen, iso(o.acceptedAtEffectiveMs, timeZone), iso(o.servedAtMs, timeZone), o.timeQuality,
       o.items.map((i) => `${i.quantity}×${i.nameZh}${i.note ? `（${i.note}）` : ''}`).join('；'),
     ]),

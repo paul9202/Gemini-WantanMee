@@ -6,10 +6,10 @@
  */
 import { Timestamp, Transaction } from 'firebase-admin/firestore';
 import { BomVersion } from '../../../src/domain/bom';
-import { OrderTotals } from '../../../src/domain/cart';
+import { CartLine, OrderTotals } from '../../../src/domain/cart';
 import { buildKitchenTicket, KitchenRouting, TimeQuality } from '../../../src/domain/kitchen';
-import { LineConfig, lineNameZh, linePhotoId, linePortions } from '../../../src/domain/lineItem';
-import { MenuVersion, ServiceMode } from '../../../src/domain/menu';
+import { lineNameZh, linePhotoId, linePortions } from '../../../src/domain/lineItem';
+import { MenuVersion, orderServiceMode, ServiceMode } from '../../../src/domain/menu';
 import { newAcceptedState } from '../../../src/domain/orderLifecycle';
 import { LegacyPaymentMethod, paymentIdFor } from '../../../src/domain/payment';
 import { linePictograms } from '../../../src/domain/pictograms';
@@ -21,12 +21,13 @@ export interface AcceptedOrderInput {
   receiptNumber: string;
   offlineReceiptNumber: string | null;
   tokenNumber: number;
+  /** 默认就餐方式；订单文档上的 serviceMode 由各行得出（可能为 mixed）。 */
   serviceMode: ServiceMode;
   source: 'online' | 'offline';
   kitchenRouting: KitchenRouting;
   menu: MenuVersion;
   bom: BomVersion;
-  lines: { lineId: string; config: LineConfig; quantity: number }[];
+  lines: CartLine[];
   totals: OrderTotals;
   /** 只有旧格式离线日志（下单即收款）才有；新订单为 null。 */
   legacyPayment: { method: LegacyPaymentMethod; tenderedSen: number | null; changeSen: number | null; qrExternalVerificationNote: string | null } | null;
@@ -41,7 +42,16 @@ export interface AcceptedOrderInput {
   sequence: number;
   createdBy: string;
   allocationEventId: string;
+  /** 加单：挂到哪张未收款的原单上，收款时与原单一次结账。 */
+  addOnTo?: AddOnLink | null;
   extra?: Record<string, unknown>;
+}
+
+/** 加单关联（指向最早那张原单；加单的加单也指向同一张）。 */
+export interface AddOnLink {
+  orderId: string;
+  tokenNumber: number;
+  receiptNumber: string | null;
 }
 
 export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: AcceptedOrderInput) {
@@ -51,21 +61,21 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
   const items = a.lines.map((l, i) => {
     const p = linePortions(a.menu, l.config);
     return {
-      lineId: l.lineId, ...l.config, quantity: l.quantity,
+      lineId: l.lineId, ...l.config, quantity: l.quantity, serviceMode: l.serviceMode,
       unitPriceSen: a.totals.lines[i].unitPriceSen, lineTotalSen: a.totals.lines[i].lineTotalSen,
       noodleHalfUnits: p.noodleHalfUnits, wantonCount: p.wantonCount,
       nameZh: lineNameZh(a.menu, l.config), photoId: linePhotoId(l.config),
-      pictogramIds: linePictograms(a.menu, l.config, a.serviceMode).map((x) => x.id),
+      pictogramIds: linePictograms(a.menu, l.config, l.serviceMode).map((x) => x.id),
     };
   });
   tx.create(store.order(a.orderId), {
     schemaVersion: 3, storeId: a.storeId, id: a.orderId, receiptNumber: a.receiptNumber, offlineReceiptNumber: a.offlineReceiptNumber,
-    tokenNumber: a.tokenNumber, serviceMode: a.serviceMode, source: a.source, kitchenRouting: a.kitchenRouting,
+    tokenNumber: a.tokenNumber, serviceMode: orderServiceMode(a.lines.map((l) => l.serviceMode), a.serviceMode), source: a.source, kitchenRouting: a.kitchenRouting,
     ...life,
     items, totalSen: a.totals.totalSen, portionCount: a.totals.portionCount,
     paymentMethod: legacy?.method ?? null, cashTenderedSen: legacy?.method === 'cash' ? legacy.tenderedSen : null, changeSen: legacy?.changeSen ?? null,
     paymentSeq: legacy ? 1 : 0, paymentId, paidAtMs: legacy ? a.acceptedAtEffectiveMs : null, paymentBusinessDate: legacy ? a.businessDate : null,
-    tokenReleasedAtMs: null, tokenReleaseSource: null,
+    tokenReleasedAtMs: null, tokenReleaseSource: null, addOnTo: a.addOnTo ?? null,
     acceptedAtEffective: Timestamp.fromMillis(a.acceptedAtEffectiveMs), acceptedAtEffectiveMs: a.acceptedAtEffectiveMs,
     deviceAcceptedAtMs: a.deviceAcceptedAtMs, cloudReceivedAtMs: a.cloudReceivedAtMs,
     kitchenAckAtMs: null, timeQuality: a.timeQuality, businessDate: a.businessDate, menuVersion: a.menu.version,
@@ -102,6 +112,8 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
       businessDate: a.businessDate, version: life.version, lines: a.lines,
     }),
     kitchenAckAtMs: null,
+    // 厨房只需知道是谁的加单（原餐牌），不含金额。
+    addOnTo: a.addOnTo ? { tokenNumber: a.addOnTo.tokenNumber } : null,
     receiptNumber: a.receiptNumber,
     offlineReceiptNumber: a.offlineReceiptNumber,
   });

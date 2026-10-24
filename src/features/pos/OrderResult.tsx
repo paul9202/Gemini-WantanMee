@@ -5,6 +5,7 @@
  */
 import { ReactNode } from 'react';
 import { AckState, ackState } from '../../domain/kitchenLink';
+import { OrderServiceMode, SERVICE_MODE_NAMES } from '../../domain/menu';
 import { formatRM, Sen } from '../../domain/money';
 import { useNow } from '../../data/firebase/live';
 import { Icon } from '../../ui/visual';
@@ -12,7 +13,7 @@ import type { IconName } from '../../ui/iconSymbols';
 import { useT } from '../../app/i18n';
 
 export interface ResultSummary {
-  serviceMode: 'dine_in' | 'takeaway';
+  serviceMode: OrderServiceMode;
   firstItem: string;
 }
 
@@ -128,7 +129,7 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
         </span>
         <h2 className="mt-4 text-2xl font-bold sm:text-[28px]" aria-live="polite">{title}</h2>
         <p className="mt-1 text-ink-2">
-          {s.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')} · {formatRM(stage.totalSen)} · {props.paid ? tr('已收款', 'Paid') : tr('待收款', 'Unpaid')}
+          {tr(SERVICE_MODE_NAMES[s.serviceMode].zh, SERVICE_MODE_NAMES[s.serviceMode].en)} · {formatRM(stage.totalSen)} · {props.paid ? tr('已收款', 'Paid') : tr('待收款', 'Unpaid')}
         </p>
         <div className="mt-5 text-7xl font-black tabular-nums text-ok">{stage.tokenNumber}</div>
         <p className="mt-1 font-semibold">{tr('把这张餐牌交给客人', 'Give this token to the customer')}</p>

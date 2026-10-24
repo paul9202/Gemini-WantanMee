@@ -3,7 +3,8 @@
  * 只能靠独立文档隔离）。合计只从投影纯计算，不每秒写库。
  */
 import { LineConfig, lineNameZh, linePhotoId, linePortions } from './lineItem';
-import type { MenuVersion, ServiceMode } from './menu';
+import type { OrderLineInput } from './cart';
+import { MenuVersion, OrderServiceMode, orderServiceMode, ServiceMode } from './menu';
 import { linePictograms, PictogramId } from './pictograms';
 import type { Fulfillment } from './orderLifecycle';
 
@@ -23,6 +24,8 @@ export interface KitchenLine {
   addOns: LineConfig['addOns'];
   note: string;
   quantity: number;
+  /** 这一行堂食还是打包。旧厨单没有此字段，按整单的 serviceMode。 */
+  serviceMode?: ServiceMode;
   /** 每份数量。 */
   noodleHalfUnits: number;
   wantonCount: number;
@@ -34,7 +37,8 @@ export interface KitchenLine {
 export interface KitchenTicket {
   orderId: string;
   tokenNumber: number;
-  serviceMode: ServiceMode;
+  /** 整单：堂食 / 打包 / 堂食+打包（逐行看 KitchenLine.serviceMode）。 */
+  serviceMode: OrderServiceMode;
   kitchenRouting: KitchenRouting;
   fulfillmentStatus: Fulfillment;
   kitchenCancelRequested: boolean;
@@ -47,11 +51,14 @@ export interface KitchenTicket {
   businessDate: string;
   lines: KitchenLine[];
   version: number;
+  /** 加单（客人吃完再加，多为打包）：原单的餐牌号。普通单为 null / 缺省。 */
+  addOnTo?: { tokenNumber: number } | null;
 }
 
 export interface KitchenTicketSource {
   orderId: string;
   tokenNumber: number;
+  /** 行没有单独标明时的默认就餐方式。 */
   serviceMode: ServiceMode;
   kitchenRouting: KitchenRouting;
   fulfillmentStatus: Fulfillment;
@@ -63,15 +70,21 @@ export interface KitchenTicketSource {
   timeQuality: TimeQuality;
   businessDate: string;
   version: number;
-  lines: { lineId: string; config: LineConfig; quantity: number }[];
+  lines: OrderLineInput[];
+}
+
+/** 某行实际的就餐方式（兼容没有行级字段的旧厨单）。 */
+export function kitchenLineMode(t: Pick<KitchenTicket, 'serviceMode'>, l: Pick<KitchenLine, 'serviceMode'>): ServiceMode {
+  return l.serviceMode ?? (t.serviceMode === 'mixed' ? 'dine_in' : t.serviceMode);
 }
 
 /** 从订单构造厨房投影：显式白名单字段，杜绝金额/成本泄漏。 */
 export function buildKitchenTicket(menu: MenuVersion, src: KitchenTicketSource): KitchenTicket {
+  const lines = src.lines.map((l) => ({ ...l, serviceMode: l.serviceMode ?? src.serviceMode }));
   return {
     orderId: src.orderId,
     tokenNumber: src.tokenNumber,
-    serviceMode: src.serviceMode,
+    serviceMode: orderServiceMode(lines.map((l) => l.serviceMode), src.serviceMode),
     kitchenRouting: src.kitchenRouting,
     fulfillmentStatus: src.fulfillmentStatus,
     kitchenCancelRequested: src.kitchenCancelRequested,
@@ -82,13 +95,13 @@ export function buildKitchenTicket(menu: MenuVersion, src: KitchenTicketSource):
     timeQuality: src.timeQuality,
     businessDate: src.businessDate,
     version: src.version,
-    lines: src.lines.map(({ lineId, config: c, quantity }) => {
+    lines: lines.map(({ lineId, config: c, quantity, serviceMode }) => {
       const p = linePortions(menu, c);
       return {
         lineId, productKind: c.productKind, size: c.size, noodleType: c.noodleType, sauce: c.sauce, isKosong: c.isKosong,
-        spice: c.spice, lard: c.lard, scallion: c.scallion, addOns: [...c.addOns], note: c.note, quantity,
+        spice: c.spice, lard: c.lard, scallion: c.scallion, addOns: [...c.addOns], note: c.note, quantity, serviceMode,
         noodleHalfUnits: p.noodleHalfUnits, wantonCount: p.wantonCount,
-        nameZh: lineNameZh(menu, c), photoId: linePhotoId(c), pictograms: linePictograms(menu, c, src.serviceMode),
+        nameZh: lineNameZh(menu, c), photoId: linePhotoId(c), pictograms: linePictograms(menu, c, serviceMode),
       };
     }),
   };

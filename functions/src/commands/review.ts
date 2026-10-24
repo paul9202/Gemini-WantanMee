@@ -9,7 +9,7 @@
  */
 import { Firestore } from 'firebase-admin/firestore';
 import { businessDateOf } from '../../../src/domain/businessDay';
-import { computeTotals } from '../../../src/domain/cart';
+import { CartLine, computeTotals, resolveLines } from '../../../src/domain/cart';
 import { LineConfig, parseLineConfig } from '../../../src/domain/lineItem';
 import { loadBom, loadMenu } from '../core/catalog';
 import { effectiveTimeMs, OfflineEvent, OfflineReviewReason } from '../../../src/domain/offline';
@@ -72,11 +72,11 @@ export async function resolveOfflineReview(db: Firestore, uid: string | undefine
         const menu = await loadMenu(tx, store, p.menuVersion);
         const bom = await loadBom(tx, store, config.activeBomVersion);
         if (!menu || !bom) throw new CommandError('REVIEW_NOT_ALLOWED', '菜单版本无法核实');
-        const lines: { lineId: string; config: LineConfig; quantity: number }[] = [];
-        for (const l of p.lines) {
+        const lines: CartLine[] = [];
+        for (const l of resolveLines(p.lines, p.serviceMode)) {
           const parsed = parseLineConfig({ ...menu, soldOut: [] }, l.config);
           if (!parsed.ok) throw new CommandError('REVIEW_NOT_ALLOWED', '餐品配置不符合菜单');
-          lines.push({ lineId: l.lineId, config: parsed.value, quantity: l.quantity });
+          lines.push({ lineId: l.lineId, config: parsed.value, quantity: l.quantity, serviceMode: l.serviceMode });
         }
         const computed = computeTotals(menu, bom, { serviceMode: p.serviceMode, lines });
         if (computed.totalSen !== p.totalSen && reasonCode !== 'PRICE_MISMATCH') throw new CommandError('REVIEW_NOT_ALLOWED', '金额与菜单不符');

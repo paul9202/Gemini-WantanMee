@@ -28,6 +28,7 @@ const REASONS_EN: Record<string, string> = {
   NOT_PAID: 'No recorded payment to correct',
   WRITTEN_OFF: 'Owner gave up collecting this order — ask the owner to reinstate it first',
   NOT_UNPAID: 'Only unpaid orders can be written off',
+  ADD_ON_NOT_ALLOWED: 'Cannot add to this order (already paid, cancelled, or cancel pending) — place a normal new order',
   UNKNOWN_RESULT: 'Network unstable — result not confirmed',
 };
 const REASONS: Record<string, string> = {
@@ -61,6 +62,7 @@ const REASONS: Record<string, string> = {
   NOT_PAID: '这张单没有可更正的收款',
   WRITTEN_OFF: '老板已放弃追收这张单；如已收到钱，请老板先恢复待收款',
   NOT_UNPAID: '只有待收款的订单可以放弃追收',
+  ADD_ON_NOT_ALLOWED: '这张单不能再加单（已收款、已取消或取消待确认），请按新单下单',
   REASON_REQUIRED: '请选择原因',
   REFUND_MUST_BE_FULL: '首版只支持整单退款',
   ALREADY_REFUNDED: '这张单已经退款',

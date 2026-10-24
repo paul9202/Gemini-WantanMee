@@ -7,7 +7,7 @@
  *   未登记时醒目标「未收款」，账单不得表现为付款凭证。
  */
 import { lineNameZh, LineConfig } from './lineItem';
-import { MenuVersion, NOODLE_TYPE_NAMES } from './menu';
+import { MenuVersion, NOODLE_TYPE_NAMES, OrderServiceMode, SERVICE_MODE_NAMES, ServiceMode } from './menu';
 import { formatRM } from './money';
 import type { PaymentState } from './orderLifecycle';
 import type { PaymentMethod } from './payment';
@@ -18,14 +18,16 @@ export interface ReceiptSource {
   receiptNumber: string | null;
   offlineReceiptNumber: string | null;
   tokenNumber: number;
-  serviceMode: 'dine_in' | 'takeaway';
+  /** 整单；mixed 时逐行标出堂食 / 打包。 */
+  serviceMode: OrderServiceMode;
   source: 'online' | 'offline';
   acceptedAtMs: number;
   timeQuality: 'server' | 'device_estimated' | 'reviewed';
   fulfillmentStatus: 'queued' | 'preparing' | 'served' | 'cancelled';
   servedAtMs: number | null;
   paymentState: PaymentState;
-  lines: { config: LineConfig; quantity: number; unitPriceSen: number }[];
+  /** serviceMode：旧订单的行没有，按整单。 */
+  lines: { config: LineConfig; quantity: number; unitPriceSen: number; serviceMode?: ServiceMode }[];
   totalSen: number;
   /** 旧订单为真实渠道；新订单未登记时为 null，登记后为 unspecified。 */
   paymentMethod: PaymentMethod | null;
@@ -62,15 +64,17 @@ export function buildReceipt(menu: MenuVersion, r: ReceiptSource, opts: { printI
   if (r.source === 'offline' && !r.synced) badges.push('尚未同步云端');
   if (r.paymentState === 'unpaid' || r.paymentState === 'written_off') badges.push('未收款 · 不是付款凭证');
   const rows: ReceiptRow[] = [];
-  rows.push({ left: `餐牌 ${r.tokenNumber}`, right: r.serviceMode === 'dine_in' ? '堂食' : '打包', strong: true });
+  rows.push({ left: `餐牌 ${r.tokenNumber}`, right: SERVICE_MODE_NAMES[r.serviceMode].zh, strong: true });
   if (r.receiptNumber) rows.push({ left: '票号', right: r.receiptNumber });
   if (r.offlineReceiptNumber) rows.push({ left: '临时号', right: r.offlineReceiptNumber });
   rows.push({ left: r.timeQuality === 'device_estimated' ? '接单时间（本机）' : '接单时间', right: clock(r.acceptedAtMs, opts.timeZone), small: true });
   for (const l of r.lines) {
+    const mode: ServiceMode = l.serviceMode ?? (r.serviceMode === 'mixed' ? 'dine_in' : r.serviceMode);
     rows.push({ left: `${l.quantity} × ${lineNameZh(menu, l.config)}`, right: formatRM(l.unitPriceSen * l.quantity) });
     const detail = [
+      r.serviceMode === 'mixed' ? SERVICE_MODE_NAMES[mode].zh : null,
       l.config.noodleType ? NOODLE_TYPE_NAMES[l.config.noodleType].zh : null,
-      ...linePictograms(menu, l.config, r.serviceMode).filter((p) => p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'kosong:on').map((p) => PICTOGRAMS[p.id].zh),
+      ...linePictograms(menu, l.config, mode).filter((p) => p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'kosong:on').map((p) => PICTOGRAMS[p.id].zh),
     ].filter(Boolean);
     if (detail.length) rows.push({ left: `  ${detail.join(' · ')}`, small: true });
   }

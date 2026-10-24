@@ -8,6 +8,7 @@
 import { useRef, useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
 import { businessDateOf } from '../../domain/businessDay';
+import { OrderServiceMode, SERVICE_MODE_NAMES } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
 import type { PaymentMethod } from '../../domain/payment';
 import { isAwaitingPayment, PaymentState } from '../../domain/orderLifecycle';
@@ -32,7 +33,7 @@ interface OrderRow {
   id: string;
   receiptNumber: string;
   tokenNumber: number;
-  serviceMode: 'dine_in' | 'takeaway';
+  serviceMode: OrderServiceMode;
   fulfillmentStatus: 'queued' | 'preparing' | 'served' | 'cancelled';
   /** 旧订单只有 paid / refund_due / refunded。 */
   paymentState: PaymentState;
@@ -47,6 +48,8 @@ interface OrderRow {
   kitchenAckAtMs: number | null;
   tokenReturnedAtMs?: number;
   manualHandoffAtMs?: number | null;
+  /** 加单：挂在哪张原单上（收款时可一起结）。 */
+  addOnTo?: { orderId: string; tokenNumber: number; receiptNumber: string | null } | null;
   source?: 'online' | 'offline';
   offlineReceiptNumber?: string | null;
   /** 后厨「继续做，拒绝取消」的记录。 */
@@ -219,11 +222,13 @@ export function OrdersPage() {
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex shrink-0 -space-x-3">{o.items.slice(0, 2).map((i) => <Photo key={i.lineId} id={i.photoId} size={44} rounded={22} className="border-2 border-white" />)}</div>
           <div className="min-w-0">
-            <div className="text-sm font-bold">{tr('票号', 'Receipt')} {o.receiptNumber}{o.offlineReceiptNumber ? `（${o.offlineReceiptNumber}）` : ''}</div>
+            <div className="text-sm font-bold">{tr('票号', 'Receipt')} {o.receiptNumber}{o.offlineReceiptNumber ? `（${o.offlineReceiptNumber}）` : ''}
+              {o.addOnTo && <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">{tr(`加单 · 原 ${o.addOnTo.tokenNumber} 号 ${o.addOnTo.receiptNumber ?? ''}`, `Add-on · token ${o.addOnTo.tokenNumber} ${o.addOnTo.receiptNumber ?? ''}`)}</span>}
+            </div>
             <div className="font-semibold">{o.items.map((i) => `${i.nameZh} ×${i.quantity}`).join('，')}</div>
           </div>
         </div>
-        <div className="col-start-2 text-sm lg:col-start-auto">{o.serviceMode === 'dine_in' ? tr('堂食', 'Dine-in') : tr('打包', 'Takeaway')}</div>
+        <div className="col-start-2 text-sm lg:col-start-auto">{tr(SERVICE_MODE_NAMES[o.serviceMode].zh, SERVICE_MODE_NAMES[o.serviceMode].en)}</div>
         <div className="col-start-2 lg:col-start-auto">
           <span className={`inline-block rounded-lg px-2.5 py-1 text-sm font-bold ${o.kitchenCancelRequested ? 'bg-danger-bg text-danger' : o.fulfillmentStatus === 'cancelled' ? 'bg-subtle text-ink-2' : o.fulfillmentStatus === 'served' ? 'bg-subtle text-ink' : o.fulfillmentStatus === 'preparing' ? 'bg-ok-bg text-ok' : 'bg-warn-bg text-warn'}`}>
             {o.kitchenCancelRequested ? tr('取消待后厨确认', 'Cancel awaiting kitchen') : fulfillLabel(tr, o.fulfillmentStatus)}
@@ -285,7 +290,7 @@ export function OrdersPage() {
     const head = ['餐牌', '票号', '营业日', '时间', '用餐方式', '后厨进度', '收款状态', '付款方式', '金额(sen)', '餐品'];
     const zh: Tr = (z) => z;
     const body = shown.map((o) => [
-      o.tokenNumber, o.receiptNumber, o.businessDate, new Date(o.acceptedAtEffectiveMs).toLocaleString('zh-CN', { hour12: false, timeZone: config.timeZone }), o.serviceMode === 'dine_in' ? '堂食' : '打包',
+      o.tokenNumber, o.receiptNumber, o.businessDate, new Date(o.acceptedAtEffectiveMs).toLocaleString('zh-CN', { hour12: false, timeZone: config.timeZone }), SERVICE_MODE_NAMES[o.serviceMode].zh,
       fulfillLabel(zh, o.fulfillmentStatus), payLabel(zh, o.paymentState), channelLabel(zh, o.paymentMethod) ?? (o.paymentMethod === 'unspecified' ? '人工确认（不分渠道）' : ''),
       o.totalSen, o.items.map((i) => `${i.nameZh}×${i.quantity}`).join(' / '),
     ]);

@@ -15,7 +15,7 @@ import { assignRegister, getOperationResult, inviteMember, manageMember } from '
 import { publishBom, publishMenu } from './commands/catalog';
 import { routeManualOrderToKitchen, syncOfflineEvents } from './commands/offline';
 import { resolveOfflineReview } from './commands/review';
-import { recordPayment, reinstateWrittenOff, reversePayment, writeOffPayment } from './commands/payment';
+import { recordGroupPayment, recordPayment, reinstateWrittenOff, reversePayment, writeOffPayment } from './commands/payment';
 import { recordCashMovement, recordExpense, recordWastage, voidLedgerEntry } from './commands/ledger';
 import { closeBusinessDay, restateBusinessDay } from './commands/close';
 import { heartbeatDevice, recordManualHandoff } from './commands/kitchenLink';
@@ -57,6 +57,7 @@ export const requestCancelCmd = command((d, u, x) => lifecycleCommand(d, 'reques
 export const confirmKitchenCancelCmd = command((d, u, x) => lifecycleCommand(d, 'confirmKitchenCancel', u, x));
 export const confirmFullRefundCmd = command((d, u, x) => lifecycleCommand(d, 'confirmFullRefund', u, x));
 export const recordPaymentCmd = command(recordPayment);
+export const recordGroupPaymentCmd = command(recordGroupPayment);
 export const reversePaymentCmd = command(reversePayment);
 export const writeOffPaymentCmd = command(writeOffPayment);
 export const reinstateWrittenOffCmd = command(reinstateWrittenOff);

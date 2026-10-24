@@ -10,7 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, disableNetwork, enableNetwork, query, where } from 'firebase/firestore';
 import { businessDateOf } from '../../domain/businessDay';
-import { formatNoodleBalls, KitchenLine, KitchenTicket, sortFifo, summarizeKitchen } from '../../domain/kitchen';
+import { formatNoodleBalls, KitchenLine, kitchenLineMode, KitchenTicket, sortFifo, summarizeKitchen } from '../../domain/kitchen';
 import { formatClock, kitchenUrgency } from '../../domain/timing';
 import { UNDO_SERVE_WINDOW_MS } from '../../domain/orderLifecycle';
 import { db, storePath } from '../../data/firebase/client';
@@ -23,7 +23,7 @@ import { navigate } from '../../app/router';
 import { Icon, Photo, PictoArt } from '../../ui/visual';
 import { useLang, useT } from '../../app/i18n';
 import { lineNameEn, LineConfig } from '../../domain/lineItem';
-import { MENU_V1, SAUCE_NAMES } from '../../domain/menu';
+import { MENU_V1, SAUCE_NAMES, SERVICE_MODE_NAMES, ServiceMode } from '../../domain/menu';
 import { PICTOGRAMS } from '../../domain/pictograms';
 import { useKdsTheme, useNewTicketChime } from './prefs';
 
@@ -285,7 +285,9 @@ function TicketCard({ t, now, today, disabled, busy, onAct }: {
       <div className="flex items-center gap-3 border-b border-kds-line px-5 pt-2.5 pb-2">
         <span className="text-[42px] font-black leading-none tabular-nums">{t.tokenNumber}</span>
         <span className="ml-auto inline-flex items-center gap-2 rounded-xl bg-kds-soft px-3 py-2 font-bold">
-          <PictoArt id={t.serviceMode === 'dine_in' ? 'service:dine_in' : 'service:takeaway'} size={26} />{t.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
+          {t.serviceMode !== 'takeaway' && <PictoArt id="service:dine_in" size={26} />}
+          {t.serviceMode !== 'dine_in' && <PictoArt id="service:takeaway" size={26} />}
+          {tr(SERVICE_MODE_NAMES[t.serviceMode].zh, SERVICE_MODE_NAMES[t.serviceMode].en)}
         </span>
       </div>
       <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 px-5 py-2 ${frozen ? 'bg-kds-danger-bg' : u.bar}`}>
@@ -302,9 +304,10 @@ function TicketCard({ t, now, today, disabled, busy, onAct }: {
         <Banner tone="warn">{tr(`跨营业日 · ${t.businessDate.slice(5)} 的单（仍需完成）`, `From ${t.businessDate.slice(5)} · still to finish`)}</Banner>
       )}
       {t.manualHandoffAtMs && <Banner tone="danger"><PictoArt id="token:return" size={24} />{tr('收银已递纸单 · 先核对是否已做，避免做两份', 'Paper ticket given · check before cooking twice')}</Banner>}
-      {t.routedFromManual && <Banner tone="action"><PictoArt id="token:return" size={24} />{tr('人工单转入 · 收银已核实厨房未做', 'From paper ticket · cashier confirmed not cooked')}</Banner>}
+      {t.addOnTo && <Banner tone="action"><PictoArt id="service:takeaway" size={24} />{tr(`加单 · 原 ${t.addOnTo.tokenNumber} 号的客人（吃完再加）`, `Add-on · for token ${t.addOnTo.tokenNumber}'s customer`)}</Banner>}
+      {t.routedFromManual &&<Banner tone="action"><PictoArt id="token:return" size={24} />{tr('人工单转入 · 收银已核实厨房未做', 'From paper ticket · cashier confirmed not cooked')}</Banner>}
       <ul className={`flex-1 space-y-3 px-5 py-3 ${frozen ? 'opacity-60' : ''}`}>
-        {t.lines.map((l) => <KitchenLineRow key={l.lineId} l={l} serviceMode={t.serviceMode} />)}
+        {t.lines.map((l) => <KitchenLineRow key={l.lineId} l={l} serviceMode={kitchenLineMode(t, l)} mixed={t.serviceMode === 'mixed'} />)}
       </ul>
       {frozen ? (
         <div className="m-4 mt-0 rounded-xl bg-kds-danger-bg p-3 text-kds-danger">
@@ -361,7 +364,8 @@ function Banner({ tone, children }: { tone: 'warn' | 'danger' | 'action'; childr
   return <div className={`mx-5 mt-3 flex items-center gap-2 rounded-lg px-3 py-1.5 font-bold ${cls}`}>{children}</div>;
 }
 
-function KitchenLineRow({ l, serviceMode }: { l: KitchenLine; serviceMode: 'dine_in' | 'takeaway' }) {
+/** mixed：同一单有堂食也有打包，每行醒目标出这碗是哪一种。 */
+function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode: ServiceMode; mixed: boolean }) {
   const tr = useT();
   const lang = useLang();
   const name = lang === 'en' ? lineNameEn(MENU_V1, l as unknown as LineConfig) : l.nameZh;
@@ -376,6 +380,11 @@ function KitchenLineRow({ l, serviceMode }: { l: KitchenLine; serviceMode: 'dine
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
             <b className="text-xl leading-tight">{name}</b>
+            {mixed && (
+              <span className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-0.5 text-base font-bold ${serviceMode === 'takeaway' ? 'bg-kds-action text-kds-action-ink' : 'bg-kds-soft'}`}>
+                <PictoArt id={`service:${serviceMode}`} size={20} />{tr(SERVICE_MODE_NAMES[serviceMode].zh, SERVICE_MODE_NAMES[serviceMode].en)}
+              </span>
+            )}
             <b className={`ml-auto shrink-0 text-2xl tabular-nums ${l.quantity > 1 ? 'text-kds-action' : ''}`}>×{l.quantity}</b>
           </div>
           {l.noodleType ? (

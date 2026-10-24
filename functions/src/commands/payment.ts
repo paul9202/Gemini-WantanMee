@@ -5,6 +5,8 @@
  *   收款计入登记日，关联原订单，不改写原营业日冻结报表、不重发厨单、不重扣成本。
  *   同 operationId 重试返回原结果（runCommand）；不同 operationId 并发确认同一订单只成功一次
  *   （事务内检查 paymentState + 确定性收款 ID）。
+ * - recordGroupPayment：原单与它的加单（客人吃完再加打包）一次结账。同一事务逐单检查并逐单写收款，
+ *   任何一单不能登记就整组都不登记；每单仍有自己的收款记录，更正 / 报表照旧按订单。
  * - reversePayment：老板更正误登记。保留原收款，追加负数调整，订单回到待收款；不是退款，不重新送厨。
  * - writeOffPayment / reinstateWrittenOff：老板放弃追收 / 之后又收到钱时恢复待收款。
  */
@@ -16,7 +18,7 @@ import {
 import { paymentIdFor } from '../../../src/domain/payment';
 import { runCommand } from '../core/command';
 import { CommandError, ReasonCode } from '../core/errors';
-import { int, obj, str, storeId, uuid } from '../core/input';
+import { bad, int, obj, str, storeId, uuid } from '../core/input';
 import { writePaymentRegistration } from '../core/orderWrites';
 import { loadStoreConfig, markDayActivity, parseRegisterClaim, REGISTER_CLAIM_FIELDS, requireActiveRegister, requireDayOpen } from '../core/store';
 
@@ -97,6 +99,72 @@ export async function recordPayment(db: Firestore, uid: string | undefined, raw:
           before: { paymentState: order.paymentState },
           after: { paymentState: 'paid', paymentId, amountSen: input.amountSen, businessDate, crossDay: businessDate !== order.businessDate },
         },
+      };
+    },
+  });
+}
+
+export const MAX_GROUP_ORDERS = 10;
+
+export interface RecordGroupPaymentResult {
+  orders: { orderId: string; paymentId: string; amountSen: number }[];
+  amountSen: number;
+  businessDate: string;
+  paidAtMs: number;
+}
+
+export async function recordGroupPayment(db: Firestore, uid: string | undefined, raw: unknown) {
+  const o = obj(raw, ['storeId', 'operationId', ...REGISTER_CLAIM_FIELDS, 'orders']);
+  if (!Array.isArray(o.orders) || o.orders.length < 1 || o.orders.length > MAX_GROUP_ORDERS) throw bad(`orders 需 1–${MAX_GROUP_ORDERS} 单`);
+  const orders = o.orders.map((x, i) => {
+    const r = obj(x, ['orderId', 'amountSen'], `orders[${i}]`);
+    return { orderId: uuid(r, 'orderId'), amountSen: int(r, 'amountSen', 1, 10_000_000) };
+  });
+  if (new Set(orders.map((x) => x.orderId)).size !== orders.length) throw bad('orderId 重复');
+  const input = { storeId: storeId(o), operationId: uuid(o, 'operationId'), claim: parseRegisterClaim(o), orders };
+  return runCommand<RecordGroupPaymentResult>(db, {
+    type: 'recordGroupPayment', storeId: input.storeId, operationId: input.operationId, uid, roles: ['cashier', 'owner'], payload: input,
+    run: async ({ tx, store, nowMs, actor }) => {
+      // ---- 读取 ----
+      const config = await loadStoreConfig(tx, store);
+      await requireActiveRegister(tx, store, config, input.claim);
+      const docs = [];
+      for (const x of input.orders) {
+        const snap = await tx.get(store.order(x.orderId));
+        const order = snap.data();
+        if (!snap.exists || !order) throw new CommandError('NOT_FOUND', '订单不存在', { orderId: x.orderId });
+        docs.push({ ...x, order });
+      }
+      const businessDate = businessDateOf(nowMs, config.businessDay);
+      const day = await requireDayOpen(tx, store, businessDate);
+
+      // ---- 校验（全部通过才写） ----
+      // 只能是同一组：原单与挂在它上面的加单。
+      const roots = new Set(docs.map((d) => (d.order.addOnTo as { orderId: string } | null | undefined)?.orderId ?? d.orderId));
+      if (roots.size !== 1) throw bad('只能合并结账同一张原单与它的加单');
+      for (const d of docs) {
+        const r = registerPayment(paymentStateOf(d.order), { amountSen: d.amountSen, orderTotalSen: d.order.totalSen as number });
+        if (!r.ok) {
+          throw new CommandError(PAYMENT_ERROR[r.error], r.error, {
+            orderId: d.orderId, paymentState: d.order.paymentState, paidAtMs: d.order.paidAtMs ?? null, totalSen: d.order.totalSen,
+          });
+        }
+      }
+
+      // ---- 写入 ----
+      const paid = docs.map((d) => ({
+        orderId: d.orderId, amountSen: d.amountSen,
+        paymentId: writePaymentRegistration(tx, store, {
+          orderId: d.orderId, seq: paymentSeqOf(d.order) + 1, amountSen: d.amountSen, businessDate, orderBusinessDate: d.order.businessDate as string,
+          occurredAtMs: nowMs, recordedAtMs: nowMs, confirmedBy: actor.uid, source: 'online', registerId: input.claim.registerId,
+          operationId: input.operationId, offlineEventId: null,
+        }),
+      }));
+      markDayActivity(tx, store, businessDate, day, nowMs);
+      const amountSen = paid.reduce((s, p) => s + p.amountSen, 0);
+      return {
+        result: { orders: paid, amountSen, businessDate, paidAtMs: nowMs },
+        audit: { entityId: [...roots][0], after: { paymentState: 'paid', orders: paid, amountSen, businessDate } },
       };
     },
   });

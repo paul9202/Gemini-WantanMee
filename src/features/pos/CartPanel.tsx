@@ -1,9 +1,12 @@
-/** 第三栏：本单明细。每行可改数量、编辑、删除（删除可短暂撤销），底部应收合计与「下单送厨」（不收款，收款另行登记）。 */
+/**
+ * 第三栏：本单明细。每行可改数量、编辑、删除（删除可短暂撤销）、单独切换堂食/打包
+ * （同一单可以部分堂食、部分打包，一次结账），底部应收合计与「下单送厨」（不收款，收款另行登记）。
+ */
 import { ReactNode } from 'react';
 import { Cart, OrderTotals } from '../../domain/cart';
 import { LineConfig, lineName, linePhotoId } from '../../domain/lineItem';
 import { useLang, useT } from '../../app/i18n';
-import { MenuVersion, NOODLE_TYPE_NAMES, SAUCE_NAMES } from '../../domain/menu';
+import { MenuVersion, NOODLE_TYPE_NAMES, SAUCE_NAMES, ServiceMode, SERVICE_MODE_NAMES } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
 import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
 import { Icon, Photo } from '../../ui/visual';
@@ -13,7 +16,7 @@ import { Eyebrow, Stepper } from './parts';
 export function useLineText(menu: MenuVersion) {
   const tr = useT();
   const lang = useLang();
-  return (cfg: LineConfig, serviceMode: Cart['serviceMode']) => {
+  return (cfg: LineConfig, serviceMode: ServiceMode) => {
     const size = menu.products[cfg.productKind].sizes.find((s) => s.id === cfg.size);
     const sz = size ? tr(size.nameZh, size.nameEn) : '';
     const full = lineName(menu, cfg, lang);
@@ -27,7 +30,7 @@ export function useLineText(menu: MenuVersion) {
   };
 }
 
-export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEdit, onQuantity, onClear, onPay, payDisabledReason, children }: {
+export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEdit, onQuantity, onServiceMode, onClear, onPay, payDisabledReason, banner, children }: {
   menu: MenuVersion;
   cart: Cart;
   totals: OrderTotals;
@@ -35,13 +38,20 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
   editingLineId: string | null;
   onEdit: (lineId: string) => void;
   onQuantity: (lineId: string, q: number) => void;
+  onServiceMode: (lineId: string, mode: ServiceMode) => void;
   onClear: () => void;
   onPay: () => void;
   payDisabledReason: string | null;
+  /** 明细上方的提示（例如正在加单）。 */
+  banner?: ReactNode;
   children?: ReactNode;
 }) {
   const tr = useT();
   const text = useLineText(menu);
+  const modeName = (m: ServiceMode) => tr(SERVICE_MODE_NAMES[m].zh, SERVICE_MODE_NAMES[m].en);
+  const takeaway = totals.takeawayPortionCount;
+  const dineIn = totals.portionCount - takeaway;
+  const mixed = takeaway > 0 && dineIn > 0;
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-start gap-2 px-4 pt-4 pb-2 xl:px-5 xl:pt-5 xl:pb-3">
@@ -53,6 +63,7 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
           {tr('餐牌', 'Token')} <b className="text-base tabular-nums">{tokenNumber ?? '—'}</b>
         </span>
       </div>
+      {banner}
       <ul className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 xl:px-5" aria-label={tr('本单餐品', 'Order items')}>
         {cart.lines.length === 0 && (
           <li className="flex flex-col items-center gap-2 py-12 text-center text-ink-2">
@@ -61,7 +72,8 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
         )}
         {cart.lines.map((l) => {
           const t = totals.lines.find((x) => x.lineId === l.lineId)!;
-          const x = text(l.config, cart.serviceMode);
+          const x = text(l.config, l.serviceMode);
+          const other: ServiceMode = l.serviceMode === 'dine_in' ? 'takeaway' : 'dine_in';
           const editing = editingLineId === l.lineId;
           return (
             <li key={l.lineId} className={`border-b border-dashed border-line py-4 ${editing ? '-mx-2 rounded-xl border-transparent bg-brand-soft px-2' : ''}`}>
@@ -82,6 +94,11 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
                 {editing
                   ? <span className="px-1 text-sm font-semibold text-brand">{tr('正在修改…', 'Editing…')}</span>
                   : <button type="button" onClick={() => onEdit(l.lineId)} className="min-h-14 rounded-xl border border-line bg-card px-3 text-sm font-semibold">{tr('编辑', 'Edit')}</button>}
+                {/* 点一下在堂食 / 打包之间切换这一行；混合单时打包行高亮，避免漏打包。 */}
+                <button type="button" onClick={() => onServiceMode(l.lineId, other)} aria-label={tr(`${modeName(l.serviceMode)}，点按改为${modeName(other)}`, `${modeName(l.serviceMode)} — tap for ${modeName(other)}`)}
+                  className={`flex min-h-14 items-center gap-1.5 rounded-xl border px-2.5 text-sm font-semibold ${mixed && l.serviceMode === 'takeaway' ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-card'}`}>
+                  <Icon name={l.serviceMode === 'dine_in' ? 'table' : 'bag'} size={20} />{modeName(l.serviceMode)}
+                </button>
                 <button type="button" onClick={() => onQuantity(l.lineId, 0)} className="min-h-14 rounded-xl px-2 text-sm text-ink-2 underline underline-offset-4">{tr('删除', 'Remove')}</button>
                 {l.quantity > 1 && <span className="ml-auto text-xs text-ink-2">{tr(`单价 ${formatRM(t.unitPriceSen)}`, `${formatRM(t.unitPriceSen)} each`)}</span>}
               </div>
@@ -91,7 +108,11 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
       </ul>
       <div className="border-t border-line px-4 py-3 xl:px-5 xl:py-4">
         <div className="flex items-center text-sm text-ink-2">
-          <span>{cart.serviceMode === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')} · {tr(`${totals.portionCount} 份餐品`, `${totals.portionCount} item(s)`)}</span>
+          <span>
+            {mixed
+              ? tr(`堂食 ${dineIn} 份 · 打包 ${takeaway} 份`, `Dine in ${dineIn} · Takeaway ${takeaway}`)
+              : <>{modeName(takeaway > 0 ? 'takeaway' : cart.serviceMode)} · {tr(`${totals.portionCount} 份餐品`, `${totals.portionCount} item(s)`)}</>}
+          </span>
           {cart.lines.length > 0 && <button type="button" onClick={onClear} className="ml-auto min-h-14 px-2 underline underline-offset-4">{tr('清空本单', 'Clear order')}</button>}
         </div>
         <div className="my-2 flex items-baseline justify-between xl:my-3">

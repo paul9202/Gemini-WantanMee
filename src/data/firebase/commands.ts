@@ -14,7 +14,7 @@ export type CommandName =
   | 'confirmFullRefund' | 'manageMember' | 'assignRegister' | 'syncOfflineEvents' | 'routeManualOrderToKitchen'
   | 'heartbeatDevice' | 'recordManualHandoff' | 'resolveOfflineReview' | 'recordExpense' | 'voidLedgerEntry' | 'recordWastage'
   | 'recordCashMovement' | 'closeBusinessDay' | 'restateBusinessDay' | 'inviteMember' | 'publishMenu' | 'publishBom'
-  | 'recordPayment' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff' | 'rejectKitchenCancel';
+  | 'recordPayment' | 'recordGroupPayment' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff' | 'rejectKitchenCancel';
 
 export class CommandFailure extends Error {
   constructor(

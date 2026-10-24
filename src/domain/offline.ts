@@ -5,7 +5,7 @@
  * 补同步不会自动送厨、不重扣成本。收款确认只关联订单 ID，不占牌也不释放牌。
  * 旧格式日志（下单即收款、token_returned 人工回收）仍可解析与补同步。
  */
-import type { LineConfig } from './lineItem';
+import type { OrderLineInput } from './cart';
 import type { ServiceMode } from './menu';
 import type { LegacyPaymentMethod } from './payment';
 import { TokenBoard, TokenState } from './tokens';
@@ -17,9 +17,11 @@ export interface OfflineOrderPayload {
   clientOrderId: string;
   offlineReceiptNumber: string;
   tokenNumber: number;
+  /** 行没有单独标明时的默认就餐方式。 */
   serviceMode: ServiceMode;
   menuVersion: string;
-  lines: { lineId: string; config: LineConfig; quantity: number }[];
+  /** serviceMode：行级堂食/打包；旧日志没有，按整单。 */
+  lines: OrderLineInput[];
   totalSen: number;
   /** null：新流程，下单未付款。旧格式日志为下单即收款的真实渠道记录。 */
   payment: { method: LegacyPaymentMethod; tenderedSen: number | null; qrExternalVerificationNote: string | null } | null;

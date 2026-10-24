@@ -7,7 +7,7 @@ import { ReactNode, useEffect, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { doc, getDoc } from 'firebase/firestore';
 import { LineConfig, unitPriceSen } from '../../domain/lineItem';
-import { MENU_V1, MenuVersion } from '../../domain/menu';
+import { MENU_V1, MenuVersion, orderServiceMode, ServiceMode } from '../../domain/menu';
 import { useMenu } from '../../data/menu';
 import { buildReceipt, ReceiptSource } from '../../domain/receipt';
 import { db, storePath } from '../../data/firebase/client';
@@ -29,7 +29,7 @@ export async function receiptFromOrder(orderId: string, storeName: string): Prom
     fulfillmentStatus: o.fulfillmentStatus, servedAtMs: o.servedAtMs ?? null, paymentState: o.paymentState,
     lines: (o.items as Record<string, unknown>[]).map((i) => ({
       config: Object.fromEntries(CONFIG_KEYS.map((k) => [k, i[k]])) as unknown as LineConfig,
-      quantity: i.quantity as number, unitPriceSen: i.unitPriceSen as number,
+      quantity: i.quantity as number, unitPriceSen: i.unitPriceSen as number, serviceMode: (i.serviceMode as ServiceMode | undefined),
     })),
     totalSen: o.totalSen, paymentMethod: o.paymentMethod ?? null, tenderedSen: o.cashTenderedSen ?? null, changeSen: o.changeSen ?? null, synced: true,
   };
@@ -40,11 +40,11 @@ export async function receiptFromOrder(orderId: string, storeName: string): Prom
 export function receiptFromLocal(o: LocalOrder, menu: MenuVersion, storeName: string, sync: { synced: boolean; receiptNumber: string | null; served: boolean; paid: boolean }): ReceiptSource {
   return {
     storeName, receiptNumber: sync.receiptNumber, offlineReceiptNumber: o.offlineReceiptNumber, tokenNumber: o.tokenNumber,
-    serviceMode: o.serviceMode, source: 'offline', acceptedAtMs: o.createdAtMs, timeQuality: 'device_estimated',
+    serviceMode: orderServiceMode(o.lines.map((l) => l.serviceMode ?? o.serviceMode), o.serviceMode), source: 'offline', acceptedAtMs: o.createdAtMs, timeQuality: 'device_estimated',
     // 人工出餐时间只在本机日志里，不在收据上编造具体时刻。
     // 新格式离线单下单未付款；只有本机确有收款确认事件（或旧格式下单即收款）才标已收款。
     fulfillmentStatus: sync.served ? 'served' : 'queued', servedAtMs: null, paymentState: sync.paid ? 'paid' : 'unpaid',
-    lines: o.lines.map((l) => ({ config: l.config, quantity: l.quantity, unitPriceSen: priceOf(menu, l.config) })),
+    lines: o.lines.map((l) => ({ config: l.config, quantity: l.quantity, unitPriceSen: priceOf(menu, l.config), serviceMode: l.serviceMode ?? o.serviceMode })),
     totalSen: o.totalSen, paymentMethod: o.payment?.method ?? (sync.paid ? 'unspecified' : null), tenderedSen: o.payment?.tenderedSen ?? null, changeSen: o.changeSen, synced: sync.synced,
   };
 }

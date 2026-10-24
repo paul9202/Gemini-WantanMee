@@ -9,7 +9,7 @@ import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import {
   admin, cleanupClients, countDocs, newClient, noodle, orderPayload, pay, payPayload, placeOrder, setupStore, uuid,
 } from './harness';
-import { defaultConfig, MENU_V1, normalizeConfig } from '../../src/domain';
+import { BOM_V1, defaultConfig, MENU_V1, normalizeConfig } from '../../src/domain';
 
 after(cleanupClients);
 
@@ -333,6 +333,78 @@ test('M11/M13/M02 服务器拒绝篡改：改总价、塞单价、Kosong 加肉�
   const k = await placeOrder(f, { lines: [{ config: noodle({ isKosong: true }), quantity: 1 }], expectedTotalSen: 350 });
   assert.equal(k.result.totalSen, 350);
   assert.equal(await countDocs(f.storeId, 'orders'), 1);
+});
+
+test('混合单：同一单部分堂食部分打包，一次结账；订单、厨单逐行带方式，包装成本只算打包份数；非法行方式被拒', async () => {
+  const f = await setupStore();
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { lines: [{ config: noodle(), quantity: 1, serviceMode: 'delivery' }] })), 'INVALID_ARGUMENT');
+  const { result } = await placeOrder(f, {
+    tokenNumber: 9, serviceMode: 'dine_in', expectedTotalSen: 3 * 700,
+    lines: [{ config: noodle(), quantity: 1 }, { config: noodle({ sauce: 'red' }), quantity: 2, serviceMode: 'takeaway' }],
+  });
+  const db = admin();
+  const s = (p: string) => db.doc(`stores/${f.storeId}/${p}`);
+  const order = (await s(`orders/${result.orderId}`).get()).data()!;
+  assert.equal(order.serviceMode, 'mixed');
+  assert.deepEqual(order.items.map((i: { serviceMode: string }) => i.serviceMode), ['dine_in', 'takeaway']);
+  assert.ok(order.items[1].pictogramIds.includes('takeaway:no_side_soup'));
+  assert.ok(!order.items[0].pictogramIds.includes('takeaway:no_side_soup'));
+  const ticket = (await s(`kitchenTickets/${result.orderId}`).get()).data()!;
+  assert.equal(ticket.serviceMode, 'mixed');
+  assert.deepEqual(ticket.lines.map((l: { serviceMode: string }) => l.serviceMode), ['dine_in', 'takeaway']);
+  const cost = (await s(`orderCosts/${result.orderId}`).get()).data()!;
+  assert.equal(cost.packagingCostUnits, 2 * BOM_V1.packagingPerPortion);
+  // 一次结账：整单一笔收款
+  await pay(f, result.orderId, result.totalSen);
+  assert.equal((await s(`orders/${result.orderId}`).get()).data()!.paymentState, 'paid');
+});
+
+test('加单：已送厨（已出餐）的单，客人吃完再加打包；新厨单标原餐牌；原单与加单一次结账，任何一单不能登记就整组都不登记', async () => {
+  const f = await setupStore();
+  const db = admin();
+  const s = (p: string) => db.doc(`stores/${f.storeId}/${p}`);
+  const root = (await placeOrder(f, { tokenNumber: 5, expectedTotalSen: 700 })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, root.orderId, 1));
+
+  // 原单已出餐、餐牌已释放：加单照常一张新单（可再用同一个牌），挂到原单上
+  const add = (await placeOrder(f, {
+    tokenNumber: 5, addOnToOrderId: root.orderId, serviceMode: 'takeaway', expectedTotalSen: 1400,
+    lines: [{ config: noodle({ sauce: 'red' }), quantity: 2 }],
+  })).result;
+  const addDoc = (await s(`orders/${add.orderId}`).get()).data()!;
+  assert.deepEqual(addDoc.addOnTo, { orderId: root.orderId, tokenNumber: 5, receiptNumber: root.receiptNumber });
+  assert.equal(addDoc.paymentState, 'unpaid');
+  assert.notEqual(add.receiptNumber, root.receiptNumber, '加单有自己的票号');
+  const ticket = (await s(`kitchenTickets/${add.orderId}`).get()).data()!;
+  assert.deepEqual(ticket.addOnTo, { tokenNumber: 5 });
+  assert.equal(ticket.fulfillmentStatus, 'preparing');
+  // 加单的加单仍指向最早的原单
+  const add2 = (await placeOrder(f, { tokenNumber: 6, addOnToOrderId: add.orderId, expectedTotalSen: 700 })).result;
+  assert.equal((await s(`orders/${add2.orderId}`).get()).data()!.addOnTo.orderId, root.orderId);
+
+  const group = (ids: { orderId: string; amountSen: number }[], operationId = uuid()) => ({ storeId: f.storeId, operationId, ...f.claim, orders: ids });
+  const all = [{ orderId: root.orderId, amountSen: 700 }, { orderId: add.orderId, amountSen: 1400 }, { orderId: add2.orderId, amountSen: 700 }];
+  // 不同组的单不能合并；金额不对整组都不登记
+  const other = (await placeOrder(f, { tokenNumber: 7 })).result;
+  assert.equal(await f.cashier.code('recordGroupPayment', group([all[0], { orderId: other.orderId, amountSen: 700 }])), 'INVALID_ARGUMENT');
+  assert.equal(await f.cashier.code('recordGroupPayment', group([all[0], { ...all[1], amountSen: 1 }])), 'AMOUNT_MISMATCH');
+  assert.equal((await s(`orders/${root.orderId}`).get()).data()!.paymentState, 'unpaid', '整组未写');
+  assert.equal(await f.kitchen.code('recordGroupPayment', group(all)), 'FORBIDDEN');
+
+  const op = uuid();
+  const r = await f.cashier.call<{ amountSen: number; orders: { orderId: string; paymentId: string }[] }>('recordGroupPayment', group(all, op));
+  assert.equal(r.amountSen, 2800);
+  for (const o of all) {
+    const d = (await s(`orders/${o.orderId}`).get()).data()!;
+    assert.deepEqual([d.paymentState, d.paidSen], ['paid', o.amountSen]);
+    assert.equal((await s(`payments/${o.orderId}-p1`).get()).data()!.amountSen, o.amountSen, '每单各有一条收款');
+  }
+  // 同 operationId 重试返回原结果；再登记一次被拒，不会重复收
+  assert.equal((await f.cashier.call<{ amountSen: number }>('recordGroupPayment', group(all, op))).amountSen, 2800);
+  assert.equal(await f.cashier.code('recordGroupPayment', group(all)), 'ALREADY_PAID');
+  // 原单已收款：不能再挂加单
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 8, addOnToOrderId: root.orderId })), 'ADD_ON_NOT_ALLOWED');
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 8, addOnToOrderId: uuid() })), 'NOT_FOUND');
 });
 
 test('越权：匿名、非成员、他店、后厨下单、停用成员、旧收银机 epoch、缺号', async () => {

@@ -3,7 +3,7 @@
  * 后厨：正常 <8 分、提醒 8≤t<12、超时 t≥12。
  * 分析：极速 <4、正常 4≤t<8、偏慢 8≤t<12、超时 t≥12；达标 = t < 480000ms。
  */
-import type { ServiceMode } from './menu';
+import type { OrderServiceMode } from './menu';
 import type { TimeQuality } from './kitchen';
 
 export const MINUTE_MS = 60_000;
@@ -44,7 +44,7 @@ export function formatClock(ms: number): string {
 
 export interface ServiceSampleSource {
   orderId: string;
-  serviceMode: ServiceMode;
+  serviceMode: OrderServiceMode;
   fulfillmentStatus: string;
   acceptedAtEffectiveMs: number | null;
   servedAtMs: number | null;
@@ -53,7 +53,7 @@ export interface ServiceSampleSource {
 
 export interface ServiceSample {
   orderId: string;
-  serviceMode: ServiceMode;
+  serviceMode: OrderServiceMode;
   durationMs: number;
 }
 
@@ -109,6 +109,7 @@ export interface ServiceStats {
   /** 0–1；无样本为 null（UI 显示「—」，不显示 100%）。 */
   onTimeRate: number | null;
   distribution: Record<SpeedBucket, number>;
+  /** 堂食+打包的混合单不计入这两项，只计入总体。 */
   dineIn: { count: number; avgMs: number | null };
   takeaway: { count: number; avgMs: number | null };
 }
