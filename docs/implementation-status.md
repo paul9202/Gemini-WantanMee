@@ -1,6 +1,6 @@
 # 实施状态（豪云吞面 OS）
 
-最后更新：2026-10-24 · 营业流程改版（下单即送厨、统一收款登记、新版日结）已部署 wantan-staging；平板实机未测 · 分支 `claude/phase-a-domain`
+最后更新：2026-10-24 · 堂食+打包混合单、吃完再加单一次结账，已部署 wantan-staging；平板实机未测 · 分支 `claude/phase-a-domain`
 
 ## 当前阶段
 
@@ -15,6 +15,18 @@
 | E 财务与关账 | ✅ 账本、关账快照、更正版本、离线待核对处理、报表、CSV；Emulator 与浏览器端到端验证 |
 | F 测试云与试营业 | 🟡 `cc830b9` 已部署到 wantan-staging，不登录的冒烟检查 7/7；需要登录的线上流程、实体设备联调、试营业未做 |
 | G 生产切换 | ⛔ 需用户授权 |
+
+## 测试云部署：混合单与加单一次结账（wantan-staging，2026-10-24）
+
+- 用户要求 push 并部署：把 `6bc85c7`（同一单堂食+打包；吃完再加单，与原单一次结账）部署到测试项目 `wantan-staging`（不是生产）。
+- 命令：`npx vite build --mode staging`，然后 `firebase deploy --only functions,firestore:rules,hosting --project wantan-staging`，退出码 0。
+  - Functions：新建 1 个（`recordGroupPayment`），更新 32 个，区域 asia-southeast1。
+  - Rules：没有改动（上传时跳过，照常发布）。索引没有改动，未部署。
+  - Hosting：https://wantan-staging.web.app ，包名 `index-DzcSBDKS.js`。
+  - 没有改动门店数据，没有运行种子数据，没有迁移旧订单（旧订单、旧离线日志、旧厨单没有行级堂食/打包时按整单读取）。
+- 部署前：领域测试 79/79、构建、服务端类型检查、Emulator 命令 43/43、Rules 28/28、本地 POS→后厨→加单→一次收款走查通过。
+- **冒烟检查**（`node scripts/staging-smoke.mjs wantan-staging index-DzcSBDKS.js`，不登录、不写数据）：✅ 8/8；Callable 清单加入 `recordGroupPayment`，共 33 个。
+- **未执行**：登录后的线上流程（没有测试云账号密码，也不代为输入）；红米平板实机测试；任何付款测试。
 
 ## 测试云部署：营业流程改版（wantan-staging，2026-10-24）
 

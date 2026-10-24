@@ -7,7 +7,7 @@ const COMMANDS = ['createOrder', 'getOperationResult', 'openShift', 'releaseToke
   'requestCancel', 'confirmKitchenCancel', 'confirmFullRefund', 'manageMember', 'assignRegister', 'inviteMember', 'publishMenu', 'publishBom',
   'syncOfflineEvents', 'routeManualOrderToKitchen', 'heartbeatDevice', 'recordManualHandoff', 'resolveOfflineReview', 'recordExpense',
   'voidLedgerEntry', 'recordWastage', 'recordCashMovement', 'closeBusinessDay', 'restateBusinessDay',
-  'recordPayment', 'reversePayment', 'writeOffPayment', 'reinstateWrittenOff', 'rejectKitchenCancel'];
+  'recordPayment', 'recordGroupPayment', 'reversePayment', 'writeOffPayment', 'reinstateWrittenOff', 'rejectKitchenCancel'];
 
 const results = [];
 const check = (name, ok, detail = '') => {
