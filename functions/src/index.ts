@@ -6,7 +6,8 @@
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { setGlobalOptions } from 'firebase-functions/v2';
-import { CallableRequest, onCall } from 'firebase-functions/v2/https';
+import { CallableOptions, CallableRequest, onCall } from 'firebase-functions/v2/https';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { toHttpsError } from './core/errors';
 import { createOrder } from './commands/createOrder';
 import { lifecycleCommand } from './commands/lifecycle';
@@ -23,6 +24,10 @@ import {
   addIngredient, addStartupCost, correctStartupCost, createNextGoal, finishBatch, recordExistingBatch, recordIngredientPurchase, recordPlanExpense,
   recordRecurringPayment, seedStartupCosts, linkExpense, unlinkExpense, setCostCoverage, completeGoal, archiveGoal, setBatchCost, setExpensePlan, setSalesTarget, setStartupPayment, settleExpense, splitStartupRent, startBatch, voidBatch,
 } from './commands/costing';
+import { analyzeCostDraft, commitCostDraft, completePurchaseUsage, createCostDraft, getCostAnalysis, setAiCostEnabled, updateCostDraft } from './commands/aiCost';
+import { ANTHROPIC_API_KEY, DEEPSEEK_API_KEY } from './aiCost/config';
+import { cleanupExpiredDrafts } from './aiCost/drafts';
+import { deleteAttachments } from './aiCost/receiptStorage';
 
 export const REGION = 'asia-southeast1';
 const ENFORCE_APP_CHECK = false;
@@ -33,8 +38,8 @@ const db = getFirestore();
 
 type Handler = (db: ReturnType<typeof getFirestore>, uid: string | undefined, data: unknown) => Promise<unknown>;
 
-function command(handler: Handler) {
-  return onCall({ enforceAppCheck: ENFORCE_APP_CHECK }, async (req: CallableRequest<unknown>) => {
+function command(handler: Handler, opts: CallableOptions = {}) {
+  return onCall({ ...opts, enforceAppCheck: ENFORCE_APP_CHECK }, async (req: CallableRequest<unknown>) => {
     try {
       const out = await handler(db, req.auth?.uid, req.data);
       // runCommand 的 {result, replayed} 展开为结果对象；replayed=true 表示返回的是原操作结果。
@@ -107,3 +112,22 @@ export const unlinkExpenseCmd = command(unlinkExpense);
 export const setCostCoverageCmd = command(setCostCoverage);
 export const completeGoalCmd = command(completeGoal);
 export const archiveGoalCmd = command(archiveGoal);
+
+// AI 记成本：草稿、识别（专用长请求，密钥只在后端）、整单确认入账、补用量、按店开关。
+const AI_LONG: CallableOptions = { timeoutSeconds: 120, memory: '512MiB', secrets: [ANTHROPIC_API_KEY, DEEPSEEK_API_KEY] };
+export const createCostDraftCmd = command(createCostDraft);
+export const updateCostDraftCmd = command(updateCostDraft, { timeoutSeconds: 60, memory: '512MiB' });
+export const analyzeCostDraftCmd = command(analyzeCostDraft, AI_LONG);
+export const commitCostDraftCmd = command(commitCostDraft);
+export const completePurchaseUsageCmd = command(completePurchaseUsage);
+export const setAiCostEnabledCmd = command(setAiCostEnabled);
+export const getCostAnalysisCmd = command(getCostAnalysis, AI_LONG);
+
+/** 每天清理 30 天未动、未入账的草稿图片（已入账收据是凭证，保留）。 */
+export const cleanupCostDraftsDaily = onSchedule({ schedule: 'every day 05:00', timeZone: 'Asia/Kuala_Lumpur' }, async () => {
+  const stores = await db.collection('stores').listDocuments();
+  for (const s of stores) {
+    const r = await cleanupExpiredDrafts(db, s.id, Date.now(), deleteAttachments);
+    if (r.expired) console.log(`cost draft cleanup ${s.id}: ${r.expired}`);
+  }
+});

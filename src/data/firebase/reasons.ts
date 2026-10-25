@@ -38,6 +38,13 @@ const REASONS_EN: Record<string, string> = {
   LINKED_TO_BATCH: 'Linked to an ingredient batch — change it from Ingredients',
   ALREADY_SETTLED: 'Already paid in full',
   LINK_REJECTED: 'This attribution is not allowed',
+  DRAFT_INVALID: 'Some items still need to be filled in or confirmed',
+  DRAFT_STATE: 'This draft cannot be changed now',
+  DUPLICATE_RECEIPT: 'This receipt looks already recorded',
+  ATTACHMENT_REJECTED: 'This photo cannot be used',
+  AI_DISABLED: 'AI sorting is off — you can fill it in by hand',
+  AI_NOT_CONFIGURED: 'AI service is not configured yet — you can fill it in by hand',
+  AI_QUOTA_EXCEEDED: 'Today’s AI quota is used up — you can fill it in by hand',
 };
 const REASONS: Record<string, string> = {
   UNAUTHENTICATED: '登录已失效，请重新登录',
@@ -85,9 +92,16 @@ const REASONS: Record<string, string> = {
   STAFF_NOT_ENABLED: '员工工资尚未启用',
   GOAL_NOT_REACHED: '开档投入尚未收回，先完成第一个目标',
   BATCH_STATE: '这批食材当前状态不能这样操作',
-  LINKED_TO_BATCH: '这笔记录关联食材批次，请在「食材与用料」中处理',
+  LINKED_TO_BATCH: '这笔记录关联食材批次，请在「AI 记成本 · 详细用料管理」或采购记录中作废该批次',
   ALREADY_SETTLED: '这笔支出已经付清',
   LINK_REJECTED: '不能这样确认归属',
+  DRAFT_INVALID: '还有项目需要补充或确认',
+  DRAFT_STATE: '这份草稿现在不能这样操作',
+  DUPLICATE_RECEIPT: '这张收据好像已经记过了',
+  ATTACHMENT_REJECTED: '这张图片不能使用',
+  AI_DISABLED: 'AI 整理未开启，可以手动填写',
+  AI_NOT_CONFIGURED: 'AI 服务尚未配置，可以手动填写',
+  AI_QUOTA_EXCEEDED: '今天的 AI 整理次数已用完，可以手动填写',
 };
 
 export function reasonText(code: string): string {

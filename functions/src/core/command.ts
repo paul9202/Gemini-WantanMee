@@ -79,6 +79,14 @@ export function storeRefs(db: Firestore, storeId: string) {
     goal: (id: string) => root.collection('goals').doc(id),
     expenseLink: (expenseId: string) => root.collection('expenseLinks').doc(expenseId),
     configCostCoverage: root.collection('config').doc('costCoverage'),
+    // AI 记成本：草稿、识别尝试、来源凭证、采购明细（用量待补）、开销解读缓存、每日调用额度、按店开关。
+    costDraft: (id: string) => root.collection('costDrafts').doc(id),
+    costAttempt: (draftId: string, attemptId: string) => root.collection('costDrafts').doc(draftId).collection('attempts').doc(attemptId),
+    costReceipt: (id: string) => root.collection('costReceipts').doc(id),
+    purchaseDetail: (id: string) => root.collection('purchaseDetails').doc(id),
+    costAnalysis: (key: string) => root.collection('costAnalysis').doc(key),
+    aiUsage: (date: string) => root.collection('aiUsage').doc(date),
+    configAiCost: root.collection('config').doc('aiCost'),
   };
 }
 

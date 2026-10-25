@@ -83,8 +83,15 @@ service cloud.firestore {
             'orderCosts', 'costEvents', 'payments', 'refunds', 'paymentWriteOffs', 'expenses', 'wastage', 'cashMovements',
             'dailyReports', 'dailyStats', 'businessDays', 'auditEvents', 'operations',
             'bomVersions', 'devices', 'offlineInbox',
-            'ingredients', 'ingredientBatches', 'recurringSlots', 'startupCosts', 'goals', 'expenseLinks'
+            'ingredients', 'ingredientBatches', 'recurringSlots', 'startupCosts', 'goals', 'expenseLinks',
+            'costDrafts', 'costReceipts', 'purchaseDetails', 'costAnalysis', 'aiUsage'
           ] && isOwner(storeId);
+        allow write: if false;
+      }
+
+      // AI 记成本：识别尝试（供应商、耗时、用量；不含密钥）只给老板读，只能由服务端写。
+      match /costDrafts/{draftId}/attempts/{attemptId} {
+        allow read: if isOwner(storeId);
         allow write: if false;
       }
 

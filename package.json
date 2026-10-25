@@ -14,14 +14,15 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test \"src/**/*.test.ts\"",
-    "check": "npm run typecheck && npm test && npm run build",
+    "check": "npm run typecheck && npm test && npm run functions:typecheck && npm run test:functions-unit && npm run build",
     "functions:build": "npm --prefix functions run build",
     "functions:typecheck": "npm --prefix functions run typecheck",
     "emulators": "npm run functions:build && firebase emulators:start --project demo-hao-wantan",
-    "test:rules": "firebase emulators:exec --project demo-hao-wantan --only firestore \"npm --prefix functions run test:rules\"",
-    "test:emulator": "npm run functions:build && firebase emulators:exec --project demo-hao-wantan --only auth,firestore,functions \"npm --prefix functions run test:commands\"",
+    "test:rules": "firebase emulators:exec --project demo-hao-wantan --only firestore,storage \"npm --prefix functions run test:rules\"",
+    "test:emulator": "npm run functions:build && firebase emulators:exec --project demo-hao-wantan --only auth,firestore,functions,storage \"npm --prefix functions run test:commands\"",
     "emulators:seed": "npm --prefix functions run seed",
-    "photos": "node scripts/build-photos.mjs"
+    "photos": "node scripts/build-photos.mjs",
+    "test:functions-unit": "npm --prefix functions run test:unit"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// 豪云吞面 OS · Cloud Storage Rules
+// - 默认拒绝。唯一可写路径：本店老板向「仍可上传的收据草稿」目录新建图片（JPEG / PNG / WebP，≤10 MB）。
+// - 已上传对象不可覆盖、不可删除（识别与记账依据不能被替换）；不提供列目录、不生成公开下载链接。
+// - 只有本店有效老板可读取（后端另外按 generation 与 SHA-256 核对后才交给模型）。
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function memberPath(storeId) {
+      return /databases/(default)/documents/stores/$(storeId)/members/$(request.auth.uid);
+    }
+
+    function isOwner(storeId) {
+      return request.auth != null
+        && firestore.exists(memberPath(storeId))
+        && firestore.get(memberPath(storeId)).data.active == true
+        && firestore.get(memberPath(storeId)).data.role == 'owner';
+    }
+
+    function draftPath(storeId, draftId) {
+      return /databases/(default)/documents/stores/$(storeId)/costDrafts/$(draftId);
+    }
+
+    // 收据草稿仍在等待上传 / 识别失败 / 待核对（更换来源）时才能新增图片；已入账或关闭的草稿不能再加。
+    function draftAcceptsUpload(storeId, draftId) {
+      return firestore.exists(draftPath(storeId, draftId))
+        && firestore.get(draftPath(storeId, draftId)).data.source == 'receipt'
+        && firestore.get(draftPath(storeId, draftId)).data.status in ['created', 'failed', 'review'];
+    }
+
+    function validImage(fileName) {
+      return request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024
+        && ((fileName.matches('^[0-9a-f-]{36}[.]jpg$') && request.resource.contentType == 'image/jpeg')
+          || (fileName.matches('^[0-9a-f-]{36}[.]png$') && request.resource.contentType == 'image/png')
+          || (fileName.matches('^[0-9a-f-]{36}[.]webp$') && request.resource.contentType == 'image/webp'));
+    }
+
+    match /stores/{storeId}/ai-cost-drafts/{draftId}/{fileName} {
+      allow get: if isOwner(storeId);
+      allow list: if false;
+      // 上传到已存在的路径也按 create 评估：resource == null 才允许，已有图片不能被覆盖。
+      allow create: if resource == null && isOwner(storeId) && draftAcceptsUpload(storeId, draftId) && validImage(fileName);
+      allow update, delete: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

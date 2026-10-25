@@ -22,6 +22,9 @@
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },
+  "storage": {
+    "rules": "storage.rules"
+  },
   "functions": [
     {
       "source": "functions",
@@ -36,6 +39,7 @@
     "auth": { "port": 9099 },
     "firestore": { "port": 8080 },
     "functions": { "port": 5001 },
+    "storage": { "port": 9199 },
     "hosting": { "port": 5050 },
     "ui": { "enabled": true, "port": 4000 }
   }

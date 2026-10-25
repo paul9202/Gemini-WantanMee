@@ -1,5 +1,5 @@
 /**
- * 收支（2026-10-25 改版）：收支总览、食材与用料、日常开支、经营目标、开档成本五个子页。
+ * 收支（2026-10-25 改版）：收支总览、AI 记成本（含详细用料管理）、日常开支、经营目标、开档成本五个子页。
  * - 钱箱资金往来的录入与列表已移除；旧记录仍留在账本中，日结与历史报表照常读取。
  * - 所有写入经 Callable 命令（老板权限、幂等、审计、关账屏障）；记录不删除，只作废并可更正。
  * - 数字全部来自真实账目；成本资料不全时显示「待核算」或「暂估」，不给虚假的精确利润。
@@ -19,10 +19,10 @@ import {
 } from './finance/dialogs';
 import { Btn, Dialog, FinanceNav, Toast } from './finance/ui';
 import { OverviewTab } from './finance/OverviewTab';
-import { IngredientsTab } from './finance/IngredientsTab';
 import { ExpensesTab } from './finance/ExpensesTab';
 import { GoalsTab } from './finance/GoalsTab';
 import { StartupTab } from './finance/StartupTab';
+import { AiCostPage } from './aiCost/AiCostPage';
 
 export type DialogState =
   | { kind: 'existing'; ingredientId?: string }
@@ -87,7 +87,7 @@ export function FinancePage({ route = '/owner/finance' }: { route?: Route }) {
           {!props ? <p className="py-16 text-center text-ink-2">{fin.loading ? '正在载入收支资料…' : '没有数据'}</p> : (
             <>
               {route === '/owner/finance' && <OverviewTab {...props} />}
-              {route === '/owner/finance/ingredients' && <IngredientsTab {...props} />}
+              {route === '/owner/finance/ingredients' && <AiCostPage {...props} refresh={fin.refresh} />}
               {route === '/owner/finance/expenses' && <ExpensesTab {...props} />}
               {route === '/owner/finance/goals' && <GoalsTab {...props} />}
               {route === '/owner/finance/startup' && <StartupTab {...props} />}
@@ -160,6 +160,7 @@ export function FinancePage({ route = '/owner/finance' }: { route?: Route }) {
             <Dialog title="记一笔支出" sub="选一个项目，表单会按项目预设。" onClose={close} footer={<Btn onClick={close} className="w-full sm:w-auto">取消</Btn>}>
               <div className="grid gap-2.5 sm:grid-cols-2">
                 {([
+                  ['AI 记成本', '说一句或拍收据，整理后核对再保存', () => { close(); navigate('/owner/finance/ingredients'); }],
                   ['食材进货', '记数量、金额与付款，放入库存', () => setDialog({ kind: 'purchase' })],
                   ['煤气', '换一桶记一笔', () => setDialog({ kind: 'planExpense', item: 'gas' })],
                   ['杂费', '清洁、维修及其他', () => setDialog({ kind: 'planExpense', item: 'misc' })],

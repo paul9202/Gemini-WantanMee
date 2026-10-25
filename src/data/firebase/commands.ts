@@ -16,7 +16,8 @@ export type CommandName =
   | 'recordCashMovement' | 'closeBusinessDay' | 'restateBusinessDay' | 'inviteMember' | 'publishMenu' | 'publishBom'
   | 'recordPayment' | 'recordGroupPayment' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff' | 'rejectKitchenCancel'
   | 'addIngredient' | 'recordExistingBatch' | 'recordIngredientPurchase' | 'startBatch' | 'finishBatch' | 'setBatchCost' | 'voidBatch' | 'setExpensePlan' | 'recordRecurringPayment' | 'recordPlanExpense' | 'settleExpense' | 'seedStartupCosts' | 'addStartupCost' | 'correctStartupCost' | 'setStartupPayment' | 'splitStartupRent' | 'setSalesTarget' | 'createNextGoal'
-  | 'linkExpense' | 'unlinkExpense' | 'setCostCoverage' | 'completeGoal' | 'archiveGoal';
+  | 'linkExpense' | 'unlinkExpense' | 'setCostCoverage' | 'completeGoal' | 'archiveGoal'
+  | 'createCostDraft' | 'commitCostDraft' | 'completePurchaseUsage' | 'setAiCostEnabled';
 
 export class CommandFailure extends Error {
   constructor(
@@ -40,7 +41,7 @@ export async function call<T>(name: CommandName, data: Record<string, unknown>):
   }
 }
 
-function toFailure(e: unknown): CommandFailure {
+export function toFailure(e: unknown): CommandFailure {
   if (e instanceof FirebaseError) {
     const details = ((e as FirebaseError & { details?: Record<string, unknown> }).details ?? {}) as Record<string, unknown>;
     const reason = typeof details.reasonCode === 'string' ? details.reasonCode : null;

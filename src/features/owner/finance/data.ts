@@ -41,16 +41,31 @@ export interface FinanceData {
   /** 老板确认的旧账 / 资本支出归属。 */
   links: ExpenseLinkDoc[];
   coverage: CostCoverage;
+  /** AI 记成本：采购明细（用量待补 / 已建库存）与来源凭证（原话、收据图片路径、分摊与差额）。 */
+  purchaseDetails: PurchaseDetailDoc[];
+  costReceipts: CostReceiptDoc[];
+}
+
+export interface PurchaseDetailDoc {
+  id: string; expenseId: string; draftId: string; receiptId: string; name: string; costCategory: string; ingredientCategory: string | null; ingredientId: string | null;
+  quantity: number | null; unit: string | null; amountSen: number; purchasedDate: string; usageState: 'pending' | 'stocked'; batchId: string | null; revision: number;
+}
+export interface CostReceiptDoc {
+  id: string; draftId: string; businessDate: string; source: 'text' | 'receipt' | 'manual'; text: string | null; attachments: { path: string }[]; expenseIds: string[];
+  totalSen: number; printedTotalSen: number | null; computedTotalSen: number; discountSen: number; taxSen: number; supplier: string | null; receiptNumber: string | null;
+  difference: { acceptedTotalSen: number; reason: string } | null; excluded: { lineId: string; name: string; netSen: number; reason: string }[];
+  extractionMeta: { provider: string; model: string } | null; createdAtMs: number; duplicateAcknowledgement: { candidateId: string; reason: string } | null;
 }
 
 export async function loadFinance(recentStart: string): Promise<FinanceData> {
   const cfg = (name: string) => getDoc(doc(db, storePath(`config/${name}`))).then((s) => s.data());
   const since = where('businessDate', '>=', recentStart);
-  const [plan, goals, startupCfg, finance, coverageCfg, links, custom, batches, startup, goalDocs, expenses, payments, refunds, orders, costEvents, wastage] = await Promise.all([
+  const [plan, goals, startupCfg, finance, coverageCfg, links, custom, batches, startup, goalDocs, expenses, payments, refunds, orders, costEvents, wastage, purchaseDetails, costReceipts] = await Promise.all([
     cfg('expensePlan'), cfg('goals'), cfg('startup'), cfg('finance'), cfg('costCoverage'), all<ExpenseLinkDoc>('expenseLinks'),
     all<Ingredient & { active?: boolean }>('ingredients'), all<BatchDoc>('ingredientBatches'), all<StartupCostDoc>('startupCosts'), all<GoalDoc>('goals'),
     all<ExpenseDoc>('expenses'), all<PaymentDoc>('payments'), all<RefundDoc>('refunds'),
     all<OrderReportRow>('orders', since), all<CostEventDoc>('costEvents', since), all<WastageDoc>('wastage', since),
+    all<PurchaseDetailDoc>('purchaseDetails'), all<CostReceiptDoc>('costReceipts'),
   ]);
   return {
     plan: { ...DEFAULT_EXPENSE_PLAN, ...(plan?.plan ?? {}) },
@@ -60,7 +75,7 @@ export async function loadFinance(recentStart: string): Promise<FinanceData> {
     fixedPolicy: (finance?.fixedCostPolicy as FixedCostPolicy | undefined) ?? DEFAULT_FIXED_COST,
     ingredients: [...BUILT_IN_INGREDIENTS, ...custom.filter((i) => i.active !== false).map((i) => ({ ...i, builtIn: false }))],
     links, coverage: { ...DEFAULT_COST_COVERAGE, ...((coverageCfg?.coverage as CostCoverage | undefined) ?? {}) },
-    batches, startup, goals: goalDocs.sort((a, b) => a.createdAtMs - b.createdAtMs), expenses, payments, refunds, orders, costEvents, wastage, recentStart,
+    batches, startup, goals: goalDocs.sort((a, b) => a.createdAtMs - b.createdAtMs), expenses, payments, refunds, orders, costEvents, wastage, recentStart, purchaseDetails, costReceipts,
   };
 }
 

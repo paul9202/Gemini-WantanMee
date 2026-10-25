@@ -6,6 +6,7 @@ import { initializeApp } from 'firebase/app';
 import { connectAuthEmulator, getAuth } from 'firebase/auth';
 import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore';
 import { connectFunctionsEmulator, getFunctions } from 'firebase/functions';
+import { connectStorageEmulator, getStorage } from 'firebase/storage';
 
 const env = import.meta.env;
 
@@ -19,18 +20,24 @@ const app = initializeApp({
   apiKey: env.VITE_FIREBASE_API_KEY ?? 'demo-api-key',
   authDomain: env.VITE_FIREBASE_AUTH_DOMAIN ?? `${PROJECT_ID}.firebaseapp.com`,
   appId: env.VITE_FIREBASE_APP_ID ?? 'demo-app-id',
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET ?? `${PROJECT_ID}.appspot.com`,
 });
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const functions = getFunctions(app, REGION);
+/** 私有收据图片（AI 记成本）；只能经 Storage Rules 由本店老板上传 / 读取，不生成公开链接。 */
+export const storage = getStorage(app);
 
 if (USE_EMULATORS) {
   // 与页面同主机，便于用 localhost / 127.0.0.1 两个源分别登录不同岗位。
   const host = location.hostname;
-  connectAuthEmulator(auth, `http://${host}:9099`, { disableWarnings: true });
-  connectFirestoreEmulator(db, host, 8080);
-  connectFunctionsEmulator(functions, host, 5001);
+  // 端口可用 VITE_EMULATOR_*_PORT 覆盖（同一台机器跑第二套 Emulator 做验收时使用）。
+  const port = (k: string, d: number) => Number(env[`VITE_EMULATOR_${k}_PORT`] ?? d);
+  connectAuthEmulator(auth, `http://${host}:${port('AUTH', 9099)}`, { disableWarnings: true });
+  connectFirestoreEmulator(db, host, port('FIRESTORE', 8080));
+  connectFunctionsEmulator(functions, host, port('FUNCTIONS', 5001));
+  connectStorageEmulator(storage, host, port('STORAGE', 9199));
 }
 
 export const storePath = (sub: string) => `stores/${STORE_ID}/${sub}`;

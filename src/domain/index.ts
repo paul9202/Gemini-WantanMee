@@ -22,3 +22,5 @@ export * from './receipt';
 export * from './ledger';
 export * from './catalog';
 export * from './costing';
+export * from './aiCost';
+export * from './costInsights';

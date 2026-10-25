@@ -35,11 +35,14 @@ export interface WastageDoc {
   charSiewPortions: number; reason: string; note: string; linkedOrderId: string | null; status: 'active' | 'voided'; occurredAtMs: number;
 }
 export interface ExpenseDoc {
-  id: string; category: ExpenseCategory; description: string; amountSen: Sen; paidSen: Sen; paymentSource: 'drawer' | 'bank' | 'owner';
+  /** unspecified = 老板未说明从哪里付（AI 记成本）；不当作钱箱现金。 */
+  id: string; category: ExpenseCategory; description: string; amountSen: Sen; paidSen: Sen; paymentSource: 'drawer' | 'bank' | 'owner' | 'unspecified';
   businessDate: string; accrualDate: string; status: 'active' | 'voided'; occurredAtMs: number; correctionOf: string | null;
   /** 2026-10-25 收支改版：日常开支项目、所属月份、关联食材批次、补付款关联的原支出、工资出勤天数。旧记录没有。 */
   planItem?: import('./costing').PlanItem | null; periodMonth?: string | null; ingredientBatchId?: string | null;
   settlesExpenseId?: string | null; workDays?: number | null; voidReason?: string;
+  /** AI 记成本：来源凭证、草稿、成本分类与采购明细（用量待补）。旧记录没有。 */
+  costReceiptId?: string | null; costDraftId?: string | null; costCategory?: import('./aiCost').CostCategory | null; purchaseDetailId?: string | null;
 }
 export interface CashMovementDoc { id: string; businessDate: string; type: 'opening_float' | 'cash_in' | 'cash_out' | 'bank_deposit'; amountSen: Sen; reason?: string; occurredAtMs: number }
 

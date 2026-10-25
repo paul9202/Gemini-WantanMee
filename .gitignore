@@ -16,3 +16,5 @@ database-debug.log
 pubsub-debug.log
 *-debug.log
 .firebase/
+# Functions Emulator 本机真实密钥覆盖文件（AI 记成本），不能提交
+.secret.local

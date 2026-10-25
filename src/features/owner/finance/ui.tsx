@@ -7,7 +7,7 @@ import type { IconName } from '../../../ui/iconSymbols';
 
 export const FINANCE_PAGES: { route: Route; label: string; icon: IconName }[] = [
   { route: '/owner/finance', label: '收支总览', icon: 'chart' },
-  { route: '/owner/finance/ingredients', label: '食材与用料', icon: 'leaf' },
+  { route: '/owner/finance/ingredients', label: 'AI 记成本', icon: 'sparkle' },
   { route: '/owner/finance/expenses', label: '日常开支', icon: 'receipt' },
   { route: '/owner/finance/goals', label: '经营目标', icon: 'target' },
   { route: '/owner/finance/startup', label: '开档成本', icon: 'store' },

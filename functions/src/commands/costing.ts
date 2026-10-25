@@ -41,7 +41,7 @@ const optMonth = (o: Raw, k: string) => {
   return v;
 };
 
-async function ingredientFor(tx: Transaction, store: StoreRefs, id: string) {
+export async function ingredientFor(tx: Transaction, store: StoreRefs, id: string) {
   const b = BUILT_IN_BY_ID.get(id);
   if (b) return b;
   const d = (await tx.get(store.ingredient(id))).data();
@@ -55,7 +55,7 @@ async function getBatch(tx: Transaction, store: StoreRefs, id: string): Promise<
   return d as BatchDoc;
 }
 
-async function loadPlan(tx: Transaction, store: StoreRefs): Promise<ExpensePlan> {
+export async function loadPlan(tx: Transaction, store: StoreRefs): Promise<ExpensePlan> {
   const d = (await tx.get(store.configExpensePlan)).data();
   return { ...DEFAULT_EXPENSE_PLAN, ...(d?.plan ?? {}) } as ExpensePlan;
 }
@@ -283,23 +283,7 @@ export async function recordRecurringPayment(db: Firestore, uid: string | undefi
     type: 'recordRecurringPayment', storeId: input.storeId, operationId: input.operationId, uid, roles: ['owner'], payload: input,
     run: async ({ tx, store, nowMs, actor }) => {
       const config = await loadStoreConfig(tx, store);
-      const plan = await loadPlan(tx, store);
-      if (!plan.rentStartMonth) throw new CommandError('INVALID_TRANSITION', '请先设置起租月份');
-      if (month < plan.rentStartMonth) throw bad('起租之前的月份不需要登记');
-      const today = businessDateOf(nowMs, config.businessDay);
-      if (month > nextMonth(monthOf(today))) throw bad('最多只能预付下个月');
-      const slotRef = store.recurringSlot(input.item, month);
-      const slot = (await tx.get(slotRef)).data();
-      if (slot?.expenseId) {
-        const prev = (await tx.get(store.expense(slot.expenseId))).data();
-        if (prev && prev.status === 'active') throw new CommandError('PERIOD_ALREADY_PAID', `${month} 已登记过付款`, { expenseId: slot.expenseId });
-      }
-      const covered = input.item === 'rent' ? startupSummary(await loadStartup(tx, store)).rentByMonth[month] ?? 0 : 0;
-      const row = monthlyPlanRows(plan, month, [], { [month]: covered }).find((r) => r.item === input.item)!;
-      if (row.state === 'covered') throw new CommandError('COVERED_BY_STARTUP', `${month} 的租金已在开档成本中付过`);
-      // 老板已把旧付款归属到这个月：已抵扣完就不能再登记，避免同月重复计费。
-      const linked = slotLinkedSen(slot);
-      if (linked > 0 && row.outstandingSen - linked <= 0) throw new CommandError('PERIOD_ALREADY_PAID', `${month} 已由旧付款抵扣 ${linked / 100} 令吉`);
+      const { slotRef, slot } = await assertRecurringOpen(tx, store, input.item, month, businessDateOf(nowMs, config.businessDay));
       const { date, day } = await ledgerDay(tx, store, config, input.businessDate, nowMs);
       const id = `exp-${input.operationId}`;
       tx.create(store.expense(id), {
@@ -312,6 +296,30 @@ export async function recordRecurringPayment(db: Firestore, uid: string | undefi
       return { result: { id, businessDate: date }, audit: { entityId: id, after: { item: input.item, month, amountSen: input.amountSen } } };
     },
   });
+}
+
+/**
+ * 某月租金 / 冰箱电费是否还能登记一笔付款（recordRecurringPayment 与 AI 记成本共用）：
+ * 已设起租月、不早于起租、最多预付下个月、该月没有有效付款、没被开档租金覆盖、没被旧付款抵扣完。
+ */
+export async function assertRecurringOpen(tx: Transaction, store: StoreRefs, item: (typeof RECURRING_ITEMS)[number], month: string, today: string) {
+  const plan = await loadPlan(tx, store);
+  if (!plan.rentStartMonth) throw new CommandError('INVALID_TRANSITION', '请先设置起租月份');
+  if (month < plan.rentStartMonth) throw bad('起租之前的月份不需要登记');
+  if (month > nextMonth(monthOf(today))) throw bad('最多只能预付下个月');
+  const slotRef = store.recurringSlot(item, month);
+  const slot = (await tx.get(slotRef)).data();
+  if (slot?.expenseId) {
+    const prev = (await tx.get(store.expense(slot.expenseId))).data();
+    if (prev && prev.status === 'active') throw new CommandError('PERIOD_ALREADY_PAID', `${month} 已登记过付款`, { expenseId: slot.expenseId });
+  }
+  const covered = item === 'rent' ? startupSummary(await loadStartup(tx, store)).rentByMonth[month] ?? 0 : 0;
+  const row = monthlyPlanRows(plan, month, [], { [month]: covered }).find((r) => r.item === item)!;
+  if (row.state === 'covered') throw new CommandError('COVERED_BY_STARTUP', `${month} 的租金已在开档成本中付过`);
+  // 老板已把旧付款归属到这个月：已抵扣完就不能再登记，避免同月重复计费。
+  const linked = slotLinkedSen(slot);
+  if (linked > 0 && row.outstandingSen - linked <= 0) throw new CommandError('PERIOD_ALREADY_PAID', `${month} 已由旧付款抵扣 ${linked / 100} 令吉`);
+  return { slotRef, slot };
 }
 
 function nextMonth(m: string) {

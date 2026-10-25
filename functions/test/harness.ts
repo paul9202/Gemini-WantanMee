@@ -9,18 +9,20 @@ import { deleteApp, FirebaseApp, initializeApp } from 'firebase/app';
 import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } from 'firebase/auth';
 import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore';
 import { connectFunctionsEmulator, getFunctions, httpsCallable } from 'firebase/functions';
+import { connectStorageEmulator, FirebaseStorage, getStorage } from 'firebase/storage';
 import { bootstrapStore } from '../src/admin/bootstrap';
 import { defaultConfig, LineConfig, MENU_V1, normalizeConfig } from '../../src/domain';
 
 export const PROJECT_ID = 'demo-hao-wantan';
 export const REGION = 'asia-southeast1';
+export const BUCKET = `${PROJECT_ID}.appspot.com`;
 
 if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) {
   throw new Error('只能在 firebase emulators:exec 中运行（缺少 Emulator 环境变量）');
 }
 
 export function admin(): Firestore {
-  if (!adminApps().length) adminInit({ projectId: PROJECT_ID });
+  if (!adminApps().length) adminInit({ projectId: PROJECT_ID, storageBucket: BUCKET });
   return adminFirestore();
 }
 
@@ -34,6 +36,8 @@ export interface Client {
   uid: string;
   app: FirebaseApp;
   db: ReturnType<typeof getFirestore>;
+  /** 仅在启动了 Storage Emulator 时可用。 */
+  storage: FirebaseStorage | null;
   call: <T = any>(name: string, data: unknown) => Promise<T>;
   /** 调用并返回错误 reasonCode；成功则返回 'OK'。 */
   code: (name: string, data: unknown) => Promise<string>;
@@ -45,7 +49,7 @@ function hostPort(env: string): [string, number] {
 }
 
 export async function newClient(label: string, signIn = true): Promise<Client> {
-  const app = initializeApp({ projectId: PROJECT_ID, apiKey: 'demo-api-key', appId: 'demo' }, `${label}-${randomUUID()}`);
+  const app = initializeApp({ projectId: PROJECT_ID, apiKey: 'demo-api-key', appId: 'demo', storageBucket: BUCKET }, `${label}-${randomUUID()}`);
   apps.push(app);
   const auth = getAuth(app);
   connectAuthEmulator(auth, `http://${process.env.FIREBASE_AUTH_EMULATOR_HOST}`, { disableWarnings: true });
@@ -61,7 +65,13 @@ export async function newClient(label: string, signIn = true): Promise<Client> {
     const cred = await createUserWithEmailAndPassword(auth, `${label}-${randomUUID().slice(0, 8)}@test.local`, `pw-${randomUUID()}`);
     uid = cred.user.uid;
   }
-  const call = async <T>(name: string, data: unknown): Promise<T> => (await httpsCallable(functions, `${name}Cmd`)(data)).data as T;
+  let storage: FirebaseStorage | null = null;
+  if (process.env.FIREBASE_STORAGE_EMULATOR_HOST) {
+    storage = getStorage(app);
+    const [sh, sp] = process.env.FIREBASE_STORAGE_EMULATOR_HOST.replace(/^https?:\/\//, '').split(':');
+    connectStorageEmulator(storage, sh === '0.0.0.0' ? '127.0.0.1' : sh, Number(sp));
+  }
+  const call = async <T>(name: string, data: unknown): Promise<T> => (await httpsCallable(functions, `${name}Cmd`, { timeout: 140_000 })(data)).data as T;
   const code = async (name: string, data: unknown) => {
     try {
       await call(name, data);
@@ -70,7 +80,7 @@ export async function newClient(label: string, signIn = true): Promise<Client> {
       return e?.details?.reasonCode ?? e?.code ?? String(e);
     }
   };
-  return { uid, app, db, call, code };
+  return { uid, app, db, storage, call, code };
 }
 
 export interface StoreFixture {
