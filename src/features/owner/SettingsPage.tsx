@@ -13,6 +13,7 @@ import { reasonText } from '../../data/firebase/reasons';
 import { useMenu } from '../../data/menu';
 import { useSession } from '../../app/session';
 import { useLoad } from './data';
+import { GoLiveReset } from './GoLiveReset';
 import { OwnerTabs, Section } from './ui';
 
 const ROLE_ZH = { owner: '老板', cashier: '收银', kitchen: '后厨' } as const;
@@ -42,6 +43,7 @@ export function SettingsPage() {
       <Members setMsg={setMsg} />
       <MenuEditor setMsg={setMsg} />
       <BomEditor setMsg={setMsg} />
+      <GoLiveReset setMsg={setMsg} />
     </div>
   );
 }

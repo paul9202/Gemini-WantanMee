@@ -28,6 +28,9 @@ import { analyzeCostDraft, commitCostDraft, completePurchaseUsage, createCostDra
 import { ANTHROPIC_API_KEY, DEEPSEEK_API_KEY } from './aiCost/config';
 import { cleanupExpiredDrafts } from './aiCost/drafts';
 import { deleteAttachments } from './aiCost/receiptStorage';
+import { previewStoreReset, resetStoreForOpening } from './commands/goLive';
+import { defineSecret } from 'firebase-functions/params';
+import { getStorage } from 'firebase-admin/storage';
 
 export const REGION = 'asia-southeast1';
 const ENFORCE_APP_CHECK = false;
@@ -122,6 +125,21 @@ export const commitCostDraftCmd = command(commitCostDraft);
 export const completePurchaseUsageCmd = command(completePurchaseUsage);
 export const setAiCostEnabledCmd = command(setAiCostEnabled);
 export const getCostAnalysisCmd = command(getCostAnalysis, AI_LONG);
+
+// 开业前一次性清空测试数据：确认码（店主 IC）只以哈希存在 Secret Manager，只挂在清空这一个函数上。
+const STORE_RESET_CODE_HASH = defineSecret('STORE_RESET_CODE_HASH');
+function resetCodeHash(): string {
+  try {
+    return STORE_RESET_CODE_HASH.value() ?? '';
+  } catch {
+    return '';
+  }
+}
+export const previewStoreResetCmd = command(previewStoreReset);
+export const resetStoreForOpeningCmd = command((d, uid, data) => resetStoreForOpening(d, uid, data, {
+  codeHash: resetCodeHash(),
+  deleteStoragePrefix: (prefix) => getStorage().bucket().deleteFiles({ prefix, force: true }),
+}), { timeoutSeconds: 540, memory: '512MiB', secrets: [STORE_RESET_CODE_HASH] });
 
 /** 每天清理 30 天未动、未入账的草稿图片（已入账收据是凭证，保留）。 */
 export const cleanupCostDraftsDaily = onSchedule({ schedule: 'every day 05:00', timeZone: 'Asia/Kuala_Lumpur' }, async () => {

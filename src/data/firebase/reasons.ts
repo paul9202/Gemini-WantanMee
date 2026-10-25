@@ -45,6 +45,11 @@ const REASONS_EN: Record<string, string> = {
   AI_DISABLED: 'AI sorting is off — you can fill it in by hand',
   AI_NOT_CONFIGURED: 'AI service is not configured yet — you can fill it in by hand',
   AI_QUOTA_EXCEEDED: 'Today’s AI quota is used up — you can fill it in by hand',
+  WRONG_CONFIRM_CODE: 'The confirmation IC number is not correct',
+  RESET_LOCKED_OUT: 'Too many wrong attempts — please try again later',
+  RESET_IN_PROGRESS: 'Clearing is already in progress — refresh in a moment',
+  RESET_NOT_CONFIGURED: 'The confirmation IC has not been set up yet',
+  GO_LIVE_LOCKED: 'Test data was already cleared for opening; this cannot be done again',
 };
 const REASONS: Record<string, string> = {
   UNAUTHENTICATED: '登录已失效，请重新登录',
@@ -102,6 +107,11 @@ const REASONS: Record<string, string> = {
   AI_DISABLED: 'AI 整理未开启，可以手动填写',
   AI_NOT_CONFIGURED: 'AI 服务尚未配置，可以手动填写',
   AI_QUOTA_EXCEEDED: '今天的 AI 整理次数已用完，可以手动填写',
+  WRONG_CONFIRM_CODE: '确认用的 IC 号码不对',
+  RESET_LOCKED_OUT: '输错次数太多，请稍后再试',
+  RESET_IN_PROGRESS: '正在清空，请稍候刷新',
+  RESET_NOT_CONFIGURED: '还没有设置确认用的 IC，请先完成后台设置',
+  GO_LIVE_LOCKED: '已经清空过测试数据并正式营业，不能再清空',
 };
 
 export function reasonText(code: string): string {
