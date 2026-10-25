@@ -13,6 +13,11 @@ import type { PaymentMethod } from './payment';
 export interface FixedCostPolicy {
   mode: 'calendar_day';
   monthlySen: Sen;
+  /**
+   * 日常开支计划（租金阶段 + 冰箱电费）。设置起租月后按月取额：起租前为 0，之后按阶段租金 + 额外固定费用；
+   * 未设置时沿用 monthlySen。已冻结的日结快照不受影响。
+   */
+  schedule?: { rentStartMonth: string; rentPhases: { fromMonthIndex: number; monthlySen: Sen }[]; extraMonthlySen: Sen } | null;
 }
 
 export const DEFAULT_FIXED_COST: FixedCostPolicy = { mode: 'calendar_day', monthlySen: 90_000 };
@@ -25,9 +30,21 @@ export function allocateMonthlyFixedCost(monthlySen: Sen, year: number, month: n
   return Array.from({ length: days }, (_, i) => base + (i < remainder ? 1 : 0));
 }
 
+/** 某月的固定费用总额。 */
+export function monthlyFixedSen(policy: FixedCostPolicy, year: number, month: number): Sen {
+  const s = policy.schedule;
+  if (!s) return policy.monthlySen;
+  const [sy, sm] = s.rentStartMonth.split('-').map(Number);
+  const index = (year - sy) * 12 + (month - sm) + 1;
+  if (index < 1) return 0;
+  let rent = 0;
+  for (const p of [...s.rentPhases].sort((a, b) => a.fromMonthIndex - b.fromMonthIndex)) if (index >= p.fromMonthIndex) rent = p.monthlySen;
+  return rent + s.extraMonthlySen;
+}
+
 export function fixedCostForDate(policy: FixedCostPolicy, date: string): Sen {
   const [y, m, d] = date.split('-').map(Number);
-  return allocateMonthlyFixedCost(policy.monthlySen, y, m)[d - 1];
+  return allocateMonthlyFixedCost(monthlyFixedSen(policy, y, m), y, m)[d - 1];
 }
 
 export function fixedCostForRange(policy: FixedCostPolicy, range: DateRange): Sen {

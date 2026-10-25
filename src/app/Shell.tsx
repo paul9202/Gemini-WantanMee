@@ -27,7 +27,7 @@ const TITLES: Record<string, { zh: string; en: string; subZh: string; subEn: str
   '/orders': { zh: '今日订单', en: 'Orders today', subZh: '每一单的进度，都看得见。', subEn: 'Every order, step by step.' },
   '/sync': { zh: '同步中心', en: 'Sync', subZh: '本机记录与云端核对。', subEn: 'Local records and the cloud.' },
   '/owner': { zh: '经营概览', en: 'Business overview', subZh: '把时间留给好好做面。', subEn: '' },
-  '/owner/finance': { zh: '收支记录', en: 'Expenses', subZh: '进货、损耗与钱箱往来。', subEn: '' },
+  '/owner/finance': { zh: '收支与目标', en: 'Money & goals', subZh: '收支、食材用料、日常开支、开档成本与经营目标。', subEn: '' },
   '/owner/review': { zh: '待核对', en: 'To review', subZh: '离线记录逐条处理。', subEn: '' },
   '/owner/close': { zh: '日结关账', en: 'Close day', subZh: '核对现金、QR 与差额。', subEn: '' },
   '/owner/settings': { zh: '设置', en: 'Settings', subZh: '成员、菜单与成本。', subEn: '' },

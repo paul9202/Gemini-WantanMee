@@ -82,7 +82,8 @@ service cloud.firestore {
         allow read: if ownerOnly in [
             'orderCosts', 'costEvents', 'payments', 'refunds', 'paymentWriteOffs', 'expenses', 'wastage', 'cashMovements',
             'dailyReports', 'dailyStats', 'businessDays', 'auditEvents', 'operations',
-            'bomVersions', 'devices', 'offlineInbox'
+            'bomVersions', 'devices', 'offlineInbox',
+            'ingredients', 'ingredientBatches', 'recurringSlots', 'startupCosts', 'goals', 'expenseLinks'
           ] && isOwner(storeId);
         allow write: if false;
       }

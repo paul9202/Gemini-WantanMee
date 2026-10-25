@@ -10,6 +10,7 @@
  */
 import { Firestore, Transaction } from 'firebase-admin/firestore';
 import { DEFAULT_FIXED_COST, FixedCostPolicy } from '../../../src/domain/finance';
+import type { ExpenseLinkDoc } from '../../../src/domain/costing';
 import { isDateString } from '../../../src/domain/businessDay';
 import { closeFigures, closeFiguresV2, CloseOrderRow, isCloseFiguresV2, LedgerDocs } from '../../../src/domain/ledger';
 import { runCommand, StoreRefs } from '../core/command';
@@ -26,10 +27,13 @@ async function readDay(tx: Transaction, store: StoreRefs, date: string) {
     q<NonNullable<LedgerDocs['writeOffs']>[number]>('paymentWriteOffs'),
   ]);
   const expenses = [...new Map([...expensesPaid, ...expensesAccrued].map((e) => [e.id, e])).values()];
+  // 老板确认的支出归属：已归属到月租 / 开档项目的营业费用不再按营业费用扣（与老板端预览同一口径）。
+  const linkSnaps = expenses.length ? await tx.getAll(...expenses.map((e) => store.expenseLink(e.id))) : [];
+  const expenseLinks = linkSnaps.filter((s) => s.exists).map((s) => s.data() as ExpenseLinkDoc);
   // 待登记收款不限于本营业日：之前营业日结转来的未登记单也要在日结前核对。
   const unpaid = await tx.get(store.root.collection('orders').where('paymentState', '==', 'unpaid'))
     .then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }) as CloseOrderRow).filter((o) => o.businessDate <= date));
-  return { docs: { payments, refunds, costEvents, wastage, expenses, cashMovements, writeOffs } as LedgerDocs, orders, unpaid };
+  return { docs: { payments, refunds, costEvents, wastage, expenses, cashMovements, writeOffs, expenseLinks } as LedgerDocs, orders, unpaid };
 }
 
 async function exceptionsFor(tx: Transaction, store: StoreRefs, orders: CloseOrderRow[], unpaid: CloseOrderRow[]) {

@@ -1,8 +1,8 @@
 /** 极简路由：只用 History API，避免为几个固定页面引入路由框架。 */
 import { useEffect, useState } from 'react';
 
-export type Route = '/login' | '/pos' | '/orders' | '/sync' | '/kitchen' | '/device' | '/owner' | '/owner/finance' | '/owner/review' | '/owner/close' | '/owner/settings' | '/training';
-const ROUTES: Route[] = ['/login', '/pos', '/orders', '/sync', '/kitchen', '/device', '/owner', '/owner/finance', '/owner/review', '/owner/close', '/owner/settings', '/training'];
+export type Route = '/login' | '/pos' | '/orders' | '/sync' | '/kitchen' | '/device' | '/owner' | '/owner/finance' | '/owner/finance/ingredients' | '/owner/finance/expenses' | '/owner/finance/goals' | '/owner/finance/startup' | '/owner/review' | '/owner/close' | '/owner/settings' | '/training';
+const ROUTES: Route[] = ['/login', '/pos', '/orders', '/sync', '/kitchen', '/device', '/owner', '/owner/finance', '/owner/finance/ingredients', '/owner/finance/expenses', '/owner/finance/goals', '/owner/finance/startup', '/owner/review', '/owner/close', '/owner/settings', '/training'];
 
 function current(): Route | null {
   const p = location.pathname.replace(/\/+$/, '') || '/';

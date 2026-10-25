@@ -11,6 +11,7 @@ import type { PaymentMethod } from './payment';
 import type { Fulfillment, PaymentState } from './orderLifecycle';
 import { ServiceSampleSource, serviceStats, ServiceStats } from './timing';
 import type { BomVersion } from './bom';
+import { ExpenseLinkDoc, opexAccrualSen } from './costing';
 
 /**
  * 收款流水。businessDate = 登记（确认收到）所属营业日；orderBusinessDate = 原订单营业日（旧记录没有，即同日）。
@@ -36,6 +37,9 @@ export interface WastageDoc {
 export interface ExpenseDoc {
   id: string; category: ExpenseCategory; description: string; amountSen: Sen; paidSen: Sen; paymentSource: 'drawer' | 'bank' | 'owner';
   businessDate: string; accrualDate: string; status: 'active' | 'voided'; occurredAtMs: number; correctionOf: string | null;
+  /** 2026-10-25 收支改版：日常开支项目、所属月份、关联食材批次、补付款关联的原支出、工资出勤天数。旧记录没有。 */
+  planItem?: import('./costing').PlanItem | null; periodMonth?: string | null; ingredientBatchId?: string | null;
+  settlesExpenseId?: string | null; workDays?: number | null; voidReason?: string;
 }
 export interface CashMovementDoc { id: string; businessDate: string; type: 'opening_float' | 'cash_in' | 'cash_out' | 'bank_deposit'; amountSen: Sen; reason?: string; occurredAtMs: number }
 
@@ -48,6 +52,8 @@ export interface LedgerDocs {
   cashMovements: CashMovementDoc[];
   /** 新版才有；旧调用方可省略。 */
   writeOffs?: WriteOffDoc[];
+  /** 老板确认的支出归属（2026-10-25 起）；旧调用方可省略，省略时与原口径一致。 */
+  expenseLinks?: ExpenseLinkDoc[];
 }
 
 export function ledgerEvents(d: LedgerDocs): LedgerEvent[] {
@@ -60,9 +66,10 @@ export function ledgerEvents(d: LedgerDocs): LedgerEvent[] {
       noodleHalfUnits: w.noodleHalfUnits, wantonCount: w.wantonCount,
     })),
     // 作废的支出不计入；更正记录本身是新的有效支出。
+    // 营业费用中已归属到月租 / 电费 / 开档项目的部分不再计入经营成本（固定费用另按月摊销）；付款金额照旧计入现金视角。
     ...d.expenses.filter((e) => e.status === 'active').map((e): LedgerEvent => ({
       kind: 'expense', id: e.id, category: e.category, businessDate: e.businessDate, accrualDate: e.accrualDate,
-      amountSen: e.amountSen, paidSen: e.paidSen, paidFromDrawer: e.paymentSource === 'drawer',
+      amountSen: e.category === 'opex' ? opexAccrualSen(e, d.expenseLinks ?? []) : e.amountSen, paidSen: e.paidSen, paidFromDrawer: e.paymentSource === 'drawer',
     })),
     ...d.cashMovements.map((c): LedgerEvent => ({ kind: 'cash_movement', id: c.id, businessDate: c.businessDate, type: c.type, amountSen: c.amountSen })),
   ];

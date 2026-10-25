@@ -3,11 +3,11 @@
 const [project = 'wantan-staging', bundle] = process.argv.slice(2);
 const SITE = `https://${project}.web.app`;
 const FN = `https://asia-southeast1-${project}.cloudfunctions.net`;
-const COMMANDS = ['createOrder', 'getOperationResult', 'openShift', 'releaseToken', 'ackKitchenTicket', 'startOrder', 'serveOrder', 'undoServe',
-  'requestCancel', 'confirmKitchenCancel', 'confirmFullRefund', 'manageMember', 'assignRegister', 'inviteMember', 'publishMenu', 'publishBom',
-  'syncOfflineEvents', 'routeManualOrderToKitchen', 'heartbeatDevice', 'recordManualHandoff', 'resolveOfflineReview', 'recordExpense',
-  'voidLedgerEntry', 'recordWastage', 'recordCashMovement', 'closeBusinessDay', 'restateBusinessDay',
-  'recordPayment', 'recordGroupPayment', 'reversePayment', 'writeOffPayment', 'reinstateWrittenOff', 'rejectKitchenCancel'];
+// 从入口读取全部 Callable，新增收支 / 批次 / 归属 / 目标命令也必须逐一检查上线。
+const { readFile } = await import('node:fs/promises');
+const entry = await readFile(new URL('../functions/src/index.ts', import.meta.url), 'utf8');
+const COMMANDS = [...entry.matchAll(/^export const (\w+)Cmd\s*=\s*command\(/gm)].map((m) => m[1]);
+if (!COMMANDS.length) throw new Error('未找到待检查的 Callable，拒绝跳过后端验证');
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -42,7 +42,8 @@ check(`${COMMANDS.length} 个 Callable 已上线，未登录调用被拒绝（�
 
 const FS = `https://firestore.googleapis.com/v1/projects/${project}/databases/(default)/documents/stores/hao-pontian-main`;
 const denied = [];
-for (const p of ['orders', 'payments', 'paymentWriteOffs', 'members', 'costEvents', 'menuVersions', 'bomVersions', 'dailyReports', 'config/public']) {
+for (const p of ['orders', 'payments', 'paymentWriteOffs', 'members', 'costEvents', 'menuVersions', 'bomVersions', 'dailyReports', 'config/public',
+  'ingredients', 'ingredientBatches', 'recurringSlots', 'startupCosts', 'goals', 'expenseLinks']) {
   const r = await fetch(`${FS}/${p}`);
   if (r.status !== 403) denied.push(`${p}:${r.status}`);
 }

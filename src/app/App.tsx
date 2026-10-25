@@ -28,6 +28,10 @@ const ALLOWED: Record<Exclude<Route, '/login'>, Role[]> = {
   '/device': ['cashier', 'owner', 'kitchen'],
   '/owner': ['owner'],
   '/owner/finance': ['owner'],
+  '/owner/finance/ingredients': ['owner'],
+  '/owner/finance/expenses': ['owner'],
+  '/owner/finance/goals': ['owner'],
+  '/owner/finance/startup': ['owner'],
   '/owner/review': ['owner'],
   '/owner/close': ['owner'],
   '/owner/settings': ['owner'],
@@ -60,7 +64,7 @@ function Routes() {
   if (route === '/orders') return <Shell route="/orders"><OrdersPage /></Shell>;
   if (route === '/sync') return <Shell route="/sync"><SyncPage /></Shell>;
   if (route === '/owner') return <Shell route="/owner"><OverviewPage /></Shell>;
-  if (route === '/owner/finance') return <Shell route="/owner" title="/owner/finance"><FinancePage /></Shell>;
+  if (route?.startsWith('/owner/finance')) return <Shell route="/owner" title="/owner/finance"><FinancePage route={route} /></Shell>;
   if (route === '/owner/review') return <Shell route="/owner" title="/owner/review"><ReviewPage /></Shell>;
   if (route === '/owner/close') return <Shell route="/owner" title="/owner/close"><ClosePage /></Shell>;
   if (route === '/owner/settings') return <Shell route="/owner" title="/owner/settings"><SettingsPage /></Shell>;

@@ -18,7 +18,7 @@ const inRange = (field: string, r: DateRange) => [where(field, '>=', r.start), w
 
 export async function loadLedger(range: DateRange | null): Promise<{ docs: LedgerDocs; orders: OrderReportRow[] }> {
   const c = (field = 'businessDate') => (range ? inRange(field, range) : []);
-  const [payments, refunds, costEvents, wastage, expensesPaid, expensesAccrued, cashMovements, orders, writeOffs] = await Promise.all([
+  const [payments, refunds, costEvents, wastage, expensesPaid, expensesAccrued, cashMovements, orders, writeOffs, expenseLinks] = await Promise.all([
     fetchAll<LedgerDocs['payments'][number]>('payments', ...c()),
     fetchAll<LedgerDocs['refunds'][number]>('refunds', ...c()),
     fetchAll<LedgerDocs['costEvents'][number]>('costEvents', ...c()),
@@ -28,9 +28,10 @@ export async function loadLedger(range: DateRange | null): Promise<{ docs: Ledge
     fetchAll<LedgerDocs['cashMovements'][number]>('cashMovements', ...c()),
     range ? fetchAll<OrderReportRow>('orders', ...c()) : Promise.resolve([] as OrderReportRow[]),
     fetchAll<NonNullable<LedgerDocs['writeOffs']>[number]>('paymentWriteOffs', ...c()),
+    fetchAll<NonNullable<LedgerDocs['expenseLinks']>[number]>('expenseLinks'),
   ]);
   const expenses = [...new Map([...expensesPaid, ...expensesAccrued].map((e) => [e.id, e])).values()];
-  return { docs: { payments, refunds, costEvents, wastage, expenses, cashMovements, writeOffs }, orders };
+  return { docs: { payments, refunds, costEvents, wastage, expenses, cashMovements, writeOffs, expenseLinks }, orders };
 }
 
 /**

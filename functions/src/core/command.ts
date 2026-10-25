@@ -68,6 +68,17 @@ export function storeRefs(db: Firestore, storeId: string) {
     dailyReport: (date: string) => root.collection('dailyReports').doc(date),
     dailyReportVersion: (date: string, n: number) => root.collection('dailyReports').doc(date).collection('versions').doc(String(n)),
     status: root.collection('operationsStatus').doc('current'),
+    // 2026-10-25 收支改版：食材批次、日常开支计划、开档成本、经营目标。
+    configExpensePlan: root.collection('config').doc('expensePlan'),
+    configGoals: root.collection('config').doc('goals'),
+    configStartup: root.collection('config').doc('startup'),
+    ingredient: (id: string) => root.collection('ingredients').doc(id),
+    batch: (id: string) => root.collection('ingredientBatches').doc(id),
+    recurringSlot: (item: string, month: string) => root.collection('recurringSlots').doc(`${item}-${month}`),
+    startupCost: (id: string) => root.collection('startupCosts').doc(id),
+    goal: (id: string) => root.collection('goals').doc(id),
+    expenseLink: (expenseId: string) => root.collection('expenseLinks').doc(expenseId),
+    configCostCoverage: root.collection('config').doc('costCoverage'),
   };
 }
 

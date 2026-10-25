@@ -15,7 +15,7 @@ import { loadStoreConfig, markDayActivity, requireDayOpen, StoreConfig } from '.
 import type { Transaction } from 'firebase-admin/firestore';
 
 /** 账本营业日：默认今天；可补记过去未关账的日期，不能写未来。 */
-async function ledgerDay(tx: Transaction, store: StoreRefs, config: StoreConfig, requested: string | null, nowMs: number) {
+export async function ledgerDay(tx: Transaction, store: StoreRefs, config: StoreConfig, requested: string | null, nowMs: number) {
   const today = businessDateOf(nowMs, config.businessDay);
   const date = requested ?? today;
   if (!isDateString(date) || date > today) throw bad('营业日非法');
@@ -23,7 +23,7 @@ async function ledgerDay(tx: Transaction, store: StoreRefs, config: StoreConfig,
   return { date, day };
 }
 
-const optDate = (o: Record<string, unknown>, k: string) => {
+export const optDate = (o: Record<string, unknown>, k: string) => {
   const v = o[k];
   if (v === undefined || v === null) return null;
   if (!isDateString(v)) throw bad(`${k} 非法`);
@@ -71,6 +71,11 @@ export async function voidLedgerEntry(db: Firestore, uid: string | undefined, ra
       const doc = (await tx.get(ref)).data();
       if (!doc) throw new CommandError('NOT_FOUND');
       if (doc.status === 'voided') return { result: { id: input.id, status: 'voided' }, audit: { entityId: input.id } };
+      // 进货生成的支出与食材批次同生同灭：请在批次上作废，避免留下没有支出的进货批次。
+      if (input.kind === 'expense' && doc.ingredientBatchId && !doc.settlesExpenseId) throw new CommandError('LINKED_TO_BATCH', '这笔进货关联食材批次，请在「食材与用料」里作废该批次');
+      // 已确认归属（月租 / 开档项目 / 资本投入）的支出：先取消归属再作废，避免留下悬空的抵扣。
+      const links = input.kind === 'expense' ? ((await tx.get(store.expenseLink(input.id))).data()?.links as { status: string }[] | undefined) ?? [] : [];
+      if (links.some((l) => l.status === 'active')) throw new CommandError('LINK_REJECTED', '这笔支出已确认归属，请先取消归属再作废');
       const day = await requireDayOpen(tx, store, doc.businessDate);
       tx.update(ref, { status: 'voided', voidReason: input.reason, voidedAtMs: nowMs, voidedBy: actor.uid });
       markDayActivity(tx, store, doc.businessDate, day, nowMs);

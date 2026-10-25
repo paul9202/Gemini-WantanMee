@@ -19,6 +19,10 @@ import { recordGroupPayment, recordPayment, reinstateWrittenOff, reversePayment,
 import { recordCashMovement, recordExpense, recordWastage, voidLedgerEntry } from './commands/ledger';
 import { closeBusinessDay, restateBusinessDay } from './commands/close';
 import { heartbeatDevice, recordManualHandoff } from './commands/kitchenLink';
+import {
+  addIngredient, addStartupCost, correctStartupCost, createNextGoal, finishBatch, recordExistingBatch, recordIngredientPurchase, recordPlanExpense,
+  recordRecurringPayment, seedStartupCosts, linkExpense, unlinkExpense, setCostCoverage, completeGoal, archiveGoal, setBatchCost, setExpensePlan, setSalesTarget, setStartupPayment, settleExpense, splitStartupRent, startBatch, voidBatch,
+} from './commands/costing';
 
 export const REGION = 'asia-southeast1';
 const ENFORCE_APP_CHECK = false;
@@ -78,3 +82,28 @@ export const recordWastageCmd = command(recordWastage);
 export const recordCashMovementCmd = command(recordCashMovement);
 export const closeBusinessDayCmd = command(closeBusinessDay);
 export const restateBusinessDayCmd = command(restateBusinessDay);
+
+// 2026-10-25 收支改版：食材批次、日常开支、开档成本、经营目标。
+export const addIngredientCmd = command(addIngredient);
+export const recordExistingBatchCmd = command(recordExistingBatch);
+export const recordIngredientPurchaseCmd = command(recordIngredientPurchase);
+export const startBatchCmd = command(startBatch);
+export const finishBatchCmd = command(finishBatch);
+export const setBatchCostCmd = command(setBatchCost);
+export const voidBatchCmd = command(voidBatch);
+export const setExpensePlanCmd = command(setExpensePlan);
+export const recordRecurringPaymentCmd = command(recordRecurringPayment);
+export const recordPlanExpenseCmd = command(recordPlanExpense);
+export const settleExpenseCmd = command(settleExpense);
+export const seedStartupCostsCmd = command(seedStartupCosts);
+export const addStartupCostCmd = command(addStartupCost);
+export const correctStartupCostCmd = command(correctStartupCost);
+export const setStartupPaymentCmd = command(setStartupPayment);
+export const splitStartupRentCmd = command(splitStartupRent);
+export const setSalesTargetCmd = command(setSalesTarget);
+export const createNextGoalCmd = command(createNextGoal);
+export const linkExpenseCmd = command(linkExpense);
+export const unlinkExpenseCmd = command(unlinkExpense);
+export const setCostCoverageCmd = command(setCostCoverage);
+export const completeGoalCmd = command(completeGoal);
+export const archiveGoalCmd = command(archiveGoal);

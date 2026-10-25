@@ -14,7 +14,9 @@ export type CommandName =
   | 'confirmFullRefund' | 'manageMember' | 'assignRegister' | 'syncOfflineEvents' | 'routeManualOrderToKitchen'
   | 'heartbeatDevice' | 'recordManualHandoff' | 'resolveOfflineReview' | 'recordExpense' | 'voidLedgerEntry' | 'recordWastage'
   | 'recordCashMovement' | 'closeBusinessDay' | 'restateBusinessDay' | 'inviteMember' | 'publishMenu' | 'publishBom'
-  | 'recordPayment' | 'recordGroupPayment' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff' | 'rejectKitchenCancel';
+  | 'recordPayment' | 'recordGroupPayment' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff' | 'rejectKitchenCancel'
+  | 'addIngredient' | 'recordExistingBatch' | 'recordIngredientPurchase' | 'startBatch' | 'finishBatch' | 'setBatchCost' | 'voidBatch' | 'setExpensePlan' | 'recordRecurringPayment' | 'recordPlanExpense' | 'settleExpense' | 'seedStartupCosts' | 'addStartupCost' | 'correctStartupCost' | 'setStartupPayment' | 'splitStartupRent' | 'setSalesTarget' | 'createNextGoal'
+  | 'linkExpense' | 'unlinkExpense' | 'setCostCoverage' | 'completeGoal' | 'archiveGoal';
 
 export class CommandFailure extends Error {
   constructor(

@@ -30,6 +30,14 @@ const REASONS_EN: Record<string, string> = {
   NOT_UNPAID: 'Only unpaid orders can be written off',
   ADD_ON_NOT_ALLOWED: 'Cannot add to this order (already paid, cancelled, or cancel pending) — place a normal new order',
   UNKNOWN_RESULT: 'Network unstable — result not confirmed',
+  PERIOD_ALREADY_PAID: 'A payment for this month is already recorded',
+  COVERED_BY_STARTUP: 'This month’s rent was already paid as a startup cost',
+  STAFF_NOT_ENABLED: 'Staff wages are not enabled yet',
+  GOAL_NOT_REACHED: 'The startup investment is not recovered yet',
+  BATCH_STATE: 'This batch cannot do that now',
+  LINKED_TO_BATCH: 'Linked to an ingredient batch — change it from Ingredients',
+  ALREADY_SETTLED: 'Already paid in full',
+  LINK_REJECTED: 'This attribution is not allowed',
 };
 const REASONS: Record<string, string> = {
   UNAUTHENTICATED: '登录已失效，请重新登录',
@@ -72,6 +80,14 @@ const REASONS: Record<string, string> = {
   CLOSE_EXCEPTIONS: '还有未处理事项，请确认并写明原因后再关账',
   NOT_CLOSED: '该营业日尚未关账',
   REVIEW_NOT_ALLOWED: '这条记录不能这样处理',
+  PERIOD_ALREADY_PAID: '这个月份已经登记过付款，不能重复登记',
+  COVERED_BY_STARTUP: '这个月的租金已在开档成本中付过',
+  STAFF_NOT_ENABLED: '员工工资尚未启用',
+  GOAL_NOT_REACHED: '开档投入尚未收回，先完成第一个目标',
+  BATCH_STATE: '这批食材当前状态不能这样操作',
+  LINKED_TO_BATCH: '这笔记录关联食材批次，请在「食材与用料」中处理',
+  ALREADY_SETTLED: '这笔支出已经付清',
+  LINK_REJECTED: '不能这样确认归属',
 };
 
 export function reasonText(code: string): string {

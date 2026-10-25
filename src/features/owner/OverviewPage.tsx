@@ -6,10 +6,11 @@
  * 旧版渠道拆分只在区间内有旧记录时显示，标为旧版记录。
  */
 import { useState } from 'react';
-import { collection, doc, getDoc, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addDays, businessDateOf, DateRange, lastNDays, previousRange, wallClock } from '../../domain/businessDay';
-import { DEFAULT_FIXED_COST, FixedCostPolicy, paybackProgress, ratioOrNull, summarizePeriod } from '../../domain/finance';
+import { DEFAULT_FIXED_COST, FixedCostPolicy, ratioOrNull, summarizePeriod } from '../../domain/finance';
+import { DEFAULT_EXPENSE_PLAN, ExpenseLinkDoc, monthOf, paybackStatus, PlanExpense, StartupCostDoc, startupSummary } from '../../domain/costing';
 import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, dishRanking, ledgerEvents, orderServiceStats, productMix, receiptsTrend } from '../../domain/ledger';
 import { costUnitsToSen, formatRM } from '../../domain/money';
 import { OVERDUE_MS } from '../../domain/timing';
@@ -38,7 +39,12 @@ export function OverviewPage() {
   const before = useLoad(() => (today ? loadLedger(prev) : Promise.resolve(null)), `prev-${key}`);
   const all = useLoad(() => (today ? loadLedger(null) : Promise.resolve(null)), `all-${today}`);
   const reviews = useLoad(loadOpenReviews, 'reviews');
-  const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data() as { initialCapitalSen: number; openingProfitSen: number; fixedCostPolicy: FixedCostPolicy } | undefined, 'finance');
+  const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data() as { fixedCostPolicy: FixedCostPolicy } | undefined, 'finance');
+  const payInputs = useLoad(async () => ({
+    startup: (await getDocs(collection(db, storePath('startupCosts')))).docs.map((d) => d.data() as StartupCostDoc),
+    plan: { ...DEFAULT_EXPENSE_PLAN, ...((await getDoc(doc(db, storePath('config/expensePlan')))).data()?.plan ?? {}) },
+    links: (await getDocs(collection(db, storePath('expenseLinks')))).docs.map((d) => d.data() as ExpenseLinkDoc),
+  }), 'payback-inputs');
   // 关注事项用实时数据：厨房超时单、待登记收款、旧版遗留的待回收餐牌。
   const kitchenQ = useLiveQuery<{ tokenNumber: number; acceptedAtEffectiveMs: number; fulfillmentStatus: string; kitchenRouting: string }>(
     query(collection(db, storePath('kitchenTickets')), where('fulfillmentStatus', 'in', ['queued', 'preparing'])), 'owner-kitchen',
@@ -61,11 +67,12 @@ export function OverviewPage() {
   const orderPay = cur.data ? orderPaymentOverview(cur.data.orders) : null;
   const outstanding = unpaidQ.data.filter((o) => o.fulfillmentStatus !== 'cancelled');
   const outstandingSen = outstanding.reduce((s, o) => s + o.totalSen, 0);
-  // 回本：所有日期的估算利润累计（从第一笔账到今天）+ 老板确认的期初余额。
-  const allDates = all.data ? [...all.data.docs.payments, ...all.data.docs.expenses, ...all.data.docs.costEvents].map((d) => d.businessDate).sort() : [];
-  const allRange: DateRange | null = allDates.length ? { start: allDates[0], endExclusive: addDays(today, 1) } : null;
-  const cumulative = all.data && allRange ? summarizePeriod(ledgerEvents(all.data.docs), allRange, fixed).estimatedProfitSen : 0;
-  const payback = paybackProgress({ initialCapitalSen: finance.data?.initialCapitalSen ?? 0, openingBalanceSen: finance.data?.openingProfitSen ?? 0, cumulativeProfitSen: cumulative });
+  // 回本（2026-10-25 起）：目标 = 开档成本总投入，进度按真实账目（与「收支 · 经营目标」同一口径）。
+  const startup = startupSummary(payInputs.data?.startup ?? []);
+  const payback = all.data && payInputs.data ? paybackStatus({
+    startupTotalSen: startup.totalSen, receiptsSen: all.data.docs.payments.reduce((s, p) => s + p.amountSen, 0), refundsSen: all.data.docs.refunds.reduce((s, r) => s + r.amountSen, 0),
+    expenses: all.data.docs.expenses as PlanExpense[], plan: payInputs.data.plan, startupRentByMonth: startup.rentByMonth, currentMonth: monthOf(today), links: payInputs.data.links,
+  }) : null;
   const openReviews = reviews.data ?? [];
   const reviewAmount = openReviews.reduce((s, r) => s + (r.amountSen ?? 0), 0);
   const delta = summary && prevSummary ? ratioOrNull(summary.netReceiptsSen - prevSummary.netReceiptsSen, prevSummary.netReceiptsSen) : null;
@@ -251,21 +258,21 @@ export function OverviewPage() {
                 <BarList format={(v) => `${v}`} rows={mix.byNoodle.map((r) => ({ label: r.label, value: r.portions }))} />
               </div>
             </Section>
-            <Section title="按估算利润的回本进度" hint="期初余额由老板确认；不是现金回收">
-              {payback.applicable ? (
+            <Section title="现金回本结余（参考）" hint="收回开档总投入 · 口径待确认" actions={<button type="button" onClick={() => navigate('/owner/finance/goals')} className="h-10 rounded-lg border border-line px-3 text-sm">经营目标</button>}>
+              {!payback ? <p className="text-ink-2">正在载入…</p> : payback.state === 'pending' ? <p className="text-ink-2">待核算：{payback.pendingReasons.join('；')}。</p> : (
                 <>
                   <div className="h-3 rounded bg-subtle"><div className="h-3 rounded bg-ok" style={{ width: `${payback.barRatio * 100}%` }} /></div>
                   <p className="mt-2 text-sm tabular-nums">
-                    累计估算经营结果 <b className={payback.cumulativeResultSen < 0 ? 'text-danger' : ''}>{formatRM(payback.cumulativeResultSen)}</b> ·
-                    初始投入 {formatRM(finance.data!.initialCapitalSen)} · 进度 <b>{pct(payback.ratio)}</b> · 待收回 {formatRM(payback.remainingSen)}
+                    已收回 <b className={payback.recoveredSen < 0 ? 'text-danger' : ''}>{formatRM(payback.recoveredSen)}</b> ·
+                    开档总投入 {formatRM(payback.targetSen)} · 进度 <b>{pct(payback.ratio)}</b> · 还差 {formatRM(payback.remainingSen)}
                   </p>
                 </>
-              ) : <p className="text-ink-2">初始投入为 0，不适用。</p>}
+              )}
             </Section>
           </div>
         </details>
       )}
-      <p className="mt-4 text-xs text-ink-2">BOM 版本 {BOM_V1.version}；固定费用 {formatRM(fixed.monthlySen)}/月按日历日摊销。</p>
+      <p className="mt-4 text-xs text-ink-2">BOM 版本 {BOM_V1.version}；固定费用{fixed.schedule ? `按租金阶段（起租 ${fixed.schedule.rentStartMonth}）+ 冰箱电费` : ` ${formatRM(fixed.monthlySen)}/月`}按日历日摊销。</p>
     </div>
   );
 }
