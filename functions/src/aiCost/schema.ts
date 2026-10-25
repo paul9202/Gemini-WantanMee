@@ -2,6 +2,8 @@
  * 模型输出的结构合约与严格校验。两家供应商输出同一份 JSON 结构；结构合法 ≠ 内容正确，草稿仍需老板核对。
  * - 金额用字符串小数（"12.50"），在这里转成整数 sen，避免浮点误差；无法辨认就是 null，不猜。
  * - 未知字段、错误类型、非法枚举、超长内容一律拒绝（视为结构错误，可交给备用），不静默修补成假数据。
+ * - Claude 结构化输出最多允许 16 个可为 null / 联合类型的字段，超过整个请求 400。所以名称、单位、原文片段、商家、单号这类文字字段
+ *   不用 null，没有就输出空字符串；解析时空字符串与 null 都当作「没有」（DeepSeek 仍输出 null 也照常接受）。
  */
 import { isDateString } from '../../../src/domain/businessDay';
 import { COST_CATEGORIES, CostCategoryOrUnknown, CostPayment, CostPaymentSource, ExtractedCostDraft, ExtractedCostLine, MAX_DRAFT_LINES } from '../../../src/domain/aiCost';
@@ -12,7 +14,11 @@ export class SchemaError extends Error {}
 
 const nullable = (s: Record<string, unknown>) => ({ anyOf: [s, { type: 'null' }] });
 const str = { type: 'string' };
+const text = (description: string) => ({ type: 'string', description: `${description}；没有或看不清就空字符串 ""` });
 const money = nullable({ type: 'string', description: '金额，令吉，最多两位小数，例如 "12.50"；看不清就 null' });
+
+/** Claude 结构化输出对可为 null / anyOf / 类型数组字段的上限（超过返回 400）。 */
+export const MAX_UNION_PARAMS = 16;
 
 export const EXTRACTION_SCHEMA = {
   type: 'object',
@@ -23,8 +29,8 @@ export const EXTRACTION_SCHEMA = {
     currency: nullable({ type: 'string', description: '三位币种代码；块 / 令吉 / RM 为 MYR' }),
     payment: { type: 'string', enum: ['paid', 'unpaid', 'unknown'] },
     payment_source: nullable({ type: 'string', enum: ['drawer', 'bank', 'owner'] }),
-    supplier: nullable(str),
-    receipt_number: nullable(str),
+    supplier: text('商家名称'),
+    receipt_number: text('收据单号'),
     discount: money,
     tax: money,
     printed_total: money,
@@ -37,13 +43,13 @@ export const EXTRACTION_SCHEMA = {
         additionalProperties: false,
         required: ['name', 'category', 'amount', 'quantity', 'unit', 'payment', 'evidence', 'personal_suggested', 'period_month'],
         properties: {
-          name: nullable(str),
+          name: text('项目名称'),
           category: { type: 'string', enum: [...COST_CATEGORIES, 'unknown'] },
           amount: money,
           quantity: nullable({ type: 'string', description: '数量，最多三位小数；没写就 null' }),
-          unit: nullable(str),
+          unit: text('单位，例如 kg、包'),
           payment: nullable({ type: 'string', enum: ['paid', 'unpaid', 'unknown'] }),
-          evidence: nullable(str),
+          evidence: text('该行对应的原文片段，最多 60 字'),
           personal_suggested: { type: 'boolean' },
           period_month: nullable({ type: 'string', description: 'YYYY-MM，只用于租金 / 电费' }),
         },

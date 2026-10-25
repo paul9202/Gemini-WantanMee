@@ -67,13 +67,16 @@ export function useCostDraft() {
   }, []);
 
   // 服务端版本 → 本地：没有未保存的修改就跟随；有修改且服务端被别处改过 → 冲突。
+  // 读 latest 而不是本次渲染的 base / dirty：自己这次保存的快照可能先渲染、等保存返回后 effect 才执行，
+  // 那时闭包里还是旧版本号和「有修改」，会把自己刚存的版本误判成别处修改（保存返回时已同步更新 latest）。
   useEffect(() => {
     if (!d) return;
     if (d.status === 'discarded' || d.status === 'expired') { setDraftId(null); return; }
     if (!d.edited) return;
-    if (!dirty && !saving.current) {
-      if (d.revision !== base || !local) { setLocal(d.edited); setBase(d.revision); }
-    } else if (!saving.current && d.revision > base) setConflict(true);
+    const cur = latest.current;
+    if (!cur.dirty && !saving.current) {
+      if (d.revision !== cur.base || !cur.local) { setLocal(d.edited); setBase(d.revision); }
+    } else if (!saving.current && d.revision > cur.base) setConflict(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d?.revision, d?.status, d?.edited]);
 

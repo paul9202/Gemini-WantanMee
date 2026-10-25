@@ -15,7 +15,8 @@ export const EXTRACTION_SYSTEM = `你是马来西亚一家云吞面档口的记�
 - 金额一律输出字符串小数，例如 "10" 或 "12.50"。看不清或没说就填 null，不要猜。
 - 每个购买项目一行；amount 填该行原价（折扣前）。整单折扣写在 discount（正数），税费 / 服务费写在 tax，收据印的合计写在 printed_total。
 - 收据上的「付款金额」「找零」只填 paid_amount / change，绝不能作为项目。小计 / 合计 / 总额也不是项目。
-- 数量、单位只在明确写出时填写，例如 "1.5" 与 "kg"；没写就都填 null，绝不默认 1。
+- 数量、单位只在明确写出时填写，例如 "1.5" 与 "kg"；没写数量就填 null、单位填空字符串 ""，绝不默认 1。
+- 文字字段 name / unit / evidence / supplier / receipt_number 没有或看不清就填空字符串 ""，不要编造。
 - payment：明确说「都付了 / 已付 / 付现金」为 paid；「赊账 / 欠着 / 还没付 / 月底结」为 unpaid；没说为 unknown。某一项的付款与全单不同，就在该行 payment 写明，否则该行填 null。
 - payment_source：明确说钱箱付为 drawer，银行 / 转账 / QR 为 bank，老板自己掏钱为 owner；没说就 null。
 - purchase_date：用老板所在门店的营业日解析「今天 / 昨天 / 前天」，输出 YYYY-MM-DD；没提日期就 null。
@@ -52,5 +53,5 @@ export function explainUserText(i: ExplainInput): string {
 
 /** DeepSeek JSON 模式要求提示中含 json 字样，并给出结构。 */
 export function jsonShapeHint(schema: unknown): string {
-  return `\n\n请输出 json，结构必须严格符合下面的 JSON Schema（所有字段都要出现，没有的值用 null）：\n${JSON.stringify(schema)}`;
+  return `\n\n请输出 json，结构必须严格符合下面的 JSON Schema（所有字段都要出现；没有的值：允许 null 的字段填 null，只能是文字的字段填空字符串 ""）：\n${JSON.stringify(schema)}`;
 }

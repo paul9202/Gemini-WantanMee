@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { amountsInText, moneyToSen, parseExplanation, parseExtraction, SchemaError } from './schema';
+import { amountsInText, EXPLANATION_SCHEMA, EXTRACTION_SCHEMA, MAX_UNION_PARAMS, moneyToSen, parseExplanation, parseExtraction, SchemaError } from './schema';
+
+/** 按 Claude 的算法数「带联合类型的字段」：节点上有 anyOf 或 type 是数组就算一个（数组 items 里的定义只算一次）。 */
+function unionParams(node: unknown): number {
+  if (Array.isArray(node)) return node.reduce((n: number, x) => n + unionParams(x), 0);
+  if (typeof node !== 'object' || node === null) return 0;
+  const o = node as Record<string, unknown>;
+  return ('anyOf' in o || Array.isArray(o.type) ? 1 : 0) + Object.values(o).reduce((n: number, v) => n + unionParams(v), 0);
+}
 
 const base = {
   purchase_date: '2026-10-25', currency: 'MYR', payment: 'unknown', payment_source: null, supplier: null, receipt_number: null,
@@ -27,6 +35,20 @@ test('结构严格：未知字段、缺字段、错误枚举、坏日期、数�
   assert.throws(() => parseExtraction({ ...base, lines: [{ ...base.lines[0], quantity: 1 }] }), SchemaError);
   assert.throws(() => parseExtraction({ ...base, lines: Array.from({ length: 51 }, () => base.lines[0]) }), SchemaError);
   assert.throws(() => parseExtraction({ ...base, lines: [{ ...base.lines[0], name: 'x'.repeat(61) }] }), SchemaError);
+});
+
+test('Claude 结构化输出：两份 Schema 的联合类型字段都不超过 16 个，否则整个请求 400', () => {
+  assert.equal(unionParams({ type: 'object', properties: { a: { anyOf: [{ type: 'string' }, { type: 'null' }] }, b: { type: ['string', 'null'] }, c: { type: 'string' } } }), 2, '计数方法');
+  assert.ok(unionParams(EXTRACTION_SCHEMA) <= MAX_UNION_PARAMS, `提取 Schema 有 ${unionParams(EXTRACTION_SCHEMA)} 个联合类型字段`);
+  assert.ok(unionParams(EXPLANATION_SCHEMA) <= MAX_UNION_PARAMS, `解释 Schema 有 ${unionParams(EXPLANATION_SCHEMA)} 个联合类型字段`);
+});
+
+test('文字字段：空字符串（Claude）与 null（DeepSeek）都解析成「没有」', () => {
+  const r = parseExtraction({ ...base, supplier: '', receipt_number: '  ', lines: [{ ...base.lines[0], name: '', unit: '', evidence: '' }] });
+  assert.deepEqual([r.supplier, r.receiptNumber, r.lines[0].name, r.lines[0].unit, r.lines[0].evidence], [null, null, null, null, null]);
+  const n = parseExtraction(base);
+  assert.deepEqual([n.supplier, n.receiptNumber, n.lines[0].unit, n.lines[0].evidence], [null, null, null, null]);
+  assert.equal(parseExtraction({ ...base, supplier: ' PASAR PAGI ' }).supplier, 'PASAR PAGI');
 });
 
 test('解释：只能引用后端给的记录 ID 与金额', () => {
