@@ -15,6 +15,7 @@ import { CommandError } from '../core/errors';
 import { loadStoreConfig } from '../core/store';
 import { aiRuntime } from './config';
 import { requireOwner } from './drafts';
+import { activeAcceptance } from './acceptance';
 import { runCostAi } from './router';
 import type { CostExplanation } from './types';
 
@@ -59,7 +60,10 @@ export async function getCostAnalysis(db: Firestore, uid: string | undefined, in
   const runtime = aiRuntime();
   if (!runtime.primary && !runtime.backup) return { ...base, explainStatus: 'not_configured' };
 
-  const key = createHash('sha256').update([input.storeId, input.range.start, input.range.endExclusive, question, dataDigest].join('\n')).digest('hex').slice(0, 40);
+  // 备用验收模式下另用缓存键，避免把之前 Claude 的解读当成 DeepSeek 的验收结果。
+  const acceptance = activeAcceptance(flag.data()?.acceptance, Date.now(), uid);
+  if (acceptance && !runtime.backup) return { ...base, explainStatus: 'not_configured' };
+  const key = createHash('sha256').update([input.storeId, input.range.start, input.range.endExclusive, question, dataDigest, acceptance ? 'acceptance:backup_only' : ''].join('\n')).digest('hex').slice(0, 40);
   const cached = (await store.costAnalysis(key).get()).data();
   if (cached && cached.dataDigest === dataDigest) {
     return { ...base, explainStatus: 'ok', explanation: { ...(cached.explanation as CostExplanation), provider: cached.provider, model: cached.model, generatedAtMs: cached.generatedAtMs, cached: true, question }, sourceIds: cached.sourceIds };
@@ -78,7 +82,8 @@ export async function getCostAnalysis(db: Firestore, uid: string | undefined, in
   const allowedIds = new Set(stats.evidence.map((e) => e.id));
   const amounts = allowedAmounts(stats);
   const { evidence, ...rest } = stats;
-  const outcome = await runCostAi('explain', false, (p, signal) => p.explain({ question, statsJson: JSON.stringify(rest), evidence }, allowedIds, amounts, signal), runtime);
+  const rt = acceptance ? { ...runtime, primary: null, primarySkipped: 'acceptance_skip' as const } : runtime;
+  const outcome = await runCostAi('explain', false, (p, signal) => p.explain({ question, statsJson: JSON.stringify(rest), evidence }, allowedIds, amounts, signal), rt);
   const generatedAtMs = Date.now();
   if (!outcome.ok) {
     await store.costAnalysis(`failed-${key}`).set({ question, range: input.range, dataDigest, reason: outcome.reason, calls: outcome.calls, atMs: generatedAtMs });
@@ -87,7 +92,7 @@ export async function getCostAnalysis(db: Firestore, uid: string | undefined, in
   const sourceIds = [...new Set(outcome.value.findings.flatMap((f) => f.evidenceIds))];
   await store.costAnalysis(key).set({
     question, range: input.range, dataDigest, explanation: outcome.value, sourceIds, provider: outcome.provider, model: outcome.model,
-    primaryIssue: outcome.primaryIssue, calls: outcome.calls, generatedAtMs, by: uid,
+    primaryIssue: outcome.primaryIssue, calls: outcome.calls, generatedAtMs, by: uid, acceptanceMode: acceptance?.mode ?? null,
   });
   return { ...base, explainStatus: 'ok', explanation: { ...outcome.value, provider: outcome.provider, model: outcome.model, generatedAtMs, cached: false, question }, sourceIds };
 }

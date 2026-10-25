@@ -1,7 +1,9 @@
-// 阶段 E 端到端：老板处理离线待核对、收支损耗、关账、关账后迟到单与更正版本、CSV 导出。
+// 阶段 E 端到端：老板处理离线待核对、收支、关账、关账后迟到单与更正版本、CSV 导出。
 // 2026-10-23 起：下单送厨不收款，收款为不分渠道的人工全额登记（结果弹窗「确认已收款」）；日结不再输入钱箱实点 / QR，
 // 概览与日结显示「净登记收款」。离线补同步仍用旧格式（含 cash 付款）的事件，验证旧日志兼容。
-// 前提：干净的 Emulator 已启动并 seed；VITE_USE_EMULATORS=true 构建后在 4173 端口 vite preview。
+// 2026-10-25 收支改版：钱箱资金往来的录入已移除；改为验证「记一笔支出」的项目选择、食材进货入库、煤气记账与作废、
+// 经营目标页、AI 记成本页里折叠的「详细用料管理」（批次与份量损耗）。
+// 前提：干净的 Emulator 已启动并 seed；VITE_USE_EMULATORS=true 构建后在 4173 端口 vite preview（端口可用 E2E_PORT 覆盖）。
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { callable, fsGet, fsList, idToken, login, openChrome, pause } from './lib/cdp.mjs';
@@ -31,8 +33,9 @@ async function offlineEvent(sequenceOffset, tokenNumber, extra = {}, atMs = Date
   };
 }
 
-const pos = await openChrome('http://localhost:4173');
-const boss = await openChrome('http://127.0.0.1:4173');
+const PORT = process.env.E2E_PORT ?? '4173';
+const pos = await openChrome(`http://localhost:${PORT}`);
+const boss = await openChrome(`http://127.0.0.1:${PORT}`);
 const save = async (tab, name) => writeFile(`${OUT}/${name}.png`, await tab.screenshot());
 
 try {
@@ -97,31 +100,69 @@ try {
   const priceOrder = orders.find((o) => o.tokenNumber === 20);
   check('补入账：金额不符按实收 RM6 入账；餐牌冲突单只补历史账', priceOrder?.totalSen === 600 && orders.find((o) => o.tokenNumber === 1 && o.source === 'offline')?.tokenLock === 'history_only');
 
-  // ---- 收支：模板只预填；作废与更正；损耗；资金往来 ----
+  // ---- 收支（2026-10-25 改版）：记一笔支出的项目选择；食材进货入库；煤气记账后作废；经营目标；AI 记成本里的详细用料管理与份量损耗 ----
+  const FIN = `const set = (el, v) => { const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); };
+    const field = (t) => [...document.querySelectorAll('[role=dialog] label')].find((l) => l.querySelector('span')?.innerText.trim() === t)?.querySelector('input,select,textarea');
+    const dialogBtn = (t) => [...document.querySelectorAll('[role=dialog] button')].find((b) => !b.disabled && b.innerText.replace(/\\s+/g, '').includes(t));`;
   await boss.goto('/owner/finance');
-  await boss.page(`
-    await __waitFor('记一笔支出', 15000);
-    const set = (el, v) => { const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); };
-    __click('面球'); await __sleep(200);
-    if (document.querySelector('[aria-label="实际金额 RM"]').value !== '') throw new Error('模板不应预填金额');
-    set(document.querySelector('[aria-label="实际金额 RM"]'), '300'); await __sleep(150);
-    __click('保存RM300.00'); await __waitFor('支出已记录', 20000); await __sleep(1500);
-    // 录错一笔再作废并更正
-    __click('煤气'); await __sleep(150); set(document.querySelector('[aria-label="实际金额 RM"]'), '25'); await __sleep(150);
-    __click('保存RM25.00'); await __sleep(2500);
-    [...document.querySelectorAll('li')].find(li => li.innerText.includes('煤气') && li.innerText.includes('RM25.00')).querySelector('button').click(); await __sleep(200);
-    const vi = document.querySelector('input[placeholder="作废原因"]'); set(vi, '金额打错'); await __sleep(150);
-    [...document.querySelectorAll('button')].find(b => b.innerText === '确认').click(); await __waitFor('已作废', 20000); await __sleep(1500);
-    document.querySelector('[aria-label="面球加"]').click(); await __sleep(80); document.querySelector('[aria-label="面球加"]').click(); await __sleep(150);
-    __click('保存损耗'); await __waitFor('损耗已记录', 20000); await __sleep(1500);
-    set(document.querySelector('[aria-label="往来类型"]'), 'bank_deposit');
-    set(document.querySelector('[aria-label="金额 RM"]'), '10'); set(document.querySelector('[aria-label="往来原因"]'), '存银行'); await __sleep(150);
-    [...document.querySelectorAll('button')].filter(b => b.innerText.trim() === '保存').pop().click(); await __waitFor('资金往来已记录', 20000); await __sleep(1500);`);
+  const chooser = await boss.page(`
+    await __waitFor('今天的生意，一眼看清', 20000); await __waitFor('记一笔支出', 15000);
+    __click('记一笔支出'); await __sleep(400);
+    return document.querySelector('[role=dialog]')?.innerText ?? '';`);
+  check('收支总览：「记一笔支出」列出 AI 记成本、食材进货、煤气、杂费、租金 / 冰箱电费', ['AI 记成本', '食材进货', '煤气', '杂费', '租金 / 冰箱电费'].every((t) => chooser.includes(t)), chooser.replace(/\s+/g, ' ').slice(0, 120));
+  const purchase = await boss.page(`${FIN}
+    dialogBtn('食材进货').click(); await __waitFor('记录新进货', 8000); await __sleep(300);
+    const emptyAmount = field('整批金额 RM').value === '';
+    set(document.querySelector('[role=dialog] select[aria-label="食材"]'), 'ing-minced-pork'); await __sleep(150);
+    set(field('数量'), '2'); set(field('整批金额 RM'), '300'); await __sleep(200);
+    const unit = field('单位').value;
+    dialogBtn('保存RM300.00').click(); await __waitFor('进货已记录', 20000); await __sleep(1500);
+    return { emptyAmount, unit };`);
+  check('食材进货：金额不预填；选肉碎后单位自动为 kg', purchase.emptyAmount && purchase.unit === 'kg', JSON.stringify(purchase));
+  await boss.page(`${FIN}
+    __click('记一笔支出'); await __sleep(400); dialogBtn('煤气').click(); await __waitFor('换气记账', 8000); await __sleep(300);
+    set(field('实际金额 RM'), '25'); await __sleep(200);
+    dialogBtn('保存RM25.00').click(); await __waitFor('煤气已记录', 20000); await __sleep(1500);`);
+  await boss.goto('/owner/finance/expenses');
+  const voided = await boss.page(`${FIN}
+    await __waitFor('这个月记过的开支', 20000); await __sleep(1500);
+    const row = [...document.querySelectorAll('button')].find((b) => b.innerText.trim() === '作废' && b.closest('div')?.parentElement?.innerText.includes('煤气'));
+    row.click(); await __waitFor('作废原因', 8000); await __sleep(200);
+    set(field('作废原因'), '金额打错'); await __sleep(200);
+    dialogBtn('确认作废').click(); await __waitFor('已作废', 20000); await __sleep(2000);
+    return __has('已作废：金额打错');`);
   const exps = await fsList('expenses');
+  const batches = await fsList('ingredientBatches');
+  check('收支：进货 RM300 有效、录错的煤气 RM25 已作废并保留原因', exps.some((e) => e.amountSen === 30000 && e.status === 'active' && e.category === 'purchase')
+    && exps.some((e) => e.amountSen === 2500 && e.status === 'voided' && e.planItem === 'gas' && e.voidReason === '金额打错') && voided);
+  check('食材进货：生成一批「库存待启用」的肉碎，关联这笔进货支出，不自动开始使用', batches.length === 1 && batches[0].ingredientId === 'ing-minced-pork' && batches[0].status === 'stocked'
+    && batches[0].startedAtMs === null && exps.some((e) => e.id === batches[0].purchaseExpenseId && e.amountSen === 30000), JSON.stringify(batches.map((b) => [b.ingredientId, b.status])));
+  await save(boss, 'finance-expenses-1366');
+
+  await boss.goto('/owner/finance/goals');
+  const goals = await boss.page(`await __waitFor('一家小档口，也有大目标', 20000); await __sleep(1500); return document.querySelector('main').innerText;`);
+  check('经营目标：第一目标为收回开档投入，资料不足时显示待核算而不是虚假进度', goals.includes('一家小档口，也有大目标') && goals.includes('待核算') && goals.includes('开档成本尚未录入'), goals.match(/待核算[^\n]*\n?[^\n]*/)?.[0]);
+  await save(boss, 'finance-goals-1366');
+
+  await boss.goto('/owner/finance/ingredients');
+  const advanced = await boss.page(`
+    await __waitFor('今天花了什么，告诉我就好', 20000);
+    const box = [...document.querySelectorAll('details')].find((d) => d.querySelector('summary')?.innerText.includes('详细用料管理'));
+    if (!box) return { ok: false, text: 'no details' };
+    box.open = true; await __waitFor('食材怎么用，慢慢算清楚', 10000); await __sleep(500);
+    [...box.querySelectorAll('button[aria-pressed]')].find((b) => b.innerText.includes('云吞')).click(); await __sleep(400);
+    const card = [...box.querySelectorAll('article')].find((a) => a.innerText.includes('肉碎'));
+    return { ok: true, stocked: card?.innerText.includes('库存待启用') ?? false };`);
+  check('AI 记成本页：「详细用料管理」折叠入口可展开，肉碎显示库存待启用', advanced.ok && advanced.stocked, JSON.stringify(advanced));
+  await boss.page(`
+    const box = [...document.querySelectorAll('details')].find((d) => d.querySelector('summary')?.innerText.includes('记份量损耗'));
+    box.open = true; await __sleep(300);
+    document.querySelector('[aria-label="面球加"]').click(); await __sleep(80); document.querySelector('[aria-label="面球加"]').click(); await __sleep(150);
+    __click('保存损耗'); await __waitFor('损耗已记录', 20000); await __sleep(1500);`);
   const wst = await fsList('wastage');
-  check('收支：进货 RM300 有效、录错的 RM25 已作废', exps.some((e) => e.amountSen === 30000 && e.status === 'active') && exps.some((e) => e.amountSen === 2500 && e.status === 'voided'));
-  check('损耗：1 面球（0.5 步长两次）', wst.length === 1 && wst[0].noodleHalfUnits === 2);
-  await save(boss, 'finance-1366');
+  check('详细用料管理：份量损耗 1 面球（0.5 步长两次）', wst.length === 1 && wst[0].noodleHalfUnits === 2);
+  check('钱箱资金往来已不再提供录入（改版后移除），没有新增资金往来记录', (await fsList('cashMovements')).length === 0 && !(await boss.page(`return __has('往来类型');`)));
+  await save(boss, 'finance-ingredients-1366');
 
   // ---- 日结：不再输入钱箱实点 / QR；有例外须确认；关账后写屏障 ----
   await boss.goto('/owner/close');

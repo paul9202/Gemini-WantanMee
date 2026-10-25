@@ -12,7 +12,8 @@
     "test:commands": "tsx --test \"test/commands.test.ts\" \"test/offline.test.ts\" \"test/link.test.ts\" \"test/finance.test.ts\" \"test/catalog.test.ts\" \"test/costing.test.ts\" \"test/aiCost.test.ts\"",
     "seed": "tsx scripts/seed-emulator.ts",
     "bootstrap:cloud": "tsx scripts/bootstrap-cloud.ts",
-    "test:unit": "tsx --test \"src/**/*.test.ts\""
+    "test:unit": "tsx --test \"src/**/*.test.ts\"",
+    "ai:acceptance": "tsx scripts/ai-acceptance.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

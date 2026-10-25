@@ -16,6 +16,7 @@ import { StoreRefs, storeRefs } from '../core/command';
 import { CommandError } from '../core/errors';
 import { loadStoreConfig } from '../core/store';
 import { aiRuntime } from './config';
+import { activeAcceptance } from './acceptance';
 import { Attachment, inspectUpload, loadImages } from './receiptStorage';
 import { runCostAi } from './router';
 import type { CallRecord, ExtractionInput, FailureKind } from './types';
@@ -195,6 +196,8 @@ export async function analyzeDraft(db: Firestore, uid: string | undefined, store
     if (leaseActive(d, nowMs)) return { reuse: { draftId, status: d.status, revision: d.revision, attemptId: d.activeAttemptId!, reused: true } as AnalyzeResult };
     if (flag?.enabled !== true) throw new CommandError('AI_DISABLED', 'AI 整理尚未开启，可以手动填写');
     if (!runtime.primary && !runtime.backup) throw new CommandError('AI_NOT_CONFIGURED', 'AI 服务尚未配置，可以手动填写');
+    const acceptance = activeAcceptance(flag?.acceptance, nowMs, uid);
+    if (acceptance && !runtime.backup) throw new CommandError('AI_NOT_CONFIGURED', '备用验收模式需要先配置 DeepSeek');
     const config = await loadStoreConfig(tx, store);
     const day = businessDateOf(nowMs, config.businessDay);
     const usageRef = store.aiUsage(day);
@@ -202,9 +205,9 @@ export async function analyzeDraft(db: Firestore, uid: string | undefined, store
     const limit = typeof flag.dailyLimit === 'number' ? Math.min(flag.dailyLimit, runtime.dailyLimit) : runtime.dailyLimit;
     if ((usage?.attempts ?? 0) >= limit) throw new CommandError('AI_QUOTA_EXCEEDED', `今天的 AI 整理次数已用完（${limit} 次），可以手动填写`);
     tx.set(usageRef, { date: day, attempts: (usage?.attempts ?? 0) + 1, updatedAtMs: nowMs }, { merge: true });
-    tx.create(attemptRef, { id: attemptId, requestId, status: 'running', inputRevision, startedAtMs: nowMs, leaseUntilMs: nowMs + LEASE_MS, by: uid, mode: runtime.mode });
+    tx.create(attemptRef, { id: attemptId, requestId, status: 'running', inputRevision, startedAtMs: nowMs, leaseUntilMs: nowMs + LEASE_MS, by: uid, mode: runtime.mode, acceptanceMode: acceptance?.mode ?? null });
     tx.update(ref, { status: 'analyzing', statusBeforeAnalyze: d.status, activeAttemptId: attemptId, leaseUntilMs: nowMs + LEASE_MS, updatedAtMs: nowMs });
-    return { reuse: null, draft: d };
+    return { reuse: null, draft: d, acceptance };
   });
   if (lease.reuse) return lease.reuse;
   const d = lease.draft!;
@@ -213,7 +216,9 @@ export async function analyzeDraft(db: Firestore, uid: string | undefined, store
   try {
     const images = d.source === 'receipt' ? await loadImages(d.input.attachments) : [];
     const input: ExtractionInput = { kind: d.source === 'receipt' ? 'receipt' : 'text', text: d.input.text, images, businessDate: d.businessDate, localTime: d.localTime, timeZone: d.timeZone };
-    outcome = await runCostAi('extract', images.length > 0, (p, signal) => p.extract(input, signal), runtime);
+    // 备用验收模式：这位老板的请求跳过 Claude，直接走 DeepSeek（只在名单内、限时）。
+    const rt = lease.acceptance ? { ...runtime, primary: null, primarySkipped: 'acceptance_skip' as const } : runtime;
+    outcome = await runCostAi('extract', images.length > 0, (p, signal) => p.extract(input, signal), rt);
   } catch (e) {
     outcome = { ok: false, calls: [], reason: e instanceof CommandError ? 'bad_request' : 'network' };
   }

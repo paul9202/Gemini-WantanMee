@@ -16,6 +16,8 @@ export type AiOutcome<T> =
 export interface RouterDeps {
   primary: AiProvider | null;
   backup: AiProvider | null;
+  /** 主服务被有意跳过（备用验收模式）时记录的原因；不填则按「未配置」记录。 */
+  primarySkipped?: FailureKind;
   totalMs?: number;
   perProviderMs?: number;
   now?: () => number;
@@ -33,7 +35,7 @@ export async function runCostAi<T>(task: 'extract' | 'explain', hasImages: boole
     const p = chain[i];
     const remaining = total - (now() - start);
     if (!p) {
-      if (i === 0) primaryIssue = 'not_configured';
+      if (i === 0) primaryIssue = deps.primarySkipped ?? 'not_configured';
       continue;
     }
     const model = p.modelFor(task, hasImages);

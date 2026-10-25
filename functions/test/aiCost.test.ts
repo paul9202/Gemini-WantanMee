@@ -10,6 +10,7 @@ import { admin, cleanupClients, countDocs, newClient, setupStore, StoreFixture, 
 import { businessDateOf, EditedCostDraft, monthOf } from '../../src/domain';
 import { commitCostDraft, completePurchaseUsage } from '../src/aiCost/posting';
 import { cleanupExpiredDrafts, DRAFT_ATTACHMENT_TTL_MS } from '../src/aiCost/drafts';
+import { clearAcceptance, setAcceptance } from '../src/aiCost/acceptance';
 
 after(cleanupClients);
 
@@ -390,4 +391,40 @@ test('清理：30 天未动的未入账草稿过期并删图；已入账的收�
   assert.equal((await draftOf(f, old.draftId)).status, 'expired');
   assert.equal((await draftOf(f, kept.draftId)).status, 'committed', '已入账的不清理');
   assert.equal(await f.owner.code('updateCostDraft', { storeId: f.storeId, draftId: old.draftId, expectedRevision: 1, text: '葱12块' }), 'DRAFT_STATE');
+});
+
+test('DeepSeek 备用验收模式：只影响名单内老板、只在本店、限时；Claude 密钥不动；清除或过期后恢复正常主备', async () => {
+  const f = await setupStore();
+  const other = await setupStore();
+  await enable(f);
+  await enable(other);
+  await setAcceptance(admin(), { storeId: f.storeId, uids: [f.owner.uid], minutes: 10, reason: 'DeepSeek 备用验收', setBy: 'test', nowMs: Date.now() });
+  const providerOf = async (s: StoreFixture, text: string) => {
+    const d = await textDraft(s, text);
+    const r = await analyze(s, d.draftId, 1);
+    const att = (await admin().collection(`stores/${s.storeId}/costDrafts/${d.draftId}/attempts`).get()).docs[0].data();
+    return { provider: r.provider, calls: att.calls.map((c: { provider: string }) => c.provider), acceptanceMode: att.acceptanceMode, primaryIssue: (await draftOf(s, d.draftId)).lastAttempt as unknown as { primaryIssue: string } };
+  };
+  const during = await providerOf(f, '葱10块，都付了');
+  assert.deepEqual([during.provider, during.calls, during.acceptanceMode, during.primaryIssue.primaryIssue], ['deepseek', ['deepseek'], 'backup_only', 'acceptance_skip'], '名单内老板：跳过 Claude，只调用 DeepSeek');
+  assert.deepEqual((await providerOf(other, '葱10块，都付了')).calls, ['claude'], '其他门店不受影响');
+
+  // 开销解读同样走备用，且不复用之前 Claude 的缓存。
+  const range = { start: `${monthOf(today())}-01`, endExclusive: businessDateOf(Date.now() + 86_400_000) };
+  await admin().doc(`stores/${f.storeId}/config/aiCost`).update({ acceptance: null });
+  const normal = await f.owner.call<{ explanation: { provider: string; cached: boolean } }>('getCostAnalysis', { storeId: f.storeId, range, question: '这个月花在哪？', explain: true });
+  assert.equal(normal.explanation.provider, 'claude');
+  await setAcceptance(admin(), { storeId: f.storeId, uids: [f.owner.uid], minutes: 10, reason: 'DeepSeek 备用验收', setBy: 'test', nowMs: Date.now() });
+  const acc = await f.owner.call<{ explanation: { provider: string; cached: boolean } }>('getCostAnalysis', { storeId: f.storeId, range, question: '这个月花在哪？', explain: true });
+  assert.deepEqual([acc.explanation.provider, acc.explanation.cached], ['deepseek', false], '验收模式不拿 Claude 的缓存充数');
+
+  // 过期 → 恢复；清除 → 恢复；客户端不能写验收设置。
+  await admin().doc(`stores/${f.storeId}/config/aiCost`).update({ 'acceptance.untilMs': Date.now() - 1000 });
+  assert.deepEqual((await providerOf(f, '盐3块，都付了')).calls, ['claude'], '过期后恢复 Claude 默认');
+  await setAcceptance(admin(), { storeId: f.storeId, uids: [f.owner.uid], minutes: 10, reason: 'DeepSeek 备用验收', setBy: 'test', nowMs: Date.now() });
+  await clearAcceptance(admin(), f.storeId);
+  assert.deepEqual((await providerOf(f, '糖4块，都付了')).calls, ['claude'], '清除后恢复 Claude 默认');
+  await assert.rejects(setAcceptance(admin(), { storeId: f.storeId, uids: [f.cashier.uid], minutes: 10, reason: '验收', setBy: 'test', nowMs: Date.now() }), /有效老板/);
+  await assert.rejects(setAcceptance(admin(), { storeId: f.storeId, uids: [f.owner.uid], minutes: 121, reason: '验收', setBy: 'test', nowMs: Date.now() }), /时长/);
+  assert.equal((await doc(f, 'config/aiCost'))!.enabled, true, '开关不受影响');
 });

@@ -97,11 +97,34 @@ npx vite build --mode staging; npx firebase deploy --only hosting --project want
 1. 文字：中文 / 英文 / 马来文各几句，含「都付了」「赊账」「没说付款」、混合食材与煤气、昨天 / 今天。逐项人工对照金额、分类、付款与「没说清楚留空」。
 2. 收据：清晰、反光、长收据（多张）、有折扣、有税、有找零、混合私人用品。核对差额提示、折扣只记一次、找零不成支出。
 3. Claude 正常时 `attempts.calls` 只有一条 claude；DeepSeek 调用数为 0。
-4. 备用：在 staging 临时把 `ANTHROPIC_API_KEY` 设为无效值（返回 401 → 配置异常 → 交给 DeepSeek），重新部署后验收文字与收据；确认 `primaryIssue` 被记录、界面显示「DeepSeek（备用）」；完成后恢复真实 Key 并重新部署。
-5. 两家都不可用：两个 Secret 都设为 `unset`，确认界面显示未配置、原话 / 图片保留、手动填写可保存。
+4. 备用（DeepSeek）：**不要改动真实 `ANTHROPIC_API_KEY`**。用受限、限时的「备用验收模式」：只让指定老板账号在这一家门店的 AI 请求跳过 Claude、直接走 DeepSeek，其他账号 / 门店照常 Claude 优先，到期自动恢复（最长 120 分钟）。步骤见下方「备用验收模式」。验收时确认界面显示「DeepSeek（备用）」，`costDrafts/{id}/attempts` 里 `acceptanceMode: backup_only`、`calls` 只有 deepseek、`primaryIssue: acceptance_skip`；文字、收据、开销解读各做一次。
+5. 两家都不可用：不在线上改 Secret 制造故障。这一路径已在 Emulator 用模拟传输验证（原话含 `#mock:all-down`：保留原话 / 图片、不入账、可手动填写）；线上只在首次配置密钥之前顺便确认「AI 服务尚未配置」提示与手动录入可用。
 6. 开销分析：问「这个月花在哪」「比上月多花在哪里」「有哪些待付款」，确认引用都是真实记录、金额与统计卡一致；改一笔付款后旧解读显示过期。
 7. 记录实际延迟；若收据识别常超过 30 秒，再调整 `AI_PROVIDER_TIMEOUT_MS` / `AI_CLAUDE_EFFORT`，不要无限加长。
 8. （可选）验证 Claude 服务端换模型：在 `functions/.env.wantan-staging` 设 `AI_CLAUDE_SERVER_FALLBACK=true` 后重新部署，跑一次文字与收据识别，确认没有 400；有 400 就改回 `false`。
+
+### 备用验收模式（DeepSeek）
+
+维护者在自己的终端执行（使用本机 `gcloud auth application-default login` 的凭据；脚本只接受本店有效老板的 UID，期限 1–120 分钟，必须写原因）：
+
+```bash
+npm --prefix functions run ai:acceptance -- --project wantan-staging --uid <老板UID> --minutes 30 --reason "DeepSeek 备用验收"
+```
+
+```bash
+npm --prefix functions run ai:acceptance -- --project wantan-staging --status
+```
+
+验收结束（或任何时候想恢复）：
+
+```bash
+npm --prefix functions run ai:acceptance -- --project wantan-staging --clear
+```
+
+- 设置写在 `stores/<门店>/config/aiCost.acceptance`，客户端不能写（Firestore Rules 拒绝），Callable 也不会改它；`--store` 可指定门店，默认 `hao-pontian-main`。
+- 只影响名单内的老板账号；同一门店其他账号、其他门店不受影响。即使忘记清除，到期也会自动恢复 Claude 优先。
+- 开销解读在验收模式下使用独立缓存，不会把之前 Claude 的解读当成 DeepSeek 的结果。
+- 本机演练：Emulator 运行时加 `--emulator`，并使用 `--project demo-hao-wantan`。
 
 **不要预先宣称识别准确率**；以上验收结果单独记录，区分模拟验证与真实模型验证。
 

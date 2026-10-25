@@ -70,7 +70,8 @@ export async function login(tab, role) {
     return location.pathname;`);
 }
 
-const FS = 'http://127.0.0.1:8080/v1/projects/demo-hao-wantan/databases/(default)/documents/stores/hao-pontian-main';
+// Emulator 地址默认与 firebase.json 一致；同机跑第二套 Emulator 验收时用 E2E_FIRESTORE / E2E_AUTH / E2E_FUNCTIONS 覆盖（host:port）。
+const FS = `http://${process.env.E2E_FIRESTORE ?? '127.0.0.1:8080'}/v1/projects/demo-hao-wantan/databases/(default)/documents/stores/hao-pontian-main`;
 // Firestore REST 值 → JS 值；嵌套的 map / array 递归解码（例如 cancelRejection、writeOff）。
 const decode = (v) => {
   if (v.stringValue !== undefined) return v.stringValue;
@@ -96,8 +97,8 @@ export async function fsPatch(path, fields) {
   if (!r.ok) throw new Error(`patch ${path}: ${r.status}`);
 }
 
-const AUTH = 'http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-api-key';
-const FN = 'http://127.0.0.1:5001/demo-hao-wantan/asia-southeast1';
+const AUTH = `http://${process.env.E2E_AUTH ?? '127.0.0.1:9099'}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-api-key`;
+const FN = `http://${process.env.E2E_FUNCTIONS ?? '127.0.0.1:5001'}/demo-hao-wantan/asia-southeast1`;
 
 /** 以测试账号在 Auth Emulator 登录，取得 ID token。 */
 export async function idToken(role) {

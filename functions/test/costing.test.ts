@@ -6,6 +6,7 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { admin, cleanupClients, countDocs, placeOrder, setupStore, StoreFixture, uuid } from './harness';
 import { businessDateOf, monthOf, STARTUP_SEED } from '../../src/domain';
+import { linkExpense } from '../src/commands/costing';
 
 after(cleanupClients);
 
@@ -159,10 +160,17 @@ test('旧版房租：已关账营业日的付款可确认归属到月份（原�
   assert.equal(await f.owner.code('voidLedgerEntry', cmd(f, { kind: 'expense', id: legacy.id, reason: '想重记' })), 'DAY_CLOSED', '已关账不能作废重记');
 
   // 并发：两笔旧付款同时归入同月租金（应付 RM800），只能成功一笔。
-  const codes = await Promise.all([legacy, legacy2].map((e) => f.owner.code('linkExpense', cmd(f, { expenseId: e.id, kind: 'recurring', item: 'rent', month: m, amountSen: 80_000 }))));
-  assert.deepEqual(codes.filter((c) => c === 'OK').length, 1, `并发结果 ${codes}`);
-  assert.ok(codes.includes('PERIOD_ALREADY_PAID'));
+  // 在测试进程里直接并发执行同一段事务代码：Functions Emulator 通常把同一函数的调用排队执行，测不到真正的事务竞争；
+  // 内存紧张时它又可能并行起工作进程并崩溃，返回没有 reasonCode 的 internal / deadline-exceeded。那是基础设施错误，不是业务结果。
+  const codes = await Promise.all([legacy, legacy2].map((e) => linkExpense(admin(), f.owner.uid, cmd(f, { expenseId: e.id, kind: 'recurring', item: 'rent', month: m, amountSen: 80_000 }))
+    .then(() => 'OK', (err) => err?.reasonCode ?? `非业务错误（${err?.code ?? ''} ${String(err?.message ?? err).slice(0, 80)}）`)));
+  assert.deepEqual([...codes].sort(), ['OK', 'PERIOD_ALREADY_PAID'], `并发结果 ${codes}`);
   const winner = codes[0] === 'OK' ? legacy : legacy2;
+  const slot = await doc(f, `recurringSlots/rent-${m}`);
+  const slotActive = ((slot?.links ?? []) as { status: string; amountSen: number; expenseId: string }[]).filter((l) => l.status === 'active');
+  assert.deepEqual(slotActive.map((l) => [l.expenseId, l.amountSen]), [[winner.id, 80_000]], '月份槽只有胜出那笔，金额不超过应付');
+  const activeLinks = (await admin().collection(`stores/${f.storeId}/expenseLinks`).get()).docs.flatMap((d) => d.data().links).filter((l: { status: string }) => l.status === 'active');
+  assert.equal(activeLinks.length, 1, '只有一条有效归属');
   assert.equal(await f.owner.code('linkExpense', cmd(f, { expenseId: winner.id, kind: 'recurring', item: 'rent', month: m, amountSen: 1 })), 'LINK_REJECTED', '同一付款重复关联同月');
   assert.equal(await f.owner.code('linkExpense', cmd(f, { expenseId: winner.id, kind: 'recurring', item: 'fridge_power', month: m, amountSen: 10_000 })), 'LINK_REJECTED', '已全额关联，没有剩余');
 

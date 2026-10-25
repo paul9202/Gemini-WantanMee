@@ -41,7 +41,7 @@ export interface CostExplanation {
  * 失败分类。只有 network / timeout / rate_limited / server_error / invalid_output / config 才交给备用；
  * 缺金额、模糊、分类不明不是失败（留在草稿给老板补）。
  */
-export type FailureKind = 'network' | 'timeout' | 'rate_limited' | 'server_error' | 'invalid_output' | 'config' | 'refused' | 'bad_request' | 'vision_unavailable' | 'not_configured';
+export type FailureKind = 'network' | 'timeout' | 'rate_limited' | 'server_error' | 'invalid_output' | 'config' | 'refused' | 'bad_request' | 'vision_unavailable' | 'not_configured' | 'acceptance_skip';
 
 export const FALLBACK_KINDS: FailureKind[] = ['network', 'timeout', 'rate_limited', 'server_error', 'invalid_output', 'config', 'not_configured'];
 
