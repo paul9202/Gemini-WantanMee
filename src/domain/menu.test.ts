@@ -214,3 +214,14 @@ test('默认配置：小份细面、黑酱、辣、正常油渣、正常葱、�
     lard: 'normal', scallion: 'normal', isKosong: false, addOns: [], note: '',
   });
 });
+
+test('辣度每碗都强调（后厨 / 购物车 / 收据都看得到），默认的「辣」也是；葱、油渣默认仍弱化', () => {
+  const pics = (cfg: LineConfig) => linePictograms(menu, cfg, 'dine_in');
+  for (const spice of ['none', 'less', 'normal', 'extra'] as const) {
+    assert.ok(pics(noodle('small', { spice })).some((p) => p.id === `spice:${spice}` && p.emphasized), spice);
+  }
+  const d = pics(defaultConfig(menu, 'dry_noodle'));
+  assert.ok(d.some((p) => p.id === 'scallion:normal' && !p.emphasized));
+  assert.ok(d.some((p) => p.id === 'lard:normal' && !p.emphasized));
+  assert.ok(!pics(defaultConfig(menu, 'wanton_soup')).some((p) => p.id.startsWith('spice:')), '汤品没有辣度');
+});

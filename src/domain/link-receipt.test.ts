@@ -39,7 +39,7 @@ test('O13 未出餐收据：显示当前状态、不编造出餐时间；金额�
   assert.ok(t.includes('票号|261022-007'));
   assert.ok(t.includes('接单时间|2026/10/22 12:30'));
   assert.ok(t.includes('2 × 红酱面 · 中|RM18.00'));
-  assert.ok(t.includes('面薄 · 走青 · 不附送清汤'));
+  assert.ok(t.includes('面薄 · 辣 · 走青 · 不附送清汤'), '辣度每碗都打印，默认的「辣」也是');
   assert.ok(t.includes('1 × 净面 · 云吞汤面 · 小|RM3.50'));
   assert.ok(!/净面 · 净面/.test(t));
   assert.ok(t.includes('合计|RM21.50'));

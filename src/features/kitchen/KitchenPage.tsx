@@ -24,7 +24,7 @@ import { Icon, Photo, PictoArt } from '../../ui/visual';
 import { useLang, useT } from '../../app/i18n';
 import { lineNameEn, LineConfig } from '../../domain/lineItem';
 import { MENU_V1, SAUCE_NAMES, SERVICE_MODE_NAMES, ServiceMode } from '../../domain/menu';
-import { PICTOGRAMS } from '../../domain/pictograms';
+import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
 import { useKdsTheme, useNewTicketChime } from './prefs';
 
 type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean; manualHandoffAtMs?: number | null };
@@ -368,9 +368,12 @@ function Banner({ tone, children }: { tone: 'warn' | 'danger' | 'action'; childr
 function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode: ServiceMode; mixed: boolean }) {
   const tr = useT();
   const lang = useLang();
-  const name = lang === 'en' ? lineNameEn(MENU_V1, l as unknown as LineConfig) : l.nameZh;
-  const special = l.pictograms.filter((p) => p.emphasized && p.id !== 'kosong:on' && !p.id.startsWith('noodle:') && p.id !== 'takeaway:no_side_soup');
-  const standard = l.pictograms.filter((p) => !p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'soup:base');
+  const cfg = l as unknown as LineConfig;
+  const name = lang === 'en' ? lineNameEn(MENU_V1, cfg) : l.nameZh;
+  // 按当前规则重算：l.pictograms 是下单时服务端存的，旧厨单里默认的「辣」没有强调。
+  const pictograms = linePictograms(MENU_V1, cfg, serviceMode);
+  const special = pictograms.filter((p) => p.emphasized && p.id !== 'kosong:on' && !p.id.startsWith('noodle:') && p.id !== 'takeaway:no_side_soup');
+  const standard = pictograms.filter((p) => !p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'soup:base');
   const isSoup = l.productKind === 'wanton_soup' || l.productKind === 'soup_noodle';
   const label = (id: keyof typeof PICTOGRAMS) => (lang === 'en' ? PICTOGRAMS[id].en : PICTOGRAMS[id].zh);
   return (

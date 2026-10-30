@@ -51,7 +51,7 @@ export const PICTOGRAMS: Record<PictogramId, PictogramDef> = {
 
 export interface LinePictogram {
   id: PictogramId;
-  /** 偏离默认的要求才在 KDS 强调；默认项保留但弱化，不完全丢失。 */
+  /** 偏离默认的要求才在 KDS 强调；默认项保留但弱化，不完全丢失。辣度例外：每碗都强调，默认的「辣」也是。 */
   emphasized: boolean;
 }
 
@@ -62,7 +62,7 @@ export function linePictograms(menu: MenuVersion, cfg: LineConfig, serviceMode: 
   if (cfg.noodleType) out.push({ id: `noodle:${cfg.noodleType}`, emphasized: cfg.noodleType !== 'thin_egg' });
   if (cfg.isKosong) out.push({ id: 'kosong:on', emphasized: true });
   if (product.isSoup) out.push({ id: 'soup:base', emphasized: false });
-  if (cfg.spice) out.push({ id: `spice:${cfg.spice}`, emphasized: cfg.spice !== 'normal' });
+  if (cfg.spice) out.push({ id: `spice:${cfg.spice}`, emphasized: true });
   out.push({ id: `scallion:${cfg.scallion}`, emphasized: cfg.scallion !== 'normal' });
   if (cfg.lard) out.push({ id: `lard:${cfg.lard}`, emphasized: cfg.lard !== 'normal' });
   for (const a of cfg.addOns) out.push({ id: `addon:${a}`, emphasized: true });

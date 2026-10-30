@@ -8,7 +8,8 @@
 import { useRef, useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
 import { businessDateOf } from '../../domain/businessDay';
-import { OrderServiceMode, SERVICE_MODE_NAMES } from '../../domain/menu';
+import { OrderServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
+import { PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import type { PaymentMethod } from '../../domain/payment';
 import { isAwaitingPayment, PaymentState } from '../../domain/orderLifecycle';
@@ -58,8 +59,12 @@ interface OrderRow {
   writeOff?: { reason: string; amountSen: number; atMs: number } | null;
   businessDate: string;
   version: number;
-  items: { lineId: string; nameZh: string; quantity: number; photoId: string }[];
+  /** items 带下单时的完整配置；这里只用到辣度（汤品为 null）。 */
+  items: { lineId: string; nameZh: string; quantity: number; photoId: string; spice?: Spice | null }[];
 }
+
+/** 订单页的餐品文字：品名 + 辣度，例如「黑酱面 · 小 · 辣」。 */
+const itemName = (i: OrderRow['items'][number]) => (i.spice ? `${i.nameZh} · ${PICTOGRAMS[`spice:${i.spice}`].zh}` : i.nameZh);
 
 type Filter = 'all' | 'unpaid' | 'queued' | 'preparing' | 'served' | 'cancelled';
 const CANCEL_REASONS: [string, string][] = [['顾客离开', 'Customer left'], ['点错单', 'Wrong order'], ['重复下单', 'Duplicate order'], ['其他', 'Other']];
@@ -184,7 +189,7 @@ export function OrdersPage() {
     if (filter === 'unpaid' ? !isAwaitingPayment(o) : filter !== 'all' && o.fulfillmentStatus !== filter) return false;
     const k = search.trim();
     if (!k) return true;
-    return String(o.tokenNumber) === k || o.receiptNumber.includes(k) || Boolean(o.offlineReceiptNumber?.includes(k)) || o.items.some((i) => i.nameZh.includes(k));
+    return String(o.tokenNumber) === k || o.receiptNumber.includes(k) || Boolean(o.offlineReceiptNumber?.includes(k)) || o.items.some((i) => itemName(i).includes(k));
   };
   const counts: Record<Filter, number> = { all: q.data.length, unpaid: 0, queued: 0, preparing: 0, served: 0, cancelled: 0 };
   for (const o of q.data) {
@@ -225,7 +230,7 @@ export function OrdersPage() {
             <div className="text-sm font-bold">{tr('票号', 'Receipt')} {o.receiptNumber}{o.offlineReceiptNumber ? `（${o.offlineReceiptNumber}）` : ''}
               {o.addOnTo && <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">{tr(`加单 · 原 ${o.addOnTo.tokenNumber} 号 ${o.addOnTo.receiptNumber ?? ''}`, `Add-on · token ${o.addOnTo.tokenNumber} ${o.addOnTo.receiptNumber ?? ''}`)}</span>}
             </div>
-            <div className="font-semibold">{o.items.map((i) => `${i.nameZh} ×${i.quantity}`).join('，')}</div>
+            <div className="font-semibold">{o.items.map((i) => `${itemName(i)} ×${i.quantity}`).join('，')}</div>
           </div>
         </div>
         <div className="col-start-2 text-sm lg:col-start-auto">{tr(SERVICE_MODE_NAMES[o.serviceMode].zh, SERVICE_MODE_NAMES[o.serviceMode].en)}</div>
@@ -292,7 +297,7 @@ export function OrdersPage() {
     const body = shown.map((o) => [
       o.tokenNumber, o.receiptNumber, o.businessDate, new Date(o.acceptedAtEffectiveMs).toLocaleString('zh-CN', { hour12: false, timeZone: config.timeZone }), SERVICE_MODE_NAMES[o.serviceMode].zh,
       fulfillLabel(zh, o.fulfillmentStatus), payLabel(zh, o.paymentState), channelLabel(zh, o.paymentMethod) ?? (o.paymentMethod === 'unspecified' ? '人工确认（不分渠道）' : ''),
-      o.totalSen, o.items.map((i) => `${i.nameZh}×${i.quantity}`).join(' / '),
+      o.totalSen, o.items.map((i) => `${itemName(i)}×${i.quantity}`).join(' / '),
     ]);
     download(`订单_${date}.csv`, toCsv([head, ...body]));
   };
