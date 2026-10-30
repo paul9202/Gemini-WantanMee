@@ -11,8 +11,8 @@ import { Icon, PictoArt, Photo } from '../../ui/visual';
 import { useLang, useT } from '../../app/i18n';
 import { Choice, Eyebrow, Group, Stepper } from './parts';
 
-const SPICE_ZH: Record<Spice, string> = { none: '不辣', less: '少辣', normal: '普通', extra: '加辣' };
-const SPICE_EN: Record<Spice, string> = { none: 'No chili', less: 'Less', normal: 'Normal', extra: 'Extra' };
+const SPICE_ZH: Record<Spice, string> = { none: '不辣', less: '少辣', normal: '辣', extra: '加辣' };
+const SPICE_EN: Record<Spice, string> = { none: 'No chili', less: 'Less', normal: 'Spicy', extra: 'Extra' };
 
 export function Customizer({ menu, config, onChange, quantity, onQuantity, editing, onSubmit, onCancelEdit }: {
   menu: MenuVersion;
@@ -41,7 +41,7 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
     config.noodleType ? tr(NOODLE_TYPE_NAMES[config.noodleType].zh, NOODLE_TYPE_NAMES[config.noodleType].en) : null,
     config.productKind === 'dry_wanton' && config.sauce ? tr(SAUCE_NAMES[config.sauce].zh, SAUCE_NAMES[config.sauce].en) : null,
     size ? tr(size.nameZh, size.nameEn) : null,
-    config.spice ? (config.spice === 'normal' ? tr('普通辣', 'Normal chili') : tr(SPICE_ZH[config.spice], SPICE_EN[config.spice])) : null,
+    config.spice ? tr(SPICE_ZH[config.spice], SPICE_EN[config.spice]) : null,
   ].filter(Boolean).join(' · ');
 
   const toggleAddOn = (id: AddOnId) => set({ addOns: config.addOns.includes(id) ? config.addOns.filter((a) => a !== id) : [...config.addOns, id] });

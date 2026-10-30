@@ -26,7 +26,7 @@ export interface PictogramDef {
 export const PICTOGRAMS: Record<PictogramId, PictogramDef> = {
   'spice:none': { id: 'spice:none', zh: '不辣', en: 'No chili', strike: true },
   'spice:less': { id: 'spice:less', zh: '少辣', en: 'Less spicy', strike: false },
-  'spice:normal': { id: 'spice:normal', zh: '普通', en: 'Normal', strike: false },
+  'spice:normal': { id: 'spice:normal', zh: '辣', en: 'Spicy', strike: false },
   'spice:extra': { id: 'spice:extra', zh: '加辣', en: 'Extra spicy', strike: false },
   'scallion:normal': { id: 'scallion:normal', zh: '正常葱', en: 'Scallion', strike: false },
   'scallion:extra': { id: 'scallion:extra', zh: '多葱', en: 'Extra scallion', strike: false },

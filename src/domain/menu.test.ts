@@ -207,7 +207,7 @@ test('M13 6 张图片入口映射 4 类；干捞云吞仅红/黑，白酱前后�
   assert.equal(normalizeConfig(menu, white).sauce, 'black', 'UI 规范化不会保留白酱');
 });
 
-test('默认配置：小份细面、黑酱、普通辣、正常油渣、正常葱、无加料', () => {
+test('默认配置：小份细面、黑酱、辣、正常油渣、正常葱、无加料', () => {
   const d = defaultConfig(menu, 'dry_noodle');
   assert.deepEqual(d, {
     productKind: 'dry_noodle', size: 'small', noodleType: 'thin_egg', sauce: 'black', spice: 'normal',
