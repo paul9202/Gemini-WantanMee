@@ -126,7 +126,7 @@ export const completePurchaseUsageCmd = command(completePurchaseUsage);
 export const setAiCostEnabledCmd = command(setAiCostEnabled);
 export const getCostAnalysisCmd = command(getCostAnalysis, AI_LONG);
 
-// 开业前一次性清空测试数据：确认码（店主 IC）只以哈希存在 Secret Manager，只挂在清空这一个函数上。
+// 清空测试数据（可多次使用）：确认码（店主 IC）只以哈希存在 Secret Manager，只挂在清空这一个函数上。
 const STORE_RESET_CODE_HASH = defineSecret('STORE_RESET_CODE_HASH');
 function resetCodeHash(): string {
   try {

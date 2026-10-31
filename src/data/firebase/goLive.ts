@@ -1,5 +1,5 @@
 /**
- * 开业前一次性清空测试数据：预览（每类多少条、是否已锁定）与清空。清空可能较久，用长超时；
+ * 清空测试数据（可多次使用）：预览（每类多少条、上次清空时间、是否因输错被锁）与清空。清空可能较久，用长超时；
  * 结果不明（网络中断）时按 operationId 查操作记录，不自动重试（重试要老板再输入一次确认码）。
  * 确认码只随这一次请求发给后端，不在本地保存。
  */
@@ -12,15 +12,14 @@ const RESET_TIMEOUT_MS = 560_000;
 
 export interface GoLivePreview {
   status: GoLiveStatus;
-  liveAtMs: number | null;
+  lastResetAtMs: number | null;
   lockedUntilMs: number | null;
   failedAttempts: number;
   counts: Record<string, number>;
 }
 
 export interface GoLiveResult {
-  status: 'live';
-  liveAtMs: number;
+  lastResetAtMs: number;
   deleted: Record<string, number>;
   deletedTotal: number;
 }

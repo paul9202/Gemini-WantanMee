@@ -1,8 +1,9 @@
 /**
- * 开业前一次性清空测试数据：清空哪些集合（按界面分组）、保留什么。前端展示与后端删除共用这一份清单。
+ * 清空测试数据（可多次使用，只要老板输入店主 IC）：清空哪些集合（按界面分组）、保留什么。前端展示与后端删除共用这一份清单。
  * 保留的设置类数据（菜单、配方、食材清单、成员、设备、收银机、门店设置、开档成本、经营目标）绝不在清单里。
  */
-export type GoLiveStatus = 'testing' | 'resetting' | 'live';
+/** ready：可以清空；resetting：正在清空（中途失败的话可再次确认继续）。旧版本留下的 testing / live 都按 ready 处理。 */
+export type GoLiveStatus = 'ready' | 'resetting';
 
 export const GO_LIVE_RESET_GROUPS = [
   { id: 'orders', label: '订单与后厨单', collections: ['orders', 'kitchenTickets', 'orderCosts'] },

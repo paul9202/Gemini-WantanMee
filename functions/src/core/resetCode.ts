@@ -1,5 +1,5 @@
 /**
- * 开业清空的确认码（店主 IC）只以 scrypt 哈希存在 Secret Manager（STORE_RESET_CODE_HASH）；
+ * 清空测试数据的确认码（店主 IC）只以 scrypt 哈希存在 Secret Manager（STORE_RESET_CODE_HASH）；
  * 代码、网页、Firestore 与日志里都不出现原文。格式：scrypt$N$r$p$<salt base64>$<hash base64>。
  * IC 常写成 910101-01-0101：比对前去掉「-」与空格。
  */

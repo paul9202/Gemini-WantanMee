@@ -1,6 +1,6 @@
 /**
- * 设置 · 开业前清空测试数据（一次性）。只限老板：先看每类会删多少条，再输入店主 IC、勾选「无法恢复」才能清空。
- * 清空完成后门店标记为正式营业，这里只显示完成时间，不再提供清空。IC 只随这一次请求发给后台，不保存。
+ * 设置 · 清空测试数据（可多次使用，不限时间）。只限老板：先看每类会删多少条，再输入店主 IC、勾选「无法恢复」才能清空。
+ * 清空后这里显示上次清空的时间，仍可再清空。IC 只随这一次请求发给后台，不保存。
  */
 import { useState } from 'react';
 import { GO_LIVE_KEPT_LABELS, GO_LIVE_RESET_GROUPS } from '../../domain/goLive';
@@ -23,16 +23,8 @@ export function GoLiveReset({ setMsg }: { setMsg: (m: Msg) => void }) {
 
   if (!p) {
     return (
-      <Section title="开业前清空测试数据">
+      <Section title="清空测试数据">
         <p className={preview.error ? 'text-danger' : 'text-ink-2'}>{preview.error ? `读取失败：${preview.error}` : '正在读取…'}</p>
-      </Section>
-    );
-  }
-
-  if (p.status === 'live') {
-    return (
-      <Section title="开业前清空测试数据" hint="已完成">
-        <p>已于 <b>{p.liveAtMs ? time(p.liveAtMs) : '—'}</b> 清空测试数据并正式营业。这个功能已锁定，不能再清空。</p>
       </Section>
     );
   }
@@ -41,8 +33,9 @@ export function GoLiveReset({ setMsg }: { setMsg: (m: Msg) => void }) {
   const total = groups.reduce((n, g) => n + g.count, 0);
 
   return (
-    <Section title="开业前清空测试数据" hint="只能用一次 · 删除后无法恢复">
-      <p className="text-sm">正式营业前用一次：删除试营业 / 测试期间的交易和收支记录，菜单和设置都保留。<b className="text-danger">不做备份，删除后无法恢复。</b>清空完成后自动锁定。</p>
+    <Section title="清空测试数据" hint="可多次使用 · 删除后无法恢复">
+      <p className="text-sm">删除目前所有的交易和收支记录（试营业 / 测试期间的），菜单和设置都保留。可以多次使用，只需输入店主 IC。<b className="text-danger">不做备份，删除后无法恢复。</b></p>
+      {p.lastResetAtMs !== null && <p className="mt-1 text-sm text-ink-2">上次清空：{time(p.lastResetAtMs)}</p>}
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         <div className="rounded-xl border border-danger/40 bg-danger-bg/40 p-3">
           <div className="mb-1 font-semibold text-danger">会清空（共 {total} 条）</div>
@@ -67,7 +60,7 @@ export function GoLiveReset({ setMsg }: { setMsg: (m: Msg) => void }) {
         <ConfirmDialog total={total} lockedUntilMs={p.lockedUntilMs} onClose={() => setOpen(false)}
           onDone={(deletedTotal) => {
             setOpen(false);
-            setMsg({ ok: true, text: `已清空 ${deletedTotal} 条测试记录，门店已标记为正式营业。请收银员重新开班，其他设备刷新页面。` });
+            setMsg({ ok: true, text: `已清空 ${deletedTotal} 条测试记录。请收银员重新开班，其他设备刷新页面。` });
             preview.refresh();
           }}
           onChanged={preview.refresh} />
@@ -123,7 +116,7 @@ function ConfirmDialog({ total, lockedUntilMs, onClose, onDone, onChanged }: {
       </label>
       <label className="mt-4 flex items-start gap-2">
         <input type="checkbox" checked={understood} disabled={busy} onChange={(e) => setUnderstood(e.target.checked)} className="mt-1 h-5 w-5" />
-        <span>我知道删除后<b className="text-danger">无法恢复</b>，也没有备份；清空后这个功能会锁定。</span>
+        <span>我知道删除后<b className="text-danger">无法恢复</b>，也没有备份。</span>
       </label>
       {locked && <p role="alert" className="mt-3 rounded-lg bg-warn-bg px-3 py-2 text-sm text-warn">输错次数太多，{time(lockedUntil!)} 后可再试。</p>}
       {error && !locked && <p role="alert" className="mt-3 rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger">{error}</p>}

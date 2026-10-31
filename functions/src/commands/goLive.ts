@@ -1,10 +1,10 @@
 /**
- * 开业前一次性清空测试数据。只限老板，并且必须输入确认码（店主 IC；后台只存哈希）。
+ * 清空测试数据，可以多次使用、不限时间。只限老板，并且必须输入确认码（店主 IC；后台只存哈希）。
  * - 清空：GO_LIVE_RESET_GROUPS 里的交易、收支、AI 记成本、操作与审计记录（连同子集合），以及收据图片。
  * - 保留：菜单、配方、食材清单、成员、设备、收银机、门店设置、开档成本与经营目标。为了让保留的数据仍然自洽：
  *   餐牌全部放回「可用」；收银机解除旧班次（序号不归零，否则收银机会报序号断档）；开档成本解除与已删支出的关联。
  * - 数据可能超过单个事务上限：先在事务里核对确认码并标记「清空中」，再分批删除；中途失败可再次输入确认码继续。
- *   完成后 config/goLive.status = 'live'，从此锁定，不能再清空。连续输错 5 次锁 30 分钟。
+ *   完成后 config/goLive 回到 ready 并记下这次清空的时间，之后仍可再清空。连续输错 5 次锁 30 分钟。
  * - 按老板的决定不做备份：删除不可恢复。确认码不写进操作记录、审计或日志。
  */
 import { Firestore } from 'firebase-admin/firestore';
@@ -29,15 +29,16 @@ export interface GoLiveDeps {
 
 export interface GoLiveState {
   status: GoLiveStatus;
-  liveAtMs: number | null;
+  lastResetAtMs: number | null;
   lockedUntilMs: number | null;
   failedAttempts: number;
 }
 
 function stateOf(raw: Record<string, unknown> | undefined): GoLiveState {
   return {
-    status: raw?.status === 'live' || raw?.status === 'resetting' ? raw.status : 'testing',
-    liveAtMs: (raw?.liveAtMs as number | undefined) ?? null,
+    status: raw?.status === 'resetting' ? 'resetting' : 'ready',
+    // 旧版本（一次性清空）把完成时间记在 liveAtMs。
+    lastResetAtMs: (raw?.lastResetAtMs as number | undefined) ?? (raw?.liveAtMs as number | undefined) ?? null,
     lockedUntilMs: (raw?.lockedUntilMs as number | undefined) ?? null,
     failedAttempts: (raw?.failedAttempts as number | undefined) ?? 0,
   };
@@ -54,13 +55,13 @@ async function countAll(store: StoreRefs): Promise<Record<string, number>> {
   return Object.fromEntries(counts);
 }
 
-/** 清空前预览：每类会删多少条，以及是否已锁定。不需要确认码，不改任何数据。 */
+/** 清空前预览：每类会删多少条、上次清空时间、是否因输错被锁。不需要确认码，不改任何数据。 */
 export async function previewStoreReset(db: Firestore, uid: string | undefined, raw: unknown) {
   const o = obj(raw, ['storeId']);
   const store = storeRefs(db, storeId(o));
   requireOwner(uid, uid ? (await store.member(uid).get()).data() : undefined);
   const state = stateOf((await store.configGoLive.get()).data());
-  return { ...state, counts: state.status === 'live' ? {} : await countAll(store) };
+  return { ...state, counts: await countAll(store) };
 }
 
 export async function resetStoreForOpening(db: Firestore, uid: string | undefined, raw: unknown, deps: GoLiveDeps) {
@@ -77,7 +78,6 @@ export async function resetStoreForOpening(db: Firestore, uid: string | undefine
     requireOwner(uid, member);
     const gRaw = (await tx.get(store.configGoLive)).data();
     const g = stateOf(gRaw);
-    if (g.status === 'live') throw new CommandError('GO_LIVE_LOCKED', '已经清空过并正式营业，不能再清空', { liveAtMs: g.liveAtMs });
     if (codeOk === null) throw new CommandError('RESET_NOT_CONFIGURED', '还没有设置确认码');
     if (g.lockedUntilMs !== null && g.lockedUntilMs > t) throw new CommandError('RESET_LOCKED_OUT', '输错次数太多，请稍后再试', { lockedUntilMs: g.lockedUntilMs });
     const started = gRaw?.startedAtMs as number | undefined;
@@ -125,18 +125,18 @@ export async function resetStoreForOpening(db: Firestore, uid: string | undefine
   // 3) 收据图片（AI 记成本草稿的附件）。
   await deps.deleteStoragePrefix(`stores/${input.storeId}/ai-cost-drafts/`);
 
-  // 4) 锁定，并留下这一次清空本身的操作与审计记录（不含确认码）。
+  // 4) 记下这次清空（之后仍可再清空），并留下这一次清空本身的操作与审计记录（不含确认码）。
   const deletedTotal = Object.values(deleted).reduce((a, b) => a + b, 0);
-  const result = { status: 'live' as const, liveAtMs: t, deleted, deletedTotal };
+  const result = { lastResetAtMs: t, deleted, deletedTotal };
   const batch = db.batch();
-  batch.set(store.configGoLive, { status: 'live', liveAtMs: t, liveBy: ownerUid, startedAtMs: gate.startedAtMs, deleted, deletedTotal, failedAttempts: 0, lockedUntilMs: null }, { merge: true });
+  batch.set(store.configGoLive, { status: 'ready', lastResetAtMs: t, lastResetBy: ownerUid, startedAtMs: gate.startedAtMs, deleted, deletedTotal, failedAttempts: 0, lockedUntilMs: null }, { merge: true });
   batch.set(store.operation(input.operationId), {
     type: 'resetStoreForOpening', actorUid: ownerUid, committedAtMs: t, result,
     payloadHash: await payloadHash({ type: 'resetStoreForOpening', storeId: input.storeId, payload: { storeId: input.storeId } }),
   });
   batch.set(store.audit(input.operationId), {
     operationId: input.operationId, action: 'resetStoreForOpening', actorUid: ownerUid, actorRole: 'owner',
-    entityId: 'store', before: { deleted, deletedTotal }, after: { status: 'live' }, atMs: t,
+    entityId: 'store', before: { deleted, deletedTotal }, after: { lastResetAtMs: t }, atMs: t,
   });
   await batch.commit();
   return result;

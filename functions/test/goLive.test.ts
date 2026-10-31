@@ -1,5 +1,5 @@
 /**
- * 开业前清空测试数据（Emulator）。清空命令在进程内调用，以注入确认码哈希、固定时钟和收据图片删除；
+ * 清空测试数据（Emulator，可多次使用）。清空命令在进程内调用，以注入确认码哈希、固定时钟和收据图片删除；
  * 清空后的开班、下单与操作结果查询仍走真实 Callable。确认码只用虚构号码。
  */
 import test, { after } from 'node:test';
@@ -65,7 +65,7 @@ test('只限老板：收银、后厨、未登录都不能预览或清空；没�
   assert.equal(await countDocs(f.storeId, 'orders'), 1, '被拒绝时不删任何东西');
 });
 
-test('清空：删交易与收支（含子集合和收据图片），保留设置；餐牌、收银机、开档成本自洽；完成后锁定；之后能正常开班下单', async () => {
+test('清空：删交易与收支（含子集合和收据图片），保留设置；餐牌、收银机、开档成本自洽；之后能正常开班下单，也能再清空', async () => {
   const f = await setupStore();
   const first = await placeOrder(f, { tokenNumber: 1 });
   const second = await placeOrder(f, { tokenNumber: 2 });
@@ -82,7 +82,8 @@ test('清空：删交易与收支（含子集合和收据图片），保留设�
   assert.ok(before.register.shiftId, '收银机挂着测试班次');
 
   const preview = await previewStoreReset(admin(), f.owner.uid, { storeId: f.storeId });
-  assert.equal(preview.status, 'testing');
+  assert.equal(preview.status, 'ready');
+  assert.equal(preview.lastResetAtMs, null);
   assert.equal(preview.counts.orders, 2);
   assert.ok(preview.counts.payments >= 1 && preview.counts.expenses === 1 && preview.counts.costDrafts === 1);
 
@@ -94,7 +95,7 @@ test('清空：删交易与收支（含子集合和收据图片），保留设�
   const prefixes: string[] = [];
   const opId = uuid();
   const r = await reset(f, f.owner.uid, '000101 01 0001', deps(undefined, prefixes), opId);
-  assert.equal(r.status, 'live');
+  assert.equal(typeof r.lastResetAtMs, 'number');
   assert.equal(r.deleted.orders, 2);
   assert.equal(r.deletedTotal, Object.values(r.deleted).reduce((a, b) => a + b, 0));
   assert.deepEqual(prefixes, [`stores/${f.storeId}/ai-cost-drafts/`], '收据图片按门店前缀删除');
@@ -121,13 +122,9 @@ test('清空：删交易与收支（含子集合和收据图片），保留设�
   const reg = (await doc(f, 'registers/front-01').get()).data()!;
   assert.equal(reg.shiftId, null, '收银机解除旧班次');
   assert.equal(reg.lastAppliedSequence, before.register.lastAppliedSequence, '序号不归零');
-  assert.equal((await doc(f, 'config/goLive').get()).data()!.status, 'live');
-
-  // 锁定：再清空被拒绝；预览只显示已完成。
-  assert.equal((await reason(reset(f, f.owner.uid, CODE, deps()))).code, 'GO_LIVE_LOCKED');
-  const after = await previewStoreReset(admin(), f.owner.uid, { storeId: f.storeId });
-  assert.equal(after.status, 'live');
-  assert.deepEqual(after.counts, {});
+  const g = (await doc(f, 'config/goLive').get()).data()!;
+  assert.equal(g.status, 'ready', '清空后不锁定');
+  assert.equal(g.lastResetAtMs, r.lastResetAtMs);
 
   // 结果不明时可按操作 ID 查回结果。
   const op = await f.owner.call<{ status: string; result: { deletedTotal: number } }>('getOperationResult', { storeId: f.storeId, operationId: opId });
@@ -141,6 +138,31 @@ test('清空：删交易与收支（含子集合和收据图片），保留设�
   const fresh = await placeOrder(f, { tokenNumber: 1 });
   assert.equal(fresh.result.receiptNumber, first.result.receiptNumber, '小票编号重新从第一号开始');
   assert.equal(await countDocs(f.storeId, 'orders'), 1);
+
+  // 可以多次使用：预览显示上次清空时间，再输入 IC 就能再清空一次。
+  const again = await previewStoreReset(admin(), f.owner.uid, { storeId: f.storeId });
+  assert.equal(again.status, 'ready');
+  assert.equal(again.lastResetAtMs, r.lastResetAtMs);
+  assert.equal(again.counts.orders, 1);
+  const r2 = await reset(f, f.owner.uid, CODE, deps());
+  assert.equal(r2.deleted.orders, 1);
+  assert.ok(r2.lastResetAtMs >= r.lastResetAtMs);
+  assert.equal(await countDocs(f.storeId, 'orders'), 0);
+  assert.equal((await doc(f, 'registers/front-01').get()).data()!.shiftId, null, '收银机再次解除班次');
+});
+
+test('旧版本留下的「已锁定」（status = live）不再挡住清空，完成时间当作上次清空时间', async () => {
+  const f = await setupStore();
+  await placeOrder(f);
+  const liveAtMs = Date.UTC(2026, 9, 28, 2);
+  await doc(f, 'config/goLive').set({ status: 'live', liveAtMs });
+  const p = await previewStoreReset(admin(), f.owner.uid, { storeId: f.storeId });
+  assert.equal(p.status, 'ready');
+  assert.equal(p.lastResetAtMs, liveAtMs);
+  assert.equal(p.counts.orders, 1);
+  const r = await reset(f, f.owner.uid, CODE, deps());
+  assert.equal(r.deleted.orders, 1);
+  assert.equal((await doc(f, 'config/goLive').get()).data()!.status, 'ready');
 });
 
 test('输错 5 次锁 30 分钟（期间输对也不行）；清空中途失败可继续，进行中不能重复发起', async () => {
@@ -164,6 +186,6 @@ test('输错 5 次锁 30 分钟（期间输对也不行）；清空中途失败�
   assert.equal((await reason(reset(f, f.owner.uid, CODE, deps(clock)))).code, 'RESET_IN_PROGRESS', '另一个清空还在进行');
   await doc(f, 'config/goLive').set({ startedAtMs: clock.ms - 11 * 60_000 }, { merge: true });
   const r = await reset(f, f.owner.uid, CODE, deps(clock));
-  assert.equal(r.status, 'live', '上次中途失败可以继续完成');
+  assert.equal(r.lastResetAtMs, clock.ms, '上次中途失败可以继续完成');
   assert.equal(await countDocs(f.storeId, 'orders'), 0);
 });

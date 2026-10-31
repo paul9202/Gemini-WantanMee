@@ -87,7 +87,7 @@ export function storeRefs(db: Firestore, storeId: string) {
     costAnalysis: (key: string) => root.collection('costAnalysis').doc(key),
     aiUsage: (date: string) => root.collection('aiUsage').doc(date),
     configAiCost: root.collection('config').doc('aiCost'),
-    // 开业前一次性清空测试数据的状态（testing / resetting / live）与输错次数；确认码哈希不在这里。
+    // 清空测试数据的状态（ready / resetting）、上次清空时间与输错次数；确认码哈希不在这里。
     configGoLive: root.collection('config').doc('goLive'),
   };
 }

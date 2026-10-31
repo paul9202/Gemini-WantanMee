@@ -49,7 +49,6 @@ const REASONS_EN: Record<string, string> = {
   RESET_LOCKED_OUT: 'Too many wrong attempts — please try again later',
   RESET_IN_PROGRESS: 'Clearing is already in progress — refresh in a moment',
   RESET_NOT_CONFIGURED: 'The confirmation IC has not been set up yet',
-  GO_LIVE_LOCKED: 'Test data was already cleared for opening; this cannot be done again',
 };
 const REASONS: Record<string, string> = {
   UNAUTHENTICATED: '登录已失效，请重新登录',
@@ -111,7 +110,6 @@ const REASONS: Record<string, string> = {
   RESET_LOCKED_OUT: '输错次数太多，请稍后再试',
   RESET_IN_PROGRESS: '正在清空，请稍候刷新',
   RESET_NOT_CONFIGURED: '还没有设置确认用的 IC，请先完成后台设置',
-  GO_LIVE_LOCKED: '已经清空过测试数据并正式营业，不能再清空',
 };
 
 export function reasonText(code: string): string {

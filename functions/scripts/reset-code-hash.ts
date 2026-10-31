@@ -1,5 +1,5 @@
 /**
- * 生成「开业前清空测试数据」确认码（店主 IC）的哈希，供写入 Secret Manager 的 STORE_RESET_CODE_HASH。
+ * 生成「清空测试数据」确认码（店主 IC）的哈希，供写入 Secret Manager 的 STORE_RESET_CODE_HASH。
  * 原文不写文件、不进日志；终端里输入时不回显。用法（在 functions 目录）：
  *   npx tsx scripts/reset-code-hash.ts | npx firebase functions:secrets:set STORE_RESET_CODE_HASH --data-file=- --project wantan-staging
  * 设置后需要重新部署 resetStoreForOpeningCmd 才会用上新版本。
