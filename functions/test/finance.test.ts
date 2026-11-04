@@ -76,14 +76,14 @@ test('F01–F06/§11-11 一整天账本 → 新版关账：只汇总统一收款
   assert.equal('expectedCashSen' in fg || 'cashDiffSen' in fg || 'qrDiffSen' in fg, false, '不推算钱箱 / QR 差额');
   assert.ok(closed.exceptions.unpaidOrders.some((o: { id: string }) => o.id === a.result.orderId));
   assert.equal(s.netReceiptsSen, 900);
-  assert.equal(s.allocatedCostUnits, 3210 + 3635 + 4280, '待做取消的 D 单成本已反转');
+  assert.equal(s.allocatedCostUnits, 3430 + 3855 + 4280, '待做取消的 D 单成本已反转');
   assert.equal(s.wastageCostUnits, 850, '已耗材的取消单损耗不重复扣');
   assert.equal(s.wastageAlreadyAllocatedCount, 1);
   assert.equal(s.otherOpexSen, 500);
   assert.equal(s.cash.purchasesPaidSen, 3000, '作废的 30000 不计');
   const fixed = fixedCostForDate(DEFAULT_FIXED_COST, date);
   assert.equal(s.fixedCostSen, fixed);
-  assert.equal(s.estimatedProfitSen, 900 - costUnitsToSen(11125 + 850) - fixed - 500);
+  assert.equal(s.estimatedProfitSen, 900 - costUnitsToSen(11565 + 850) - fixed - 500);
   assert.ok(closed.exceptions.unfinishedOrders.some((o: { id: string }) => o.id === a.result.orderId));
   // 快照落库且不可写；未登记金额随快照结转；关账后写屏障
   const v1 = (await doc(f, `dailyReports/${date}/versions/1`))!;

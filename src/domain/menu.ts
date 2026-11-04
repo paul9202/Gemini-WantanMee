@@ -78,8 +78,8 @@ export interface MenuVersion {
 }
 
 const NOODLE_SIZES: SizeDef[] = [
-  { id: 'small', nameZh: '小', nameEn: 'Small', badge: '1', priceSen: 700, kosongPriceSen: 350, noodleHalfUnits: 2, wantonCount: 3, charSiewPortions: 1 },
-  { id: 'medium', nameZh: '中', nameEn: 'Medium', badge: '1½', priceSen: 900, kosongPriceSen: 450, noodleHalfUnits: 3, wantonCount: 3, charSiewPortions: 1 },
+  { id: 'small', nameZh: '小', nameEn: 'Small', badge: '1', priceSen: 700, kosongPriceSen: 350, noodleHalfUnits: 2, wantonCount: 4, charSiewPortions: 1 },
+  { id: 'medium', nameZh: '中', nameEn: 'Medium', badge: '1½', priceSen: 900, kosongPriceSen: 450, noodleHalfUnits: 3, wantonCount: 4, charSiewPortions: 1 },
   { id: 'large', nameZh: '大', nameEn: 'Large', badge: '2', priceSen: 1100, kosongPriceSen: 550, noodleHalfUnits: 4, wantonCount: 4, charSiewPortions: 1 },
 ];
 

@@ -75,8 +75,8 @@ test('发布 BOM：面薄单独成本只影响之后的订单；收银不能发�
   assert.equal((await cfg(f)).activeBomVersion, r.version);
   const after = await placeOrder(f, { tokenNumber: 2, lines: [{ config: poh, quantity: 1 }] });
   const cost = (id: string) => admin().doc(`stores/${f.storeId}/orderCosts/${id}`).get().then((s) => s.data()!);
-  assert.equal((await cost(before.result.orderId)).totalCostUnits, 3210, '旧单成本不变');
-  assert.equal((await cost(after.result.orderId)).totalCostUnits, 3310);
+  assert.equal((await cost(before.result.orderId)).totalCostUnits, 3430, '旧单成本不变');
+  assert.equal((await cost(after.result.orderId)).totalCostUnits, 3530);
   assert.equal((await cost(after.result.orderId)).bomVersion, r.version);
   const bomDoc = (await admin().doc(`stores/${f.storeId}/bomVersions/${r.version}`).get()).data()!;
   assert.ok(!bomDoc.bom.pendingCalibration.includes('noodleHalfBall.mee_poh'));

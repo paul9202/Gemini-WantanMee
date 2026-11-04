@@ -282,7 +282,7 @@ test('O10/§11-1 顶部合计包括全部有效未出餐电子单（新单都是
   assert.equal(active.portions, 5);
   assert.equal(active.thinEggHalfUnits, 3 * 2 + 2, '2×中(1.5) + Kosong 小(1) 细面');
   assert.equal(active.meePohHalfUnits, 2);
-  assert.equal(active.wantons, 2 * 3 + 0 + 3 + 15);
+  assert.equal(active.wantons, 2 * 4 + 0 + 4 + 15);
   assert.equal(active.kosong, 1);
   assert.deepEqual(active.sauce, { black: 2, white: 0, red: 1 });
   assert.equal(active.soupNoodle, 1);

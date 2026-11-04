@@ -11,8 +11,8 @@ const menu = MENU_V1;
 const noodle = (size: NoodleSize, patch: Partial<LineConfig> = {}): LineConfig =>
   normalizeConfig(menu, { ...defaultConfig(menu, 'dry_noodle', 'black'), size, ...patch });
 
-test('M01 小/中/大普通面，两种面种：700/900/1100 sen；面球1/1.5/2；云吞3/3/4', () => {
-  const expected = { small: [700, 2, 3], medium: [900, 3, 3], large: [1100, 4, 4] } as const;
+test('M01 小/中/大普通面，两种面种：700/900/1100 sen；面球1/1.5/2；云吞4/4/4', () => {
+  const expected = { small: [700, 2, 4], medium: [900, 3, 4], large: [1100, 4, 4] } as const;
   for (const noodleType of ['thin_egg', 'mee_poh'] as const) {
     for (const kind of ['dry_noodle', 'soup_noodle'] as const) {
       for (const [size, [price, half, wantons]] of Object.entries(expected)) {
@@ -112,23 +112,23 @@ test('M06 小面加叉烧/加云吞/二者：900/900/1100；BOM 各加一次', (
   assert.ok(validateConfig(menu, { ...base, addOns: ['char_siew', 'char_siew'] }).some((i) => i.code === 'DUPLICATE_ADDON'));
 });
 
-test('M07 中面 BOM = 1.5×850+3×220+1200+500 = 3635 单位 = RM3.635', () => {
+test('M07 中面 BOM = 1.5×850+4×220+1200+500 = 3855 单位 = RM3.855', () => {
   const cost = unitCostUnits(menu, BOM_V1, noodle('medium'));
-  assert.equal(cost, 3635);
-  assert.equal(formatCostRMPrecise(cost), 'RM3.635');
-  assert.equal(formatCostRM(cost), 'RM3.64');
+  assert.equal(cost, 3855);
+  assert.equal(formatCostRMPrecise(cost), 'RM3.855');
+  assert.equal(formatCostRM(cost), 'RM3.86');
 });
 
-test('M08 2 份中面打包：包装 400 单位；售价不加包装费；总成本 7670 = RM7.67', () => {
+test('M08 2 份中面打包：包装 400 单位；售价不加包装费；总成本 8110 = RM8.11', () => {
   let cart = setServiceMode(emptyCart(), 'takeaway');
   cart = addLine(menu, cart, noodle('medium'), 'l1', 2);
   const t = computeTotals(menu, BOM_V1, cart);
   assert.equal(t.packagingCostUnits, 400);
   assert.equal(t.totalSen, 1800);
-  assert.equal(t.totalCostUnits, 7670);
-  assert.equal(formatCostRM(t.totalCostUnits), 'RM7.67');
+  assert.equal(t.totalCostUnits, 8110);
+  assert.equal(formatCostRM(t.totalCostUnits), 'RM8.11');
   // 切回堂食：包装归零，整单重算
-  assert.equal(computeTotals(menu, BOM_V1, setServiceMode(cart, 'dine_in')).totalCostUnits, 7270);
+  assert.equal(computeTotals(menu, BOM_V1, setServiceMode(cart, 'dine_in')).totalCostUnits, 7710);
 });
 
 test('M09 汤品打包保留汤本体；只有干捞餐显示不附送清汤', () => {

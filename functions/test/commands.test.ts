@@ -45,7 +45,7 @@ test('§11-1/2/3/4 闭环：下单无付款记录 → 直接制作中 → 后厨
   assert.equal(order.items[1].sauce, null);
   assert.equal(await countDocs(f.storeId, 'payments'), 0, '未付款不产生付款流水');
   const cost = (await s(`orderCosts/${orderId}`).get()).data()!;
-  assert.equal(cost.totalCostUnits, 11170);
+  assert.equal(cost.totalCostUnits, 11610);
   assert.equal((await s('tokens/18').get()).data()!.state, 'held');
   assert.equal((await s('registers/front-01').get()).data()!.lastAppliedSequence, 1);
 
@@ -277,7 +277,7 @@ test('§11-3/7/8 取消：申请期间占牌且冻结；未做→反转成本、
   await f.cashier.call('requestCancel', lifecycle(f, p, 1, { reason: '打错单' }));
   const c2 = await f.kitchen.call<{ paymentState: string }>('confirmKitchenCancel', lifecycle(f, p, 2, { consumed: true }));
   assert.equal(c2.paymentState, 'refund_due');
-  assert.equal((await s(`orderCosts/${p}`).get()).data()!.allocatedCostUnits, 2 * 425 + 3 * 220 + 1200 + 500, '已消耗成本保留');
+  assert.equal((await s(`orderCosts/${p}`).get()).data()!.allocatedCostUnits, 2 * 425 + 4 * 220 + 1200 + 500, '已消耗成本保留');
   assert.equal((await s('tokens/12').get()).data()!.state, 'available');
   assert.equal(await countDocs(f.storeId, 'refunds'), 0, '取消不等于已退款');
 
