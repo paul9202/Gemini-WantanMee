@@ -126,6 +126,8 @@ export interface OrderOptions {
   clientOrderId?: string;
   menuVersion?: string;
   addOnToOrderId?: string;
+  /** 同牌加单：挂到这张仍占着该牌的单所在的牌上。 */
+  joinTokenOrderId?: string;
 }
 
 export function orderPayload(f: StoreFixture, o: OrderOptions = {}) {
@@ -147,6 +149,7 @@ export function orderPayload(f: StoreFixture, o: OrderOptions = {}) {
       expectedTotalSen: o.expectedTotalSen ?? 700,
       deviceAcceptedAtMs: Date.now(),
       ...(o.addOnToOrderId ? { addOnToOrderId: o.addOnToOrderId } : {}),
+      ...(o.joinTokenOrderId ? { joinTokenOrderId: o.joinTokenOrderId } : {}),
     },
   };
 }
@@ -154,7 +157,10 @@ export function orderPayload(f: StoreFixture, o: OrderOptions = {}) {
 /** 成功创建订单并推进本机序号；paid=true 时随后登记全额收款。 */
 export async function placeOrder(f: StoreFixture, o: OrderOptions = {}) {
   const payload = orderPayload(f, o);
-  const result = await f.cashier.call<{ orderId: string; receiptNumber: string; totalSen: number; businessDate: string; paymentState: string; fulfillmentStatus: string }>('createOrder', payload);
+  const result = await f.cashier.call<{
+    orderId: string; receiptNumber: string; totalSen: number; businessDate: string; paymentState: string; fulfillmentStatus: string;
+    sharedToken: boolean; addOnToOrderId: string | null;
+  }>('createOrder', payload);
   f.seq.value = payload.sequence;
   if (o.paid) await pay(f, result.orderId, result.totalSen);
   return { payload, result };

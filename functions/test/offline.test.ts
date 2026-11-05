@@ -286,3 +286,29 @@ test('人工出餐不会释放已属于新单的牌（旧离线日志重放）',
   const tok = (await doc(f, 'tokens/09'))!;
   assert.deepEqual([tok.state, tok.orderId], ['held', online.result.orderId]);
 });
+
+test('同牌加单结果不明转人工补账：带着同桌原单同步，挂到仍被同桌占着的牌上，不进冲突待核对；不带的照旧冲突', async () => {
+  const f = await setupStore();
+  const online = await placeOrder(f, { tokenNumber: 12 });
+  const ev = makeEvents(f);
+  const c = uuid();
+  const created = ev.create(c, 12, { method: 'none' });
+  (created.payload as Record<string, unknown>).joinTokenOrderId = online.result.orderId;
+  const r = await sync(f, [created]);
+  assert.deepEqual(r.map((x) => x.status), ['accepted']);
+  let tok = (await doc(f, 'tokens/12'))!;
+  assert.deepEqual(tok.orderIds, [online.result.orderId, c], '两张单同挂 12 号');
+  assert.equal((await doc(f, `orders/${c}`))!.sharedToken, true);
+  // 人工出餐只摘本单，在线原单仍占牌
+  const done = await sync(f, [ev.served(c)]);
+  assert.deepEqual(done.map((x) => x.status), ['accepted']);
+  tok = (await doc(f, 'tokens/12'))!;
+  assert.equal(tok.state, 'held');
+  assert.deepEqual(tok.orderIds, [online.result.orderId]);
+  // 同牌意图指向不在这张牌上的单：照旧冲突待核对，不挂到别人的牌上
+  const other = await placeOrder(f, { tokenNumber: 13 });
+  const ev2 = makeEvents(f);
+  const bad = ev2.create(uuid(), 12, { method: 'none' });
+  (bad.payload as Record<string, unknown>).joinTokenOrderId = other.result.orderId;
+  assert.deepEqual((await sync(f, [bad])).map((x) => x.reasonCode), ['TOKEN_CONFLICT']);
+});

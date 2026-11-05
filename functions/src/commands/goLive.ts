@@ -111,7 +111,7 @@ export async function resetStoreForOpening(db: Firestore, uid: string | undefine
   const writer = db.bulkWriter();
   for (const tok of (await store.root.collection('tokens').get()).docs) {
     const d = tok.data();
-    writer.set(tok.ref, { number: (d.number as number) ?? Number(tok.id), state: 'available', orderId: null, version: ((d.version as number) ?? 0) + 1, updatedAtMs: t });
+    writer.set(tok.ref, { number: (d.number as number) ?? Number(tok.id), state: 'available', orderId: null, orderIds: [], sessionOrderIds: [], version: ((d.version as number) ?? 0) + 1, updatedAtMs: t });
   }
   for (const reg of (await store.root.collection('registers').get()).docs) {
     if (reg.data().shiftId) writer.update(reg.ref, { shiftId: null });

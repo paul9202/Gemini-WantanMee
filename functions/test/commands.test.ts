@@ -1,7 +1,8 @@
 /**
  * Emulator 命令集成测试：真实 Auth 身份 → Callable（asia-southeast1）→ Functions 事务 → Firestore。
  * 覆盖：下单即送厨（无付款流水）→ 厨房确认 → 出餐自动释放餐牌 → 同牌新单 → 旧单补登记收款；
- * 以及幂等、并发、越权、篡改，收款独立登记、取消与成本、撤回不抢牌、跨日收款（DESIGN 2026-10-23 §11）。
+ * 以及幂等、并发、越权、篡改，收款独立登记、取消与成本、撤回不抢牌、跨日收款（DESIGN 2026-10-23 §11）；
+ * 加单与同牌加单（一张牌挂多张单，逐张出餐 / 取消，全部摘完才释放）。
  */
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -405,6 +406,99 @@ test('加单：已送厨（已出餐）的单，客人吃完再加打包；新�
   // 原单已收款：不能再挂加单
   assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 8, addOnToOrderId: root.orderId })), 'ADD_ON_NOT_ALLOWED');
   assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 8, addOnToOrderId: uuid() })), 'NOT_FOUND');
+});
+
+test('同牌加单：拿着 5 号牌再点一碗挂到同一张牌；各自厨单与票号；逐张出餐、全部出餐才释放；撤回可挂回；与原单一次结账', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+  const a = (await placeOrder(f, { tokenNumber: 5 })).result;
+  assert.equal(a.sharedToken, false);
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 5 })), 'TOKEN_OCCUPIED', '新客人仍不能用占用中的牌');
+
+  const b = (await placeOrder(f, { tokenNumber: 5, joinTokenOrderId: a.orderId, lines: [{ config: noodle(), quantity: 2 }], expectedTotalSen: 1400 })).result;
+  assert.deepEqual([b.sharedToken, b.addOnToOrderId], [true, a.orderId], '原单待收款：自动并入它的组');
+  assert.notEqual(b.receiptNumber, a.receiptNumber, '同牌加单有自己的票号');
+  const tok = (await s('tokens/05').get()).data()!;
+  assert.deepEqual([tok.state, tok.orderId, tok.orderIds], ['held', a.orderId, [a.orderId, b.orderId]]);
+  const bDoc = (await s(`orders/${b.orderId}`).get()).data()!;
+  assert.deepEqual([bDoc.sharedToken, bDoc.tokenNumber, bDoc.addOnTo?.orderId], [true, 5, a.orderId]);
+  assert.equal((await s(`orders/${a.orderId}`).get()).data()!.sharedToken, false);
+  const ticket = (await s(`kitchenTickets/${b.orderId}`).get()).data()!;
+  assert.deepEqual([ticket.sharedToken, ticket.tokenNumber, ticket.receiptNumber, ticket.fulfillmentStatus], [true, 5, b.receiptNumber, 'preparing']);
+
+  // 先出 A：牌仍由 B 占着；撤回 A 挂回同一张牌
+  await f.kitchen.call('serveOrder', lifecycle(f, a.orderId, 1));
+  let t5 = (await s('tokens/05').get()).data()!;
+  assert.deepEqual([t5.state, t5.orderId, t5.orderIds], ['held', b.orderId, [b.orderId]], '只摘 A，牌继续占用');
+  const undo = await f.kitchen.call<{ fulfillmentStatus: string }>('undoServe', lifecycle(f, a.orderId, 2));
+  assert.equal(undo.fulfillmentStatus, 'preparing');
+  t5 = (await s('tokens/05').get()).data()!;
+  assert.equal(t5.state, 'held');
+  assert.ok(t5.orderIds.includes(a.orderId), '撤回：A 挂回 5 号');
+  await f.kitchen.call('serveOrder', lifecycle(f, a.orderId, 3));
+  await f.kitchen.call('serveOrder', lifecycle(f, b.orderId, 1));
+  t5 = (await s('tokens/05').get()).data()!;
+  assert.deepEqual([t5.state, t5.orderId, t5.orderIds, t5.lastReleasedOrderId], ['available', null, [], b.orderId], '全部出餐才释放');
+
+  const group = { storeId: f.storeId, operationId: uuid(), ...f.claim, orders: [{ orderId: a.orderId, amountSen: 700 }, { orderId: b.orderId, amountSen: 1400 }] };
+  const paid = await f.cashier.call<{ amountSen: number }>('recordGroupPayment', group);
+  assert.equal(paid.amountSen, 2100);
+  for (const id of [a.orderId, b.orderId]) assert.equal((await s(`orders/${id}`).get()).data()!.paymentState, 'paid');
+});
+
+test('同牌加单边界：原单已收款单独收；取消其中一张只摘它；牌已给别的客人被拒；牌已空闲则按新客人占同一号', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+
+  // 原单已收款：同牌加单不并组，自己单独收
+  const c = (await placeOrder(f, { tokenNumber: 6, paid: true })).result;
+  const d = (await placeOrder(f, { tokenNumber: 6, joinTokenOrderId: c.orderId })).result;
+  assert.deepEqual([d.sharedToken, d.addOnToOrderId], [true, null]);
+  assert.equal((await s(`orders/${d.orderId}`).get()).data()!.addOnTo, null);
+  assert.deepEqual((await s('tokens/06').get()).data()!.orderIds, [c.orderId, d.orderId]);
+  await pay(f, d.orderId, 700);
+
+  // 取消其中一张：牌继续由另一张占着
+  const e = (await placeOrder(f, { tokenNumber: 7 })).result;
+  const fo = (await placeOrder(f, { tokenNumber: 7, joinTokenOrderId: e.orderId })).result;
+  await f.cashier.call('requestCancel', lifecycle(f, fo.orderId, 1, { reason: '多点了' }));
+  assert.deepEqual((await s('tokens/07').get()).data()!.orderIds, [e.orderId, fo.orderId], '取消待确认期间仍占牌');
+  await f.kitchen.call('confirmKitchenCancel', lifecycle(f, fo.orderId, 2, { consumed: false }));
+  const t7 = (await s('tokens/07').get()).data()!;
+  assert.deepEqual([t7.state, t7.orderId, t7.orderIds], ['held', e.orderId, [e.orderId]]);
+
+  // G 出餐后 8 号给了新客人 H：拿 G 来同牌加单被拒，不挂到 H 的牌上
+  const g = (await placeOrder(f, { tokenNumber: 8 })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, g.orderId, 1));
+  const h = (await placeOrder(f, { tokenNumber: 8 })).result;
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 8, joinTokenOrderId: g.orderId })), 'TOKEN_OCCUPIED');
+  assert.deepEqual((await s('tokens/08').get()).data()!.orderIds, [h.orderId]);
+
+  // I 已出餐、9 号空闲没给别人：同牌加单按新客人占 9 号（不算共用），仍并入 I 的组一起收
+  const i = (await placeOrder(f, { tokenNumber: 9 })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, i.orderId, 1));
+  const j = (await placeOrder(f, { tokenNumber: 9, joinTokenOrderId: i.orderId })).result;
+  assert.deepEqual([j.sharedToken, j.addOnToOrderId], [false, i.orderId]);
+  assert.equal((await s(`orders/${j.orderId}`).get()).data()!.sharedToken, false);
+  const t9 = (await s('tokens/09').get()).data()!;
+  assert.deepEqual([t9.state, t9.orderId, t9.orderIds, t9.sessionOrderIds], ['held', j.orderId, [j.orderId], [j.orderId]]);
+
+  // 显式加单的原单不在这张牌上（过期的加单目标）：拒绝，不把别桌的单并进来
+  const k = (await placeOrder(f, { tokenNumber: 10 })).result;
+  const l = (await placeOrder(f, { tokenNumber: 11 })).result;
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 11, joinTokenOrderId: l.orderId, addOnToOrderId: k.orderId })), 'ADD_ON_NOT_ALLOWED');
+});
+
+test('同牌加单自动并单不超过一次结账上限：同组未收款满 10 张后，新单单独收款', async () => {
+  const f = await setupStore();
+  const root = (await placeOrder(f, { tokenNumber: 14 })).result;
+  for (let n = 0; n < 9; n++) {
+    const r = (await placeOrder(f, { tokenNumber: 14, joinTokenOrderId: root.orderId })).result;
+    assert.equal(r.addOnToOrderId, root.orderId, `第 ${n + 2} 张并入同组`);
+  }
+  const extra = (await placeOrder(f, { tokenNumber: 14, joinTokenOrderId: root.orderId })).result;
+  assert.deepEqual([extra.sharedToken, extra.addOnToOrderId], [true, null], '第 11 张仍挂在 14 号上，但单独收款');
+  assert.equal((await admin().doc(`stores/${f.storeId}/tokens/14`).get()).data()!.orderIds.length, 11);
 });
 
 test('越权：匿名、非成员、他店、后厨下单、停用成员、旧收银机 epoch、缺号', async () => {

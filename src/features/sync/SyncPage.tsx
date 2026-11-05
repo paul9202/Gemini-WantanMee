@@ -128,7 +128,7 @@ export function SyncPage() {
                 // 已人工处理：原订单号与原序号转为人工单补账，之后照常记录人工出餐、回收。
                 const p = op.payload as unknown as {
                   registerId: string; deviceId: string; registerEpoch: number; sequence: number; shiftId: string;
-                  order: { clientOrderId: string; tokenNumber: number; serviceMode: 'dine_in' | 'takeaway'; menuVersion: string; lines: LocalOrder['lines']; expectedTotalSen: number; deviceAcceptedAtMs: number };
+                  order: { clientOrderId: string; tokenNumber: number; serviceMode: 'dine_in' | 'takeaway'; menuVersion: string; lines: LocalOrder['lines']; expectedTotalSen: number; deviceAcceptedAtMs: number; joinTokenOrderId?: string };
                   /** 只有改版前的旧请求才有（下单即收款）。 */
                   payment?: { method: 'cash' | 'qr_manual'; tenderedSen: number | null };
                 };
@@ -136,6 +136,8 @@ export function SyncPage() {
                   clientOrderId: p.order.clientOrderId, offlineReceiptNumber: offlineReceiptNumber(p.registerId, p.sequence), tokenNumber: p.order.tokenNumber,
                   serviceMode: p.order.serviceMode, menuVersion: p.order.menuVersion, lines: p.order.lines, totalSen: p.order.expectedTotalSen,
                   payment: p.payment ? { method: p.payment.method, tenderedSen: p.payment.tenderedSen, qrExternalVerificationNote: p.payment.method === 'qr_manual' ? '在线时已在收款端核对到账（结果不明后转人工补账）' : null } : null,
+                  // 同牌加单：转人工后仍挂在同桌的牌上，而不是和同桌的单冲突。
+                  ...(p.order.joinTokenOrderId ? { joinTokenOrderId: p.order.joinTokenOrderId } : {}),
                 };
                 const event: OfflineEvent = {
                   eventId: crypto.randomUUID(), registerId: p.registerId, deviceId: p.deviceId, registerEpoch: p.registerEpoch, sequence: p.sequence,

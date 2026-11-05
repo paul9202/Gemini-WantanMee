@@ -1,7 +1,8 @@
 /**
  * 制作与退款命令：完成出餐、撤回出餐、请求取消、确认后厨取消、老板整单退款（开始制作只为旧版待做单保留）。
  * 状态转换全部交给领域状态机 applyLifecycle；这里负责读取依赖、落实副作用并保持投影一致。
- * 出餐 / 取消最终成立时在同一事务释放仍属于本单的餐牌；牌已属于新单时绝不改动。
+ * 出餐 / 取消最终成立时在同一事务把本单从餐牌上摘下；同牌加单的其他单还没完成时牌继续占用，全部摘完才释放。
+ * 牌已属于新单时绝不改动。
  * 厨房命令不读写付款字段：出餐不标已付款。
  */
 import { DocumentData, FieldValue, Firestore } from 'firebase-admin/firestore';
@@ -9,7 +10,7 @@ import { businessDateOf } from '../../../src/domain/businessDay';
 import {
   applyLifecycle, LifecycleCommand, LifecycleError, OrderLifecycleState,
 } from '../../../src/domain/orderLifecycle';
-import { reholdToken, releaseHeldToken, TokenBoard } from '../../../src/domain/tokens';
+import { canReholdToken, reholdToken, releaseHeldToken, TokenBoard, tokenFromDoc } from '../../../src/domain/tokens';
 import { CommandContext, Role, runCommand } from '../core/command';
 import { CommandError, ReasonCode } from '../core/errors';
 import { bool, int, obj, oneOf, optStr, str, storeId, uuid } from '../core/input';
@@ -104,8 +105,8 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
   const todayDay = writesLedger ? await requireDayOpen(tx, store, today) : null;
 
   const before = lifecycleOf(order);
-  // 撤回出餐：原牌空闲且最后一次由本单释放（期间没给过别的单）才可重新占用。
-  const tokenReclaimable = Boolean(tokenData && tokenData.state === 'available' && tokenData.lastReleasedOrderId === input.orderId);
+  // 撤回出餐：牌仍属于同一桌客人（同牌加单的其他单还占着，或空闲且最后由这桌释放、期间没给过别人）才可挂回。
+  const tokenReclaimable = Boolean(tokenData) && canReholdToken(tokenFromDoc(order.tokenNumber, tokenData), input.orderId);
   const r = applyLifecycle(before, input.cmd, {
     nowMs, actorUid: actor.uid, actorRole: actor.role, expectedVersion: input.expectedVersion,
     tokenReclaimable, dayClosed: orderDayClosed,
@@ -120,11 +121,10 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
   for (const effect of r.effects) {
     if (effect === 'token_release' || effect === 'token_rehold') {
       if (!tokenData) throw new CommandError('STORE_NOT_CONFIGURED', '餐牌未初始化');
-      const board: TokenBoard = {
-        [order.tokenNumber]: { number: order.tokenNumber, state: tokenData.state, orderId: tokenData.orderId, version: tokenData.version, lastReleasedOrderId: tokenData.lastReleasedOrderId ?? null },
-      };
+      const board: TokenBoard = { [order.tokenNumber]: tokenFromDoc(order.tokenNumber, tokenData) };
       if (effect === 'token_release') {
         // 牌已不属于本单（例如离线补账的 history_only 单）：不动牌，只记录订单。
+        // 牌上还有同牌加单的其他单：只摘本单，牌继续占用。订单上的 tokenReleasedAtMs 指「本单不再占牌」。
         const rel = releaseHeldToken(board, order.tokenNumber, input.orderId);
         if (rel?.ok) tx.set(tokenRef, { ...rel.token, updatedAtMs: nowMs });
         patch.tokenReleasedAtMs = nowMs;

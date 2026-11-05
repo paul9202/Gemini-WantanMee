@@ -8,7 +8,7 @@
 import type { OrderLineInput } from './cart';
 import type { ServiceMode } from './menu';
 import type { LegacyPaymentMethod } from './payment';
-import { TokenBoard, TokenState } from './tokens';
+import { joinToken, releaseHeldToken, TokenBoard, tokenHolders, TokenState } from './tokens';
 
 export type OfflineEventType =
   | 'offline_order_created' | 'offline_payment_recorded' | 'manual_handoff' | 'manual_served' | 'token_returned' | 'sequence_void';
@@ -25,6 +25,8 @@ export interface OfflineOrderPayload {
   totalSen: number;
   /** null：新流程，下单未付款。旧格式日志为下单即收款的真实渠道记录。 */
   payment: { method: LegacyPaymentMethod; tenderedSen: number | null; qrExternalVerificationNote: string | null } | null;
+  /** 同牌加单的在线单结果不明、转人工补账时带上：挂到这张单所在的牌上。普通离线单没有。 */
+  joinTokenOrderId?: string | null;
 }
 
 /** 员工确认整单已收到（不分渠道）。clientOrderId 可以是离线单，也可以是之前的在线单。 */
@@ -93,7 +95,7 @@ export function offlineReceiptNumber(registerId: string, sequence: number): stri
 
 /**
  * 本机餐牌视图 = 最后一次联网时的服务器餐牌 + 尚未被服务器确认的本机离线事件。
- * 事件按序号应用；人工出餐即释放本单仍持有的牌，同一张牌先释放旧单再占给新单的顺序由序号保证。
+ * 事件按序号应用；人工出餐把本单从牌上摘下（同牌还有别的单时牌继续占用），同一张牌先释放旧单再占给新单的顺序由序号保证。
  * 这只是本机视图：后厨在云端出餐释放的牌，断网期间本机看不到，不能声称拥有最新牌状态。
  */
 export function overlayLocalTokens(base: TokenBoard, events: OfflineEvent[]): TokenBoard {
@@ -102,13 +104,17 @@ export function overlayLocalTokens(base: TokenBoard, events: OfflineEvent[]): To
   for (const e of [...events].sort((a, b) => a.sequence - b.sequence)) {
     if (e.type === 'offline_order_created') {
       const t = board[e.payload.tokenNumber];
-      set({ number: e.payload.tokenNumber, state: 'held', orderId: e.payload.clientOrderId, version: (t?.version ?? 0) + 1 });
+      const id = e.payload.clientOrderId;
+      const joined = e.payload.joinTokenOrderId && t?.state === 'held' ? joinToken(board, e.payload.tokenNumber, id, e.payload.joinTokenOrderId) : null;
+      if (joined?.ok) { set(joined.token); continue; }
+      set({ number: e.payload.tokenNumber, state: 'held', orderId: id, orderIds: [id], sessionOrderIds: [id], version: (t?.version ?? 0) + 1, lastReleasedOrderId: null });
     } else if (e.type === 'manual_served') {
-      const held = Object.values(board).find((t) => t.orderId === e.payload.clientOrderId && (t.state === 'held' || t.state === 'awaiting_return'));
-      if (held) set({ number: held.number, state: 'available', orderId: null, version: held.version + 1, lastReleasedOrderId: e.payload.clientOrderId });
+      const held = Object.values(board).find((t) => tokenHolders(t).includes(e.payload.clientOrderId));
+      const r = held ? releaseHeldToken(board, held.number, e.payload.clientOrderId) : null;
+      if (r?.ok) set(r.token);
     } else if (e.type === 'token_returned') {
-      const t = board[e.payload.tokenNumber];
-      if (t && t.orderId === e.payload.clientOrderId) set({ number: t.number, state: 'available', orderId: null, version: t.version + 1 });
+      const r = releaseHeldToken(board, e.payload.tokenNumber, e.payload.clientOrderId);
+      if (r?.ok) set(r.token);
     }
   }
   return board;

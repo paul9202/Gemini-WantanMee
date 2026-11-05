@@ -4,6 +4,7 @@
  * - 前台（收银 / 老板）对未收款的有效订单点「确认已收款 RM金额」直接登记整单（不选渠道、不弹二次确认），防连点。
  * - 老板可「更正误登记收款」（有原因、有审计，追加反向调整，不是退款），也可登记退款（不强制选择渠道）。
  * - 旧订单保留真实付款渠道（现金 / DuitNow QR）。餐牌会复用：订单以票号 + 原餐牌号 + 时间识别，操作绑定订单 ID。
+ * - 同牌加单：一张餐牌可同时挂几单；同牌还有单在做时，已出餐的单不显示「餐牌已释放」。
  */
 import { useRef, useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
@@ -13,6 +14,7 @@ import { PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import type { PaymentMethod } from '../../domain/payment';
 import { isAwaitingPayment, PaymentState } from '../../domain/orderLifecycle';
+import { tokenFromDoc, tokenHolders, tokenSession } from '../../domain/tokens';
 import { db, storePath } from '../../data/firebase/client';
 import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
 import { useLiveQuery, useNow, useOnline } from '../../data/firebase/live';
@@ -51,6 +53,8 @@ interface OrderRow {
   manualHandoffAtMs?: number | null;
   /** 加单：挂在哪张原单上（收款时可一起结）。 */
   addOnTo?: { orderId: string; tokenNumber: number; receiptNumber: string | null } | null;
+  /** 同牌加单：客人拿着同一张牌又加的单（旧单缺省）。 */
+  sharedToken?: boolean;
   source?: 'online' | 'offline';
   offlineReceiptNumber?: string | null;
   /** 后厨「继续做，拒绝取消」的记录。 */
@@ -119,6 +123,8 @@ export function OrdersPage() {
     query(collection(db, storePath('orders')), where('fulfillmentStatus', 'in', ['queued', 'preparing'])),
     'orders-open',
   );
+  // 餐牌（前台可读）：判断已出餐的单所在的牌是否还被同桌别的单占着。
+  const tokensQ = useLiveQuery<{ number: number } & Record<string, unknown>>(collection(db, storePath('tokens')), 'tokens');
   // 之前营业日仍未登记收款的订单（出餐后未收钱）：继续追收，归属原营业日。
   const unpaidQ = useLiveQuery<OrderRow>(query(collection(db, storePath('orders')), where('paymentState', '==', 'unpaid')), 'orders-unpaid');
   const carriedMap = new Map<string, OrderRow>();
@@ -202,11 +208,19 @@ export function OrdersPage() {
   ];
   const shown = q.data.filter(matches);
   const unpaidTodaySen = q.data.filter(isAwaitingPayment).reduce((s, o) => s + o.totalSen, 0);
+  // 同牌还有单在做：这张单所在的那一轮占用里，牌仍被同桌别的单占着（号码复用给别的客人不算）。
+  const stillShared = (o: OrderRow) => {
+    const doc = tokensQ.data.find((t) => t.number === o.tokenNumber);
+    if (!doc) return false;
+    const t = tokenFromDoc(o.tokenNumber, doc);
+    return t.state === 'held' && tokenHolders(t).length > 0 && tokenSession(t).includes(o.id);
+  };
   const cols = 'lg:grid-cols-[6.5rem_minmax(0,2fr)_5rem_minmax(0,1.1fr)_minmax(0,1.2fr)_16rem]';
 
   const row = (o: OrderRow) => {
     const t = new Date(o.acceptedAtEffectiveMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const kitchenNote = o.fulfillmentStatus === 'served' ? tr('已出餐 · 餐牌已释放', 'Served · token released')
+    const kitchenNote = o.fulfillmentStatus === 'served'
+      ? (stillShared(o) ? tr('已出餐 · 同牌还有单在做', 'Served · token still has orders cooking') : tr('已出餐 · 餐牌已释放', 'Served · token released'))
       : o.fulfillmentStatus === 'cancelled' ? tr('已停止制作', 'Stopped')
       : o.source === 'offline' ? tr('离线单 · 人工传单', 'Offline · paper ticket') : o.manualHandoffAtMs ? tr('已人工传单', 'Handed over manually') : o.kitchenAckAtMs ? tr('后厨已收到', 'Kitchen received') : tr('等待厨房确认', 'Waiting for kitchen');
     const pendingLocal = localPaid.has(o.id) && o.paymentState === 'unpaid';
@@ -228,7 +242,12 @@ export function OrdersPage() {
           <div className="flex shrink-0 -space-x-3">{o.items.slice(0, 2).map((i) => <Photo key={i.lineId} id={i.photoId} size={44} rounded={22} className="border-2 border-white" />)}</div>
           <div className="min-w-0">
             <div className="text-sm font-bold">{tr('票号', 'Receipt')} {o.receiptNumber}{o.offlineReceiptNumber ? `（${o.offlineReceiptNumber}）` : ''}
-              {o.addOnTo && <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">{tr(`加单 · 原 ${o.addOnTo.tokenNumber} 号 ${o.addOnTo.receiptNumber ?? ''}`, `Add-on · token ${o.addOnTo.tokenNumber} ${o.addOnTo.receiptNumber ?? ''}`)}</span>}
+              {o.sharedToken ? (
+                <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">
+                  {tr('同牌加单', 'Same-token add-on')}
+                  {o.addOnTo && tr(` · 与 ${o.addOnTo.receiptNumber ?? `${o.addOnTo.tokenNumber} 号`} 一起结账`, ` · pay with ${o.addOnTo.receiptNumber ?? `token ${o.addOnTo.tokenNumber}`}`)}
+                </span>
+              ) : o.addOnTo && <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">{tr(`加单 · 原 ${o.addOnTo.tokenNumber} 号 ${o.addOnTo.receiptNumber ?? ''}`, `Add-on · token ${o.addOnTo.tokenNumber} ${o.addOnTo.receiptNumber ?? ''}`)}</span>}
             </div>
             <div className="font-semibold">{o.items.map((i) => `${itemName(i)} ×${i.quantity}`).join('，')}</div>
           </div>
@@ -344,8 +363,8 @@ export function OrdersPage() {
       </div>
       <p className="mt-4 flex items-start gap-2 rounded-2xl border border-warn/30 bg-warn-bg px-4 py-3 text-sm text-warn">
         <Icon name="help" size={18} />
-        {tr('下单、出餐、收款是三个独立状态：出餐会自动释放餐牌；收到整单货款后点「确认已收款」。显示或扫描收款码都不算收款，系统也不会自动核对钱包或银行到账。',
-          'Ordering, serving and payment are separate: serving releases the token automatically; tap "Confirm paid" once the full amount is received. Showing or scanning the QR does not count as payment, and nothing is verified with the wallet or bank.')}
+        {tr('下单、出餐、收款是三个独立状态：出餐后餐牌自动释放（同牌还有单在做时继续占用）；收到整单货款后点「确认已收款」。显示或扫描收款码都不算收款，系统也不会自动核对钱包或银行到账。',
+          'Ordering, serving and payment are separate: serving frees the token automatically (unless another order on it is still cooking); tap "Confirm paid" once the full amount is received. Showing or scanning the QR does not count as payment, and nothing is verified with the wallet or bank.')}
       </p>
       {receiptId && config && (
         <ReceiptDialog receiptKey={receiptId} load={() => receiptFromOrder(receiptId, config.name)} menuVersion={config.activeMenuVersion} timeZone={config.timeZone} onClose={() => setReceiptId(null)} />

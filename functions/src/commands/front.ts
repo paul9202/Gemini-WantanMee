@@ -5,7 +5,7 @@
  */
 import { Firestore } from 'firebase-admin/firestore';
 import { businessDateOf } from '../../../src/domain/businessDay';
-import { releaseToken as releaseTokenRule, TokenBoard } from '../../../src/domain/tokens';
+import { releaseToken as releaseTokenRule, TokenBoard, tokenFromDoc } from '../../../src/domain/tokens';
 import { runCommand } from '../core/command';
 import { CommandError } from '../core/errors';
 import { int, obj, optInt, storeId, uuid } from '../core/input';
@@ -75,10 +75,10 @@ export async function releaseToken(db: Firestore, uid: string | undefined, raw: 
       const t = (await tx.get(tokenRef)).data();
       if (!t) throw new CommandError('STORE_NOT_CONFIGURED', '餐牌未初始化');
       requireNextSequence(reg.lastAppliedSequence, input.sequence);
-      const board: TokenBoard = { [input.tokenNumber]: { number: input.tokenNumber, state: t.state, orderId: t.orderId, version: t.version } };
+      const board: TokenBoard = { [input.tokenNumber]: tokenFromDoc(input.tokenNumber, t) };
       const r = releaseTokenRule(board, input.tokenNumber, input.orderId, input.expectedVersion ?? undefined);
       if (!r.ok) throw new CommandError(r.error === 'TOKEN_OUT_OF_RANGE' ? 'INVALID_ARGUMENT' : r.error, r.error, { state: t.state, heldByOrderId: t.orderId });
-      tx.set(tokenRef, { ...r.token, updatedAtMs: nowMs, lastReleasedOrderId: input.orderId });
+      tx.set(tokenRef, { ...r.token, updatedAtMs: nowMs });
       tx.update(store.order(input.orderId), { tokenReturnedAtMs: nowMs });
       tx.update(store.register(input.claim.registerId), { lastAppliedSequence: input.sequence, lastSeenAtMs: nowMs });
       return {

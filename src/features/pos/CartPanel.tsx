@@ -30,11 +30,13 @@ export function useLineText(menu: MenuVersion) {
   };
 }
 
-export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEdit, onQuantity, onServiceMode, onClear, onPay, payDisabledReason, banner, children }: {
+export function CartPanel({ menu, cart, totals, tokenNumber, tokenShared, editingLineId, onEdit, onQuantity, onServiceMode, onClear, onPay, payDisabledReason, banner, children }: {
   menu: MenuVersion;
   cart: Cart;
   totals: OrderTotals;
   tokenNumber: number | null;
+  /** 同牌加单：本单挂在客人已拿着的牌上（餐牌标记为品牌色）。 */
+  tokenShared?: boolean;
   editingLineId: string | null;
   onEdit: (lineId: string) => void;
   onQuantity: (lineId: string, q: number) => void;
@@ -59,8 +61,9 @@ export function CartPanel({ menu, cart, totals, tokenNumber, editingLineId, onEd
           <Eyebrow>03 / CHECKOUT</Eyebrow>
           <h2 className="mt-1 text-xl font-bold">{tr('本单明细', 'This order')}</h2>
         </div>
-        <span className="ml-auto rounded-xl border border-line px-3 py-1.5 text-sm font-semibold" aria-label={tr(`餐牌 ${tokenNumber ?? '—'}`, `Token ${tokenNumber ?? '—'}`)}>
-          {tr('餐牌', 'Token')} <b className="text-base tabular-nums">{tokenNumber ?? '—'}</b>
+        <span className={`ml-auto rounded-xl border px-3 py-1.5 text-sm font-semibold ${tokenShared ? 'border-brand bg-brand-soft text-brand' : 'border-line'}`}
+          aria-label={tokenShared ? tr(`同牌加单 · 餐牌 ${tokenNumber ?? '—'}`, `Same-token add-on · token ${tokenNumber ?? '—'}`) : tr(`餐牌 ${tokenNumber ?? '—'}`, `Token ${tokenNumber ?? '—'}`)}>
+          {tokenShared ? tr('同牌', 'Same token') : tr('餐牌', 'Token')} <b className="text-base tabular-nums">{tokenNumber ?? '—'}</b>
         </span>
       </div>
       {banner}

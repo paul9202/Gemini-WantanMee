@@ -92,12 +92,13 @@ export function OverviewPage() {
     download(`损耗_${tag}.csv`, csvWastage(cur.data.docs.wastage, config.timeZone));
   };
 
+  // 同牌加单时一张餐牌可有多单：餐牌号去重后再列出。
   const attention: { title: string; sub: string; action?: { label: string; go: () => void } }[] = [];
-  if (overdue.length) attention.push({ title: `有 ${overdue.length} 单等候超过 12 分钟`, sub: `餐牌 ${overdue.map((t) => t.tokenNumber).join('、')} · 后厨可优先处理`, action: { label: '去后厨', go: () => navigate('/kitchen') } });
+  if (overdue.length) attention.push({ title: `有 ${overdue.length} 单等候超过 12 分钟`, sub: `餐牌 ${[...new Set(overdue.map((t) => t.tokenNumber))].join('、')} · 后厨可优先处理`, action: { label: '去后厨', go: () => navigate('/kitchen') } });
   if (outstanding.length) attention.push({ title: `待登记收款 ${outstanding.length} 单 · ${formatRM(outstandingSen)}`, sub: `票号 ${outstanding.slice(0, 6).map((o) => o.receiptNumber).join('、')}${outstanding.length > 6 ? ' 等' : ''} · 收到钱后在主点单平板确认`, action: { label: '去订单', go: () => navigate('/orders') } });
   if (tokensQ.data.length) attention.push({ title: `旧版遗留 ${tokensQ.data.length} 张餐牌待回收`, sub: `餐牌 ${tokensQ.data.map((t) => t.number).sort((a, b) => a - b).join('、')} · 改版前的记录；新流程出餐即自动释放`, action: { label: '查看', go: () => navigate('/pos') } });
   if (openReviews.length) attention.push({ title: `离线记录待核对 ${openReviews.length} 条`, sub: reviewAmount ? `已收 ${formatRM(reviewAmount)} 尚未入云端账，上面的数字不含这些金额` : '逐条补入账或不入账', action: { label: '去核对', go: () => navigate('/owner/review') } });
-  if (refundDue.length) attention.push({ title: `${refundDue.length} 单应退款待登记`, sub: `餐牌 ${refundDue.map((o) => o.tokenNumber).join('、')} · 实际退款后到订单页登记`, action: { label: '去订单', go: () => navigate('/orders') } });
+  if (refundDue.length) attention.push({ title: `${refundDue.length} 单应退款待登记`, sub: `餐牌 ${[...new Set(refundDue.map((o) => o.tokenNumber))].join('、')} · 实际退款后到订单页登记`, action: { label: '去订单', go: () => navigate('/orders') } });
 
   return (
     <div className="mx-auto max-w-[1440px] p-4 pb-8 lg:p-8">

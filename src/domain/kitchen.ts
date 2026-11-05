@@ -53,6 +53,8 @@ export interface KitchenTicket {
   version: number;
   /** 加单（客人吃完再加，多为打包）：原单的餐牌号。普通单为 null / 缺省。 */
   addOnTo?: { tokenNumber: number } | null;
+  /** 同牌加单：这桌客人拿着同一张牌又加的单（和前面同号的一起送）。旧单缺省。 */
+  sharedToken?: boolean;
 }
 
 export interface KitchenTicketSource {

@@ -18,7 +18,8 @@ export interface ResultSummary {
 }
 
 export type ResultStage =
-  | { kind: 'accepted'; orderId: string; receiptNumber: string; tokenNumber: number; totalSen: Sen; acceptedAtMs: number; summary: ResultSummary }
+  /** sharedToken：同牌加单，挂在客人已拿着的牌上（不用再给牌）。 */
+  | { kind: 'accepted'; orderId: string; receiptNumber: string; tokenNumber: number; totalSen: Sen; acceptedAtMs: number; summary: ResultSummary; sharedToken?: boolean }
   | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: Sen; summary: ResultSummary };
 
 interface Facts {
@@ -110,9 +111,13 @@ function Alerts({ stage, facts, handedOff, onlineHandoffAtMs, onHandoff, onOnlin
   );
 }
 
-/** 下单完成后的弹窗（餐牌大字、三个独立事实、人工交接入口、独立的收款区）。 */
-export function OrderResultDialog(props: Props & { onClose: () => void; extra?: ReactNode }) {
-  const { stage, onClose, onReceipt } = props;
+/**
+ * 下单完成后的弹窗（餐牌大字、三个独立事实、人工交接入口、独立的收款区）。
+ * 同牌加单的单提示客人已拿着牌；云端已接单时可「这桌再加一单」（挂在同一张牌上）。
+ */
+export function OrderResultDialog(props: Props & { onClose: () => void; extra?: ReactNode; onAddSameToken?: () => void }) {
+  const { stage, onClose, onReceipt, onAddSameToken } = props;
+  const shared = stage.kind === 'accepted' && Boolean(stage.sharedToken);
   const tr = useT();
   const facts = useFacts(stage, props.kitchenAckAtMs, props.kitchenLastSeenMs, props.offsetMs, props.handedOff);
   const offline = stage.kind === 'local_accepted';
@@ -132,7 +137,9 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
           {tr(SERVICE_MODE_NAMES[s.serviceMode].zh, SERVICE_MODE_NAMES[s.serviceMode].en)} · {formatRM(stage.totalSen)} · {props.paid ? tr('已收款', 'Paid') : tr('待收款', 'Unpaid')}
         </p>
         <div className="mt-5 text-7xl font-black tabular-nums text-ok">{stage.tokenNumber}</div>
-        <p className="mt-1 font-semibold">{tr('把这张餐牌交给客人', 'Give this token to the customer')}</p>
+        <p className="mt-1 font-semibold">{shared
+          ? tr(`客人已拿着 ${stage.tokenNumber} 号牌，不用再给牌`, `The customer already holds token ${stage.tokenNumber} — no new token needed`)
+          : tr('把这张餐牌交给客人', 'Give this token to the customer')}</p>
         <p className="text-xs text-ink-2">
           {stage.kind === 'accepted' ? tr(`${stage.tokenNumber}号 · 票号 ${stage.receiptNumber}`, `No. ${stage.tokenNumber} · receipt ${stage.receiptNumber}`) : tr(`${stage.tokenNumber}号 · 临时号 ${stage.offlineReceiptNumber}`, `No. ${stage.tokenNumber} · temp ${stage.offlineReceiptNumber}`)}
         </p>
@@ -141,6 +148,11 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
         {props.extra}
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <button type="button" onClick={onReceipt} className="h-14 rounded-xl border border-line px-6 font-bold">{tr('收据', 'Receipt')}</button>
+          {onAddSameToken && stage.kind === 'accepted' && (
+            <button type="button" onClick={onAddSameToken} className="flex h-14 items-center gap-2 rounded-xl border border-brand bg-brand-soft px-5 font-bold text-brand">
+              <Icon name="plus" size={22} />{tr('这桌再加一单', 'Add more for this table')}
+            </button>
+          )}
           <button type="button" onClick={onClose} autoFocus className="flex h-14 items-center gap-2 rounded-xl bg-ok px-7 font-bold text-white">{tr('下一单', 'Next order')}<Icon name="arrow" size={20} /></button>
         </div>
       </div>

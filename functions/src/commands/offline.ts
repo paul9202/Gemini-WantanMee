@@ -23,7 +23,7 @@ import {
 } from '../../../src/domain/offline';
 import { registerPayment } from '../../../src/domain/orderLifecycle';
 import { checkPayment } from '../../../src/domain/payment';
-import { holdToken, isTokenNumber, releaseHeldToken, TokenBoard } from '../../../src/domain/tokens';
+import { holdToken, isTokenNumber, joinToken, releaseHeldToken, TokenBoard, tokenFromDoc } from '../../../src/domain/tokens';
 import { runCommand, storeRefs, StoreRefs } from '../core/command';
 import { CommandError } from '../core/errors';
 import { bad, int, obj, optOneOf, str, storeId, uuid } from '../core/input';
@@ -46,7 +46,7 @@ function parseEvent(raw: unknown, i: number): OfflineEvent {
   };
   const type = o.type;
   if (type === 'offline_order_created') {
-    const p = obj(o.payload, ['clientOrderId', 'offlineReceiptNumber', 'tokenNumber', 'serviceMode', 'menuVersion', 'lines', 'totalSen', 'payment'], `events[${i}].payload`);
+    const p = obj(o.payload, ['clientOrderId', 'offlineReceiptNumber', 'tokenNumber', 'serviceMode', 'menuVersion', 'lines', 'totalSen', 'payment', 'joinTokenOrderId'], `events[${i}].payload`);
     if (!Array.isArray(p.lines) || p.lines.length < 1 || p.lines.length > 30) throw bad('lines 需 1–30 行');
     const lines = p.lines.map((l, j) => {
       const line = obj(l, ['lineId', 'config', 'quantity', 'serviceMode'], `lines[${j}]`);
@@ -75,6 +75,7 @@ function parseEvent(raw: unknown, i: number): OfflineEvent {
         tokenNumber: int(p, 'tokenNumber', 1, 50), serviceMode: p.serviceMode as OfflineOrderPayload['serviceMode'],
         menuVersion: str(p, 'menuVersion', 64), lines, totalSen: int(p, 'totalSen', 0, 10_000_000),
         payment,
+        ...(p.joinTokenOrderId === undefined || p.joinTokenOrderId === null ? {} : { joinTokenOrderId: uuid(p, 'joinTokenOrderId') }),
       },
     };
   }
@@ -182,8 +183,10 @@ async function decide(
     let tokenLock: 'held' | 'history_only' = 'held';
     let heldToken = null;
     if (!token || !isTokenNumber(p.tokenNumber)) return review('TOKEN_CONFLICT', orderId);
-    const board: TokenBoard = { [p.tokenNumber]: { number: p.tokenNumber, state: token.state, orderId: token.orderId, version: token.version } };
-    const held = holdToken(board, p.tokenNumber, orderId);
+    const board: TokenBoard = { [p.tokenNumber]: tokenFromDoc(p.tokenNumber, token) };
+    // 同牌加单转来的人工单：牌仍被同桌占着就挂上去；牌已给了别人照旧冲突待核对。
+    const sharedToken = Boolean(p.joinTokenOrderId) && board[p.tokenNumber].state === 'held';
+    const held = p.joinTokenOrderId ? joinToken(board, p.tokenNumber, orderId, p.joinTokenOrderId) : holdToken(board, p.tokenNumber, orderId);
     if (held.ok) heldToken = held.token;
     else if (later.some((x) => (x.type === 'token_returned' || x.type === 'manual_served') && x.payload.clientOrderId === orderId)) tokenLock = 'history_only';
     else return review('TOKEN_CONFLICT', orderId);
@@ -199,7 +202,7 @@ async function decide(
           legacyPayment: p.payment ? { method: p.payment.method, tenderedSen: p.payment.tenderedSen, changeSen, qrExternalVerificationNote: p.payment.qrExternalVerificationNote } : null,
           acceptedAtEffectiveMs: at, deviceAcceptedAtMs: e.occurredAtDeviceMs, cloudReceivedAtMs: nowMs, timeQuality: 'device_estimated',
           businessDate, registerId: e.registerId, registerEpoch: e.registerEpoch, shiftId: e.shiftId, sequence: e.sequence,
-          createdBy: actorUid, allocationEventId: `${e.eventId}-alloc`,
+          createdBy: actorUid, allocationEventId: `${e.eventId}-alloc`, sharedToken: sharedToken && held.ok,
           extra: { offlineEventId: e.eventId, tokenLock, manualHandoffAtMs: null, servedManually: false, menuVersionCurrent: config.activeMenuVersion },
         });
         if (heldToken) w.set(store.token(p.tokenNumber), { ...heldToken, updatedAtMs: nowMs });
@@ -247,7 +250,7 @@ async function decide(
     // 出餐即释放仍属于本单的牌；牌已属于别的单（history_only、或已被处理）时不动牌。
     let tokenWrite: ((w: Transaction) => void) | null = null;
     if (order.tokenLock !== 'history_only' && token) {
-      const board: TokenBoard = { [order.tokenNumber]: { number: order.tokenNumber, state: token.state, orderId: token.orderId, version: token.version } };
+      const board: TokenBoard = { [order.tokenNumber]: tokenFromDoc(order.tokenNumber, token) };
       const r = releaseHeldToken(board, order.tokenNumber, orderId);
       if (r?.ok) tokenWrite = (w) => w.set(store.token(order.tokenNumber), { ...r.token, updatedAtMs: nowMs });
     }
@@ -272,14 +275,14 @@ async function decide(
   }
   if (!token) return review('TOKEN_CONFLICT', orderId);
   if (token.state === 'available' && order.tokenReturnedAtMs) return { status: 'accepted', orderId, advance: true };
-  const board: TokenBoard = { [e.payload.tokenNumber]: { number: e.payload.tokenNumber, state: token.state, orderId: token.orderId, version: token.version } };
+  const board: TokenBoard = { [e.payload.tokenNumber]: tokenFromDoc(e.payload.tokenNumber, token) };
   if (e.payload.tokenNumber !== order.tokenNumber) return review('TOKEN_CONFLICT', orderId);
   const r = releaseHeldToken(board, e.payload.tokenNumber, orderId);
   if (!r?.ok) return review('TOKEN_CONFLICT', orderId);
   return {
     status: 'accepted', orderId, advance: true,
     writes: (w) => {
-      w.set(store.token(e.payload.tokenNumber), { ...r.token, updatedAtMs: nowMs, lastReleasedOrderId: orderId });
+      w.set(store.token(e.payload.tokenNumber), { ...r.token, updatedAtMs: nowMs });
       w.update(store.order(orderId), { tokenReturnedAtMs: at, tokenReleasedAtMs: at, tokenReleaseSource: order.fulfillmentStatus === 'cancelled' ? 'cancelled' : 'served', updatedAtMs: nowMs });
     },
   };

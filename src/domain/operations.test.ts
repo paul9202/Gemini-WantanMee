@@ -1,12 +1,13 @@
 /**
  * 04 §3 在线场景中可在领域层验证的部分：O06–O10、幂等与厨房投影隔离；
- * 以及 2026-10-23 营业流程改版（DESIGN §11）：下单即制作中、出餐 / 取消自动释放餐牌、收款独立登记。
+ * 以及 2026-10-23 营业流程改版（DESIGN §11）：下单即制作中、出餐 / 取消自动释放餐牌、收款独立登记；
+ * 同牌加单：一张牌挂多张单，逐张摘下，全部摘完才释放。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addLine, applyLifecycle, buildKitchenTicket, canonicalJson, checkPayment, createTokenBoard, decideOperation,
-  defaultConfig, emptyCart, holdToken, isAwaitingPayment, KitchenTicket, LifecycleContext, MENU_V1, newAcceptedState,
+  addLine, applyLifecycle, buildKitchenTicket, canonicalJson, canReholdToken, checkPayment, createTokenBoard, decideOperation,
+  defaultConfig, emptyCart, holdToken, isAwaitingPayment, joinToken, tokenFromDoc, KitchenTicket, LifecycleContext, MENU_V1, newAcceptedState,
   normalizeConfig, OrderLifecycleState, payloadHash, registerPayment, releaseHeldToken, releaseToken, reholdToken, reversePayment,
   sortFifo, suggestNextToken, summarizeKitchen, TOKEN_MAX, TokenBoard, UNDO_SERVE_WINDOW_MS, writeOffUnpaid, reinstateWrittenOff,
 } from './index';
@@ -134,6 +135,77 @@ test('旧版待回收牌：仍可由前台逐张明确释放；未出餐的不�
 test('餐牌版本冲突：过期版本被拒绝', () => {
   const r = holdToken(createTokenBoard(), 3, 'A', 5);
   assert.equal(!r.ok && r.error, 'STALE_VERSION');
+});
+
+const err = (r: { ok: boolean; error?: string }) => (r.ok ? 'ok' : r.error);
+
+test('同牌加单：挂到同一桌的牌上；幂等；逐张摘下，全部摘完才释放', () => {
+  let board = must(holdToken(createTokenBoard(), 5, 'A'));
+  assert.equal(err(holdToken(board, 5, 'B')), 'TOKEN_OCCUPIED', '新客人仍不能占已占用的牌');
+  board = must(joinToken(board, 5, 'B', 'A'));
+  assert.deepEqual([board[5].state, board[5].orderId, board[5].orderIds, board[5].sessionOrderIds], ['held', 'A', ['A', 'B'], ['A', 'B']]);
+  const again = joinToken(board, 5, 'B', 'A');
+  assert.ok(again.ok);
+  assert.equal(again.board, board, '重复挂同一单幂等，不升版本');
+  board = must(joinToken(board, 5, 'C', 'B'));
+  assert.deepEqual(board[5].orderIds, ['A', 'B', 'C'], '凭后挂上的单再加也认这桌');
+
+  board = must(releaseHeldToken(board, 5, 'A'));
+  assert.deepEqual([board[5].state, board[5].orderId, board[5].orderIds], ['held', 'B', ['B', 'C']], '摘一张：牌仍占用，orderId 换成剩下的第一张');
+  assert.equal(board[5].lastReleasedOrderId, null);
+  assert.equal(releaseHeldToken(board, 5, 'A'), null, '已摘下的单重放不改牌');
+  board = must(releaseHeldToken(board, 5, 'C'));
+  board = must(releaseHeldToken(board, 5, 'B'));
+  assert.deepEqual([board[5].state, board[5].orderId, board[5].orderIds, board[5].lastReleasedOrderId], ['available', null, [], 'B']);
+  assert.deepEqual(board[5].sessionOrderIds, ['A', 'B', 'C'], '本轮记录保留到下一次被占');
+});
+
+test('同牌加单拒绝：牌属于别的客人 / 旧版待回收；牌已空闲则按新客人占牌', () => {
+  let board = must(holdToken(createTokenBoard(), 6, 'A'));
+  board = must(releaseHeldToken(board, 6, 'A'));
+  board = must(holdToken(board, 6, 'X'));
+  assert.equal(err(joinToken(board, 6, 'B', 'A')), 'TOKEN_OCCUPIED', '6 号已给了别的客人');
+  assert.equal(err(joinToken(board, 6, 'B', 'nobody')), 'TOKEN_OCCUPIED');
+  assert.deepEqual(board[6].orderIds, ['X'], '不挂到别人的牌上');
+
+  const legacy: TokenBoard = { ...createTokenBoard(), 7: { number: 7, state: 'awaiting_return', orderId: 'OLD', version: 3 } };
+  assert.equal(err(joinToken(legacy, 7, 'B', 'OLD')), 'TOKEN_OCCUPIED', '旧版待回收牌不能同牌加单');
+
+  let free = must(holdToken(createTokenBoard(), 8, 'A'));
+  free = must(releaseHeldToken(free, 8, 'A'));
+  free = must(joinToken(free, 8, 'B', 'A'));
+  assert.deepEqual([free[8].state, free[8].orderIds, free[8].sessionOrderIds, free[8].lastReleasedOrderId], ['held', ['B'], ['B'], null], '牌已空闲：新一轮占用');
+});
+
+test('同牌加单撤回出餐：同一桌仍占着或最后由这桌释放可挂回；牌给了新客人就拒绝', () => {
+  let board = must(holdToken(createTokenBoard(), 9, 'A'));
+  board = must(joinToken(board, 9, 'B', 'A'));
+  board = must(releaseHeldToken(board, 9, 'A'));
+  assert.ok(canReholdToken(board[9], 'A'));
+  const back = must(reholdToken(board, 9, 'A'));
+  assert.deepEqual([back[9].state, back[9].orderIds], ['held', ['B', 'A']], 'B 还占着：A 挂回');
+
+  board = must(releaseHeldToken(board, 9, 'B'));
+  assert.deepEqual([board[9].state, board[9].lastReleasedOrderId], ['available', 'B']);
+  const back2 = must(reholdToken(board, 9, 'A'));
+  assert.deepEqual([back2[9].state, back2[9].orderIds, back2[9].sessionOrderIds], ['held', ['A'], ['A', 'B']], '最后由同桌 B 释放：A 仍可挂回');
+
+  board = must(holdToken(board, 9, 'C'));
+  assert.equal(err(reholdToken(board, 9, 'A')), 'TOKEN_REASSIGNED');
+  board = must(releaseHeldToken(board, 9, 'C'));
+  assert.equal(canReholdToken(board[9], 'A'), false, '期间给过别的客人：仍不恢复');
+});
+
+test('旧格式餐牌文档：只有 orderId 时按单张单补齐', () => {
+  const held = tokenFromDoc(3, { state: 'held', orderId: 'X', version: 3 });
+  assert.deepEqual([held.state, held.orderId, held.orderIds, held.sessionOrderIds, held.version], ['held', 'X', ['X'], ['X'], 3]);
+  const joined = must(joinToken({ 3: held }, 3, 'Y', 'X'));
+  assert.deepEqual(joined[3].orderIds, ['X', 'Y']);
+  const free = tokenFromDoc(4, { state: 'available', orderId: null, version: 2, lastReleasedOrderId: 'Y' });
+  assert.deepEqual(free.orderIds, []);
+  assert.equal(canReholdToken(free, 'Y'), true);
+  assert.equal(canReholdToken(free, 'Z'), false);
+  assert.deepEqual(tokenFromDoc(5, undefined), { number: 5, state: 'available', orderId: null, version: 0, lastReleasedOrderId: null, orderIds: [], sessionOrderIds: [] });
 });
 
 const ctx = (patch: Partial<LifecycleContext> = {}): LifecycleContext => ({

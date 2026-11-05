@@ -33,7 +33,7 @@ export async function bootstrapStore(db: Firestore, opts: BootstrapOptions): Pro
     });
     tx.create(store.member(opts.ownerUid), { role: 'owner', active: true, displayName: opts.ownerDisplayName, updatedAtMs: now, updatedBy: 'bootstrap' });
     for (let n = TOKEN_MIN; n <= TOKEN_MAX; n++) {
-      tx.create(store.token(n), { number: n, state: 'available', orderId: null, version: 0, updatedAtMs: now });
+      tx.create(store.token(n), { number: n, state: 'available', orderId: null, orderIds: [], sessionOrderIds: [], version: 0, updatedAtMs: now });
     }
     return { created: true };
   });

@@ -1,4 +1,4 @@
-/** 本机存储：离线接单原子性（D02）、重启恢复（D01）、序号连续、恢复包重入（D12）。 */
+/** 本机存储：离线接单原子性（D02）、重启恢复（D01）、序号连续、恢复包重入（D12）；本机餐牌叠加不动在线同牌加单。 */
 import 'fake-indexeddb/auto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -6,7 +6,7 @@ import {
   _resetConnectionForTests, allocateSequence, appendOfflineEvent, commitOfflineOrder, exportRecoveryPackage,
   importRecoveryPackage, kvGet, listLocalOrders, listOutbox, LocalOrder, releaseSequence, seqKey,
 } from './idb';
-import { defaultConfig, MENU_V1, OfflineEvent, offlineReceiptNumber, overlayLocalTokens, createTokenBoard, manualStatus } from '../../domain';
+import { defaultConfig, MENU_V1, OfflineEvent, offlineReceiptNumber, overlayLocalTokens, createTokenBoard, manualStatus, TokenBoard } from '../../domain';
 
 const KEY = seqKey('front-01', 1);
 
@@ -109,4 +109,17 @@ test('旧格式日志（下单即收现金 + 出餐 + token_returned）仍能解
   const events = [created, ev('manual_served', 2), returned];
   assert.equal(manualStatus(events, c).paid, true);
   assert.equal(overlayLocalTokens(createTokenBoard(), events)[30].state, 'available');
+});
+
+test('本机餐牌叠加：在线同牌加单的牌（两张单）原样保留；别的牌离线下单 / 出餐照常', () => {
+  const base: TokenBoard = {
+    ...createTokenBoard(),
+    5: { number: 5, state: 'held', orderId: 'A', orderIds: ['A', 'B'], sessionOrderIds: ['A', 'B'], version: 2, lastReleasedOrderId: null },
+  };
+  assert.deepEqual(overlayLocalTokens(base, [])[5], base[5], '没有本机事件：两张单都还在');
+  const d = crypto.randomUUID();
+  const events = [orderEvent(1, d, 12).event, simple('manual_served', d)(2)];
+  const board = overlayLocalTokens(base, events);
+  assert.deepEqual(board[5].orderIds, ['A', 'B']);
+  assert.deepEqual([board[12].state, board[12].lastReleasedOrderId], ['available', d]);
 });

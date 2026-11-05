@@ -44,6 +44,8 @@ export interface AcceptedOrderInput {
   allocationEventId: string;
   /** 加单：挂到哪张未收款的原单上，收款时与原单一次结账。 */
   addOnTo?: AddOnLink | null;
+  /** 同牌加单：挂在这桌客人已拿着的牌上（牌上还有别的单）。 */
+  sharedToken?: boolean;
   extra?: Record<string, unknown>;
 }
 
@@ -75,7 +77,7 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     items, totalSen: a.totals.totalSen, portionCount: a.totals.portionCount,
     paymentMethod: legacy?.method ?? null, cashTenderedSen: legacy?.method === 'cash' ? legacy.tenderedSen : null, changeSen: legacy?.changeSen ?? null,
     paymentSeq: legacy ? 1 : 0, paymentId, paidAtMs: legacy ? a.acceptedAtEffectiveMs : null, paymentBusinessDate: legacy ? a.businessDate : null,
-    tokenReleasedAtMs: null, tokenReleaseSource: null, addOnTo: a.addOnTo ?? null,
+    tokenReleasedAtMs: null, tokenReleaseSource: null, addOnTo: a.addOnTo ?? null, sharedToken: a.sharedToken ?? false,
     acceptedAtEffective: Timestamp.fromMillis(a.acceptedAtEffectiveMs), acceptedAtEffectiveMs: a.acceptedAtEffectiveMs,
     deviceAcceptedAtMs: a.deviceAcceptedAtMs, cloudReceivedAtMs: a.cloudReceivedAtMs,
     kitchenAckAtMs: null, timeQuality: a.timeQuality, businessDate: a.businessDate, menuVersion: a.menu.version,
@@ -114,6 +116,8 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     kitchenAckAtMs: null,
     // 厨房只需知道是谁的加单（原餐牌），不含金额。
     addOnTo: a.addOnTo ? { tokenNumber: a.addOnTo.tokenNumber } : null,
+    // 同牌加单：后厨据此提示「N 号再加的，和前面 N 号的一起送」。
+    sharedToken: a.sharedToken ?? false,
     receiptNumber: a.receiptNumber,
     offlineReceiptNumber: a.offlineReceiptNumber,
   });
