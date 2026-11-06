@@ -18,7 +18,9 @@ export type RecordPaymentOutcome =
   | { ok: false; code: string; message: string; uncertain: boolean };
 
 /** orderId → 本页尚未得到确定结果的 operationId（超时重试复用，防止重复登记）。 */
-const inflight = new Map<string, string>();
+const inflight = new Map<string, { id: string; atMs: number }>();
+/** 结果不明后多久内重试算同一次收款。过了再收是新的一次（旧请求若已成功，服务器会回 ALREADY_PAID，不会重复记账）。 */
+const INFLIGHT_TTL_MS = 5 * 60_000;
 
 export function useRecordPayment() {
   const record = useRecordPayments();
@@ -53,12 +55,15 @@ export function useRecordPayments() {
       return { ok: true, offline: true, alreadyRecorded: false };
     }
     if (unsyncedEvents(rt).length) await syncNow();
-    const key = todo.map((o) => o.orderId).sort().join('+');
-    const operationId = inflight.get(key) ?? newOperationId();
-    inflight.set(key, operationId);
+    // 按订单 ID 排序：同一组从不同页面重试，请求内容也一致（服务器按内容比对重试）。
+    const sorted = [...todo].sort((a, b) => (a.orderId < b.orderId ? -1 : a.orderId > b.orderId ? 1 : 0));
+    const key = sorted.map((o) => o.orderId).join('+');
+    const prior = inflight.get(key);
+    const operationId = prior && Date.now() - prior.atMs < INFLIGHT_TTL_MS ? prior.id : newOperationId();
+    inflight.set(key, { id: operationId, atMs: prior?.id === operationId ? prior.atMs : Date.now() });
     try {
       if (todo.length === 1) await submit('recordPayment', { operationId, ...reg.claim, orderId: todo[0].orderId, amountSen: todo[0].amountSen });
-      else await submit('recordGroupPayment', { operationId, ...reg.claim, orders: todo });
+      else await submit('recordGroupPayment', { operationId, ...reg.claim, orders: sorted });
       inflight.delete(key);
       return { ok: true, offline: false, alreadyRecorded: false };
     } catch (e) {

@@ -5,9 +5,11 @@
  * - 老板可「更正误登记收款」（有原因、有审计，追加反向调整，不是退款），也可登记退款（不强制选择渠道）。
  * - 旧订单保留真实付款渠道（现金 / DuitNow QR）。餐牌会复用：订单以票号 + 原餐牌号 + 时间识别，操作绑定订单 ID。
  * - 同牌加单：一张餐牌可同时挂几单；同牌还有单在做时，已出餐的单不显示「餐牌已释放」。
+ * - 同桌账单：按账单 ID 汇总显示；一个按钮收整桌还没收的单（超过 10 张才逐单收）。更正、退款仍逐单。可打整桌收据。
  */
 import { useRef, useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
+import { billIdOf, BillSummary, summarizeBill } from '../../domain/bill';
 import { businessDateOf } from '../../domain/businessDay';
 import { OrderServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import { PICTOGRAMS } from '../../domain/pictograms';
@@ -19,7 +21,7 @@ import { db, storePath } from '../../data/firebase/client';
 import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
 import { useLiveQuery, useNow, useOnline } from '../../data/firebase/live';
 import { reasonText } from '../../data/firebase/reasons';
-import { useRecordPayment } from '../../data/payments';
+import { useRecordPayments } from '../../data/payments';
 import { useRegister } from '../../data/register';
 import { useOfflineRuntime } from '../../data/offline/runtime';
 import { useSession } from '../../app/session';
@@ -28,7 +30,7 @@ import { Icon, Photo } from '../../ui/visual';
 import { toCsv } from '../../domain/csv';
 import { download } from '../owner/data';
 
-import { ReceiptDialog, receiptFromOrder } from '../receipt/ReceiptDialog';
+import { billSourcesFromRoot, ReceiptDialog, receiptFromOrder } from '../receipt/ReceiptDialog';
 
 type Tr = (zh: string, en: string) => string;
 
@@ -71,7 +73,9 @@ interface OrderRow {
 const itemName = (i: OrderRow['items'][number]) => (i.spice ? `${i.nameZh} · ${PICTOGRAMS[`spice:${i.spice}`].zh}` : i.nameZh);
 
 type Filter = 'all' | 'unpaid' | 'queued' | 'preparing' | 'served' | 'cancelled';
-const CANCEL_REASONS: [string, string][] = [['顾客离开', 'Customer left'], ['点错单', 'Wrong order'], ['重复下单', 'Duplicate order'], ['其他', 'Other']];
+const CANCEL_REASONS: [string, string][] = [['顾客离开', 'Customer left'], ['点错单', 'Wrong order'], ['重复下单', 'Duplicate order'], ['改单', 'Changing order'], ['其他', 'Other']];
+/** 一次结账最多几张（服务器 MAX_GROUP_ORDERS），再多就逐单收。 */
+const MAX_BILL_PAY = 10;
 
 const fulfillLabel = (tr: Tr, s: OrderRow['fulfillmentStatus']) => ({
   queued: tr('待做', 'Queued'), preparing: tr('制作中', 'Preparing'), served: tr('已出餐', 'Served'), cancelled: tr('已取消', 'Cancelled'),
@@ -97,6 +101,22 @@ function channelLabel(tr: Tr, m: PaymentMethod | null | undefined): string | nul
   return null;
 }
 
+/**
+ * 同桌摘要。不写成「合计 = 已收 + 还要收」的等式，退款和放弃追收会让它不成立。
+ * complete 为 false 时桌上有单没载入，已收说不准，只说还要收。
+ */
+function billLine(tr: Tr, count: number, s: BillSummary, complete: boolean): string {
+  if (!complete) return tr(`这桌还要收 ${formatRM(s.dueSen)}`, `Table still due ${formatRM(s.dueSen)}`);
+  const parts = [
+    tr(`这桌 ${count} 张`, `Table: ${count} orders`),
+    tr(`已收 ${formatRM(s.paidSen)}`, `Paid ${formatRM(s.paidSen)}`),
+    tr(`还要收 ${formatRM(s.dueSen)}`, `Due ${formatRM(s.dueSen)}`),
+  ];
+  if (s.refundDueSen) parts.push(tr(`应退 ${formatRM(s.refundDueSen)}`, `Refund due ${formatRM(s.refundDueSen)}`));
+  if (s.writtenOffSen) parts.push(tr(`已放弃追收 ${formatRM(s.writtenOffSen)}`, `Written off ${formatRM(s.writtenOffSen)}`));
+  return parts.join(' · ');
+}
+
 const payTone = (s: PaymentState) =>
   s === 'unpaid' ? 'bg-danger-bg text-danger' : s === 'paid' ? 'bg-ok-bg text-ok' : s === 'refund_due' ? 'bg-warn-bg text-warn' : 'bg-subtle text-ink-2';
 
@@ -112,7 +132,7 @@ export function OrdersPage() {
   const now = useNow(60_000);
   const reg = useRegister();
   const rt = useOfflineRuntime();
-  const recordPayment = useRecordPayment();
+  const recordPayments = useRecordPayments();
   const date = config ? businessDateOf(now, { timeZone: config.timeZone, cutoverMinutes: config.cutoverMinutes }) : '';
   const q = useLiveQuery<OrderRow>(
     date ? query(collection(db, storePath('orders')), where('businessDate', '==', date), orderBy('acceptedAtEffectiveMs', 'desc')) : null,
@@ -131,6 +151,7 @@ export function OrdersPage() {
   for (const o of [...openQ.data, ...unpaidQ.data]) if (date && o.businessDate < date && o.fulfillmentStatus !== 'cancelled') carriedMap.set(o.id, o);
   const carried = [...carriedMap.values()].sort((a, b) => a.acceptedAtEffectiveMs - b.acceptedAtEffectiveMs);
   const [receiptId, setReceiptId] = useState<string | null>(null);
+  const [billRoot, setBillRoot] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [busy, setBusy] = useState(false);
@@ -148,28 +169,48 @@ export function OrdersPage() {
     .filter((r) => r.status !== 'rejected' && r.event.type === 'offline_payment_recorded')
     .map((r) => (r.event.payload as { clientOrderId: string }).clientOrderId));
 
-  async function confirmPaid(o: OrderRow) {
-    if (payingRef.current.has(o.id)) return;
-    payingRef.current.add(o.id);
+  // 同桌账单：今天的单 + 之前未完成 / 未收款的单按账单 ID 分组，只算钱，不改列表顺序。
+  const billOrders = new Map<string, OrderRow[]>();
+  for (const o of [...carried, ...q.data]) billOrders.set(billIdOf(o), [...(billOrders.get(billIdOf(o)) ?? []), o]);
+  const billOf = (o: OrderRow) => {
+    const id = billIdOf(o);
+    const orders = billOrders.get(id) ?? [o];
+    // 组长是今天的单，同桌的单都不会更早，一定都在今天的列表里；否则之前营业日已收的单没载入，已收说不准。
+    return { orders, summary: summarizeBill(orders, localPaid), complete: q.data.some((x) => x.id === id) };
+  };
+
+  /** o 是点按钮的那一行，结果显示在这行；防连点覆盖这次要收的所有单。 */
+  async function confirmPaid(o: OrderRow, payable: BillSummary['payable']) {
+    const ids = payable.map((p) => p.orderId);
+    if (ids.some((id) => payingRef.current.has(id))) return;
+    ids.forEach((id) => payingRef.current.add(id));
     setPaying(new Set(payingRef.current));
     setFeedback((f) => { const n = { ...f }; delete n[o.id]; return n; });
+    const n = payable.length;
+    const rm = formatRM(payable.reduce((s, p) => s + p.amountSen, 0));
     try {
-      const r = await recordPayment(o.id, o.totalSen);
-      const fb: Feedback = r.ok
-        ? {
+      const r = await recordPayments(payable);
+      const fb: Feedback = !r.ok
+        ? { ok: false, text: r.message }
+        : {
           ok: true,
           text: r.alreadyRecorded
-            ? tr(`票号 ${o.receiptNumber} 之前已登记收款，请勿重复收钱`, `Receipt ${o.receiptNumber} was already recorded — do not collect again`)
+            ? (n > 1
+              ? tr(`这 ${n} 张之前已登记收款，请勿重复收钱`, `These ${n} orders were already recorded — do not collect again`)
+              : tr(`票号 ${o.receiptNumber} 之前已登记收款，请勿重复收钱`, `Receipt ${o.receiptNumber} was already recorded — do not collect again`))
             : r.offline
-              ? tr(`已在本机登记收款 ${formatRM(o.totalSen)}，联网后自动同步`, `Payment ${formatRM(o.totalSen)} saved on this device; it will sync when online`)
-              : tr(`已登记收款 ${formatRM(o.totalSen)} · 票号 ${o.receiptNumber}`, `Payment ${formatRM(o.totalSen)} recorded · receipt ${o.receiptNumber}`),
-        }
-        : { ok: false, text: r.message };
+              ? (n > 1
+                ? tr(`已在本机登记收款 ${rm}（${n} 张一起），联网后自动同步`, `Payment ${rm} (${n} orders) saved on this device; it will sync when online`)
+                : tr(`已在本机登记收款 ${rm}，联网后自动同步`, `Payment ${rm} saved on this device; it will sync when online`))
+              : (n > 1
+                ? tr(`已登记收款 ${rm}（${n} 张一起）`, `Payment ${rm} recorded (${n} orders)`)
+                : tr(`已登记收款 ${rm} · 票号 ${o.receiptNumber}`, `Payment ${rm} recorded · receipt ${o.receiptNumber}`)),
+        };
       setFeedback((f) => ({ ...f, [o.id]: fb }));
     } catch (e) {
       setFeedback((f) => ({ ...f, [o.id]: { ok: false, text: String(e) } }));
     } finally {
-      payingRef.current.delete(o.id);
+      ids.forEach((id) => payingRef.current.delete(id));
       setPaying(new Set(payingRef.current));
     }
   }
@@ -226,8 +267,11 @@ export function OrdersPage() {
     const pendingLocal = localPaid.has(o.id) && o.paymentState === 'unpaid';
     const channel = channelLabel(tr, o.paymentMethod);
     const fb = feedback[o.id];
-    const inFlight = paying.has(o.id);
+    const bill = billOf(o);
     const canConfirm = isFront && isAwaitingPayment(o) && !o.kitchenCancelRequested && !pendingLocal;
+    const payWholeBill = bill.summary.payable.length > 1 && bill.summary.payable.length <= MAX_BILL_PAY;
+    const payable = payWholeBill ? bill.summary.payable : [{ orderId: o.id, amountSen: o.totalSen }];
+    const inFlight = payable.some((p) => paying.has(p.orderId));
     const canReverse = isOwner && (o.paymentState === 'paid' || o.paymentState === 'refund_due') && o.paidSen > 0 && !o.refundedSen;
     const canRefund = isOwner && (o.paymentState === 'paid' || o.paymentState === 'refund_due') && (o.fulfillmentStatus === 'served' || o.fulfillmentStatus === 'cancelled');
     const canWriteOff = isOwner && isAwaitingPayment(o) && !o.kitchenCancelRequested && !pendingLocal;
@@ -245,7 +289,7 @@ export function OrdersPage() {
               {o.sharedToken ? (
                 <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">
                   {tr('同牌加单', 'Same-token add-on')}
-                  {o.addOnTo && tr(` · 与 ${o.addOnTo.receiptNumber ?? `${o.addOnTo.tokenNumber} 号`} 一起结账`, ` · pay with ${o.addOnTo.receiptNumber ?? `token ${o.addOnTo.tokenNumber}`}`)}
+                  {o.addOnTo && tr(` · 和 ${o.addOnTo.receiptNumber ?? `${o.addOnTo.tokenNumber} 号`} 一桌`, ` · same table as ${o.addOnTo.receiptNumber ?? `token ${o.addOnTo.tokenNumber}`}`)}
                 </span>
               ) : o.addOnTo && <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">{tr(`加单 · 原 ${o.addOnTo.tokenNumber} 号 ${o.addOnTo.receiptNumber ?? ''}`, `Add-on · token ${o.addOnTo.tokenNumber} ${o.addOnTo.receiptNumber ?? ''}`)}</span>}
             </div>
@@ -267,17 +311,27 @@ export function OrdersPage() {
             </span>
             {channel && o.paymentState !== 'unpaid' && o.paymentState !== 'not_due' && <span className="ml-1 text-xs text-ink-2">{tr('旧记录', 'legacy')} · {channel}</span>}
           </div>
+          {bill.orders.length >= 2 && <div className="mt-1 text-xs font-semibold text-ink">{billLine(tr, bill.orders.length, bill.summary, bill.complete)}</div>}
+          {isAwaitingPayment(o) && o.kitchenCancelRequested && !pendingLocal && <div className="mt-1 text-xs font-semibold text-warn">{tr('取消待后厨确认，不计', 'Cancel awaiting kitchen, not counted')}</div>}
           {fb && <div role={fb.ok ? 'status' : 'alert'} className={`mt-1 text-xs font-semibold ${fb.ok ? 'text-ok' : 'text-danger'}`}>{fb.text}</div>}
         </div>
         <div className="col-start-2 flex flex-wrap gap-2 lg:col-start-auto lg:justify-end">
           {canConfirm && (
-            <button type="button" disabled={inFlight || !canRegister} onClick={() => void confirmPaid(o)}
+            <button type="button" disabled={inFlight || !canRegister} onClick={() => void confirmPaid(o, payable)}
               title={canRegister ? undefined : tr('只能在已开班的主点单平板登记收款', 'Only the main register with an open shift can record payments')}
               className="h-14 rounded-xl bg-brand px-4 font-bold text-white disabled:bg-control">
-              {inFlight ? tr('正在登记…', 'Recording…') : tr(`确认已收款 ${formatRM(o.totalSen)}`, `Confirm paid ${formatRM(o.totalSen)}`)}
+              {inFlight
+                ? tr('正在登记…', 'Recording…')
+                : payWholeBill
+                  ? tr(`确认已收款 ${formatRM(bill.summary.dueSen)}（${payable.length} 张一起）`, `Confirm paid ${formatRM(bill.summary.dueSen)} (${payable.length} orders)`)
+                  : tr(`确认已收款 ${formatRM(o.totalSen)}`, `Confirm paid ${formatRM(o.totalSen)}`)}
             </button>
           )}
           <button type="button" onClick={() => setReceiptId(o.id)} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold"><Icon name="list" size={18} />{tr('收据', 'Receipt')}</button>
+          {/* 组长跨营业日没载入时，这行本身也是加单：这桌同样不止一张。 */}
+          {(bill.orders.length >= 2 || o.addOnTo) && (
+            <button type="button" onClick={() => setBillRoot(billIdOf(o))} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold"><Icon name="list" size={18} />{tr('整桌收据', 'Table receipt')}</button>
+          )}
           {isFront && (o.fulfillmentStatus === 'queued' || (o.fulfillmentStatus === 'preparing' && !o.kitchenCancelRequested)) && (
             <button type="button" onClick={() => setDialog({ kind: 'cancel', order: o })} className="h-14 rounded-xl border border-line bg-card px-4 font-semibold">{tr('取消', 'Cancel')}</button>
           )}
@@ -369,6 +423,9 @@ export function OrdersPage() {
       {receiptId && config && (
         <ReceiptDialog receiptKey={receiptId} load={() => receiptFromOrder(receiptId, config.name)} menuVersion={config.activeMenuVersion} timeZone={config.timeZone} onClose={() => setReceiptId(null)} />
       )}
+      {billRoot && config && (
+        <ReceiptDialog receiptKey={`bill:${billRoot}`} loadBill={() => billSourcesFromRoot(billRoot, config.name, localPaid)} menuVersion={config.activeMenuVersion} timeZone={config.timeZone} onClose={() => setBillRoot(null)} />
+      )}
       {dialog && <ActionDialog dialog={dialog} busy={busy} onClose={() => setDialog(null)} onRun={run} />}
     </div>
   );
@@ -412,6 +469,7 @@ function ActionDialog({ dialog, busy, onClose, onRun }: {
                   className={`h-14 rounded-xl border-2 font-semibold ${reason === zh ? 'border-ink bg-ok-bg' : 'border-line'}`}>{tr(zh, en)}</button>
               ))}
             </div>
+            <p className="mt-3 text-sm text-ink-2">{tr(`要换别的？先在 ${o.tokenNumber} 号加单，再取消这张，新单才不会排到最后`, `Swapping items? Add on token ${o.tokenNumber} first, then cancel this one, so the new order does not go to the back of the queue.`)}</p>
           </>
         )}
         {dialog.kind === 'refund' && (

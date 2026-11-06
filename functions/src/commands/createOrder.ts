@@ -6,24 +6,27 @@
  * 加单（addOnToOrderId）：客人吃完再加（多为打包），照常是一张新单、新厨单、新票号，
  * 但挂到仍未收款的原单上，收款时一次结清（recordGroupPayment）。原单须未收款、未取消、没有取消待确认。
  * 同牌加单（joinTokenOrderId）：客人拿着 N 号牌还要加一碗、或朋友来了再点，新单挂到仍被这桌占着的 N 号上，
- * 不另发牌；N 号上的单全部出餐 / 取消后牌才释放。没指定 addOnToOrderId 时，这桌那张单若仍待收款，自动并入它的组一起结账；
- * 已收款就单独收这张。牌已给了别的客人时拒绝（TOKEN_OCCUPIED），绝不挂到别人的牌上。
+ * 不另发牌；N 号上的单全部出餐 / 取消后牌才释放。没指定 addOnToOrderId 时自动并入这一轮占用的同桌账单（组长可以已收款，
+ * 账单只收还没收的单）。厨单继承同桌未完成单里最早的排队位置，不重新排队。牌已给了别的客人时拒绝（TOKEN_OCCUPIED），绝不挂到别人的牌上。
  */
 import { businessDateOf } from '../../../src/domain/businessDay';
 import { Cart, CartLine, computeTotals } from '../../../src/domain/cart';
 import { isValidQuantity, parseLineConfig } from '../../../src/domain/lineItem';
 import { SERVICE_MODES } from '../../../src/domain/menu';
 import { loadBom, loadMenu } from '../core/catalog';
-import { holdToken, isTokenNumber, joinToken, TokenBoard, tokenFromDoc } from '../../../src/domain/tokens';
+import { holdToken, isTokenNumber, joinToken, TokenBoard, tokenFromDoc, tokenHolders, tokenSession } from '../../../src/domain/tokens';
 import { CommandContext, runCommand } from '../core/command';
 import { AddOnLink, receiptNumberFor, writeAcceptedOrder } from '../core/orderWrites';
 import { MAX_GROUP_ORDERS } from './payment';
 import { CommandError } from '../core/errors';
 import { int, obj, oneOf, optOneOf, str, storeId, uuid, bad } from '../core/input';
 import { loadStoreConfig, parseRegisterClaim, REGISTER_CLAIM_FIELDS, requireActiveRegister, requireDayOpen, requireNextSequence } from '../core/store';
-import type { Firestore } from 'firebase-admin/firestore';
+import type { DocumentData, Firestore } from 'firebase-admin/firestore';
 
 export const MAX_LINES = 30;
+/** 一次事务里最多读这么多张同牌的单（牌上挂满时只看最早的几张）。 */
+const READ_LIMIT = 10;
+const ticketQueueAt = (d: DocumentData) => (d.queueAtMs as number | undefined) ?? (d.acceptedAtEffectiveMs as number);
 
 export interface CreateOrderResult {
   orderId: string;
@@ -31,7 +34,9 @@ export interface CreateOrderResult {
   tokenNumber: number;
   /** 挂到了这桌客人已拿着的牌上（不用再给牌）。 */
   sharedToken: boolean;
-  /** 并入了哪一组未收款的单（组的原单）；单独结账为 null。 */
+  /** 厨单确实继承了同桌的排队位置（牌上只有人工单时不继承）。 */
+  queueInherited: boolean;
+  /** 并入了哪一张账单（组长单，可能已收款）；单独结账为 null。 */
   addOnToOrderId: string | null;
   totalSen: number;
   paymentState: 'unpaid';
@@ -99,13 +104,26 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   const orderSnap = await tx.get(store.order(o.clientOrderId));
   const tokenSnap = await tx.get(store.token(o.tokenNumber));
   const parent = o.addOnToOrderId ? (await tx.get(store.order(o.addOnToOrderId))).data() : null;
-  // 同牌加单且没指定原单：读这桌那张单，仍待收款就并入它的组。
-  const tablemate = o.joinTokenOrderId && !o.addOnToOrderId ? (await tx.get(store.order(o.joinTokenOrderId))).data() : null;
-  const tablemateRoot = tablemate ? ((tablemate.addOnTo as AddOnLink | null | undefined)?.orderId ?? o.joinTokenOrderId) : null;
+  const tokenNow = tokenFromDoc(o.tokenNumber, tokenSnap.data());
+  // 同牌加单且没指定原单：账单组长取这一轮占用里最早的有效单（可以已收款）。指向的单不在本轮占用里就不并账，防止并到上一桌。
+  const session = o.joinTokenOrderId && !o.addOnToOrderId && tokenSession(tokenNow).includes(o.joinTokenOrderId) ? tokenSession(tokenNow).slice(0, READ_LIMIT) : [];
+  const tablemates = (await Promise.all(session.map((id) => tx.get(store.order(id))))).map((s) => s.data()).filter((d): d is DocumentData => d !== undefined);
+  const canLead = (d: DocumentData) => d.fulfillmentStatus !== 'cancelled' && (d.paymentState === 'unpaid' || d.paymentState === 'paid');
+  // 牌仍被这桌占着：已收款的单也能当组长。牌已空闲（这桌都出餐了）：只有还欠钱才并账，都收完就是普通新单。
+  const billLeader = tokenNow.state === 'held'
+    ? tablemates.find(canLead)
+    : tablemates.find((d) => canLead(d) && d.paymentState === 'unpaid' && !d.kitchenCancelRequested);
+  const billRoot = billLeader ? ((billLeader.addOnTo as AddOnLink | null | undefined)?.orderId ?? (billLeader.id as string)) : null;
   // 自动并单前数一下这组还没收款的单：一次结账最多 MAX_GROUP_ORDERS 张，满了就让新单单独收款。
-  const groupUnpaid = tablemateRoot
-    ? (await tx.get(store.root.collection('orders').where('addOnTo.orderId', '==', tablemateRoot).where('paymentState', '==', 'unpaid'))).size + 1
+  const groupUnpaid = billRoot
+    ? (await tx.get(store.root.collection('orders').where('addOnTo.orderId', '==', billRoot).where('paymentState', '==', 'unpaid'))).size + 1
     : 0;
+  // 同牌加单继承同桌未完成电子单里最早的排队位置；只有人工单或都已完成时照常排队尾。
+  const queueSources = o.joinTokenOrderId && tokenNow.state === 'held'
+    ? (await Promise.all(tokenHolders(tokenNow).slice(0, READ_LIMIT).map((id) => tx.get(store.ticket(id))))).map((s) => s.data())
+      .filter((d): d is DocumentData => Boolean(d) && d!.kitchenRouting === 'digital' && (d!.fulfillmentStatus === 'queued' || d!.fulfillmentStatus === 'preparing'))
+    : [];
+  const queueFrom = queueSources.reduce<DocumentData | undefined>((best, d) => (!best || ticketQueueAt(d) < ticketQueueAt(best) ? d : best), undefined);
   const businessDate = businessDateOf(nowMs, config.businessDay);
   const day = await requireDayOpen(tx, store, businessDate);
 
@@ -128,11 +146,9 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
     // 加单的加单仍挂到最早那张原单，一组只有一个根。
     addOnTo = (parent.addOnTo as AddOnLink | null | undefined)
       ?? { orderId: o.addOnToOrderId, tokenNumber: parent.tokenNumber as number, receiptNumber: (parent.receiptNumber as string | null) ?? null };
-  } else if (o.joinTokenOrderId && tablemate && tablemate.tokenNumber === o.tokenNumber
-    && tablemate.paymentState === 'unpaid' && tablemate.fulfillmentStatus !== 'cancelled' && !tablemate.kitchenCancelRequested
-    && groupUnpaid < MAX_GROUP_ORDERS) {
-    addOnTo = (tablemate.addOnTo as AddOnLink | null | undefined)
-      ?? { orderId: o.joinTokenOrderId, tokenNumber: tablemate.tokenNumber as number, receiptNumber: (tablemate.receiptNumber as string | null) ?? null };
+  } else if (billLeader && billLeader.tokenNumber === o.tokenNumber && groupUnpaid < MAX_GROUP_ORDERS) {
+    addOnTo = (billLeader.addOnTo as AddOnLink | null | undefined)
+      ?? { orderId: billLeader.id as string, tokenNumber: billLeader.tokenNumber as number, receiptNumber: (billLeader.receiptNumber as string | null) ?? null };
   }
   const menu = await loadMenu(tx, store, o.menuVersion);
   const bom = await loadBom(tx, store, config.activeBomVersion);
@@ -171,13 +187,14 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
     acceptedAtEffectiveMs: nowMs, deviceAcceptedAtMs: o.deviceAcceptedAtMs, cloudReceivedAtMs: nowMs, timeQuality: 'server', businessDate,
     registerId: input.claim.registerId, registerEpoch: input.claim.registerEpoch, shiftId: input.shiftId, sequence: input.sequence,
     createdBy: actor.uid, allocationEventId: `${input.operationId}-alloc`, addOnTo, sharedToken,
+    queue: sharedToken && queueFrom ? { queueAtMs: ticketQueueAt(queueFrom), queueGroupId: (queueFrom.queueGroupId as string | undefined) ?? (queueFrom.orderId as string) } : null,
   });
   tx.set(store.token(o.tokenNumber), { ...held.token, updatedAtMs: nowMs });
   tx.update(store.register(input.claim.registerId), { lastAppliedSequence: input.sequence, lastSeenAtMs: nowMs });
   tx.set(store.businessDay(businessDate), { state: 'open', receiptSeq, updatedAtMs: nowMs }, { merge: true });
 
   const result: CreateOrderResult = {
-    orderId, receiptNumber, tokenNumber: o.tokenNumber, sharedToken, addOnToOrderId: addOnTo?.orderId ?? null, totalSen: totals.totalSen, paymentState: 'unpaid', fulfillmentStatus: 'preparing', businessDate, acceptedAtMs: nowMs,
+    orderId, receiptNumber, tokenNumber: o.tokenNumber, sharedToken, queueInherited: sharedToken && Boolean(queueFrom), addOnToOrderId: addOnTo?.orderId ?? null, totalSen: totals.totalSen, paymentState: 'unpaid', fulfillmentStatus: 'preparing', businessDate, acceptedAtMs: nowMs,
   };
   return { result, audit: { entityId: orderId, after: { totalSen: totals.totalSen, tokenNumber: o.tokenNumber, paymentState: 'unpaid', addOnToOrderId: addOnTo?.orderId ?? null, sharedToken } } };
 }

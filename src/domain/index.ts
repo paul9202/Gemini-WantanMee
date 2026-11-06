@@ -11,6 +11,7 @@ export * from './payment';
 export * from './tokens';
 export * from './orderLifecycle';
 export * from './kitchen';
+export * from './bill';
 export * from './timing';
 export * from './businessDay';
 export * from './finance';

@@ -2,14 +2,15 @@
  * 收据（02 §6、O13）：58/80mm 预览与系统打印。
  * - 打印调用系统对话框；浏览器不能保证热敏机自动切纸/直连，打印失败不影响已保存的订单。
  * - 第一次之后的打印都标「副本」（本机记录次数），不是新交易。
+ * - 整桌收据：同桌账单打在一张纸上；次数按 bill:{组长单}:{张数} 记，这桌多一张单再打不算副本。
  */
 import { ReactNode, useEffect, useLayoutEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { doc, getDoc } from 'firebase/firestore';
+import { collection, doc, DocumentData, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { LineConfig, unitPriceSen } from '../../domain/lineItem';
 import { MENU_V1, MenuVersion, orderServiceMode, ServiceMode } from '../../domain/menu';
 import { useMenu } from '../../data/menu';
-import { buildReceipt, ReceiptSource } from '../../domain/receipt';
+import { buildBillReceipt, buildReceipt, ReceiptSource } from '../../domain/receipt';
 import { db, storePath } from '../../data/firebase/client';
 import { kvGet, kvSet, LocalOrder } from '../../data/local/idb';
 import { Icon } from '../../ui/visual';
@@ -18,11 +19,8 @@ type Width = 58 | 80;
 
 const CONFIG_KEYS = ['productKind', 'size', 'noodleType', 'sauce', 'spice', 'lard', 'scallion', 'isKosong', 'addOns', 'note'] as const;
 
-/** 从云端订单文档（收银可读，无成本）组装收据数据。 */
-export async function receiptFromOrder(orderId: string, storeName: string): Promise<ReceiptSource> {
-  const snap = await getDoc(doc(db, storePath(`orders/${orderId}`)));
-  const o = snap.data();
-  if (!o) throw new Error('找不到这张订单');
+/** 云端订单文档（收银可读，无成本）→ 收据数据。 */
+function sourceFromOrderDoc(o: DocumentData, storeName: string): ReceiptSource {
   return {
     storeName, receiptNumber: o.receiptNumber, offlineReceiptNumber: o.offlineReceiptNumber ?? null, tokenNumber: o.tokenNumber,
     serviceMode: o.serviceMode, source: o.source, acceptedAtMs: o.acceptedAtEffectiveMs, timeQuality: o.timeQuality,
@@ -32,7 +30,32 @@ export async function receiptFromOrder(orderId: string, storeName: string): Prom
       quantity: i.quantity as number, unitPriceSen: i.unitPriceSen as number, serviceMode: (i.serviceMode as ServiceMode | undefined),
     })),
     totalSen: o.totalSen, paymentMethod: o.paymentMethod ?? null, tenderedSen: o.cashTenderedSen ?? null, changeSen: o.changeSen ?? null, synced: true,
+    kitchenCancelRequested: o.kitchenCancelRequested ?? false,
   };
+}
+
+export async function receiptFromOrder(orderId: string, storeName: string): Promise<ReceiptSource> {
+  const snap = await getDoc(doc(db, storePath(`orders/${orderId}`)));
+  const o = snap.data();
+  if (!o) throw new Error('找不到这张订单');
+  return sourceFromOrderDoc(o, storeName);
+}
+
+/** 整桌收据的数据：组长单 + 挂在它上面的所有单（直接读云端，跨营业日也齐全）。 */
+export async function billSourcesFromRoot(rootId: string, storeName: string, localPaid: ReadonlySet<string> = new Set()): Promise<ReceiptSource[]> {
+  const [rootSnap, addOns] = await Promise.all([
+    getDoc(doc(db, storePath(`orders/${rootId}`))),
+    getDocs(query(collection(db, storePath('orders')), where('addOnTo.orderId', '==', rootId))),
+  ]);
+  const root = rootSnap.data();
+  if (!root) throw new Error('找不到这张订单');
+  // 缓存里的查询结果可能缺单，金额会算错：宁可不打。
+  if (rootSnap.metadata.fromCache || addOns.metadata.fromCache) throw new Error('现在连不上云端，整桌金额可能不全，联网后再打印');
+  return [rootSnap, ...addOns.docs].map((d) => {
+    const s = sourceFromOrderDoc(d.data()!, storeName);
+    // 本机已登记、还没同步的单：钱已经收了，不能再打成还要收。
+    return localPaid.has(d.id) && s.paymentState === 'unpaid' ? { ...s, paymentState: 'paid' as const } : s;
+  });
 }
 
 /** 本机离线单（补同步前也能打印，标明尚未同步）。 */
@@ -51,30 +74,44 @@ export function receiptFromLocal(o: LocalOrder, menu: MenuVersion, storeName: st
 
 const priceOf = (menu: MenuVersion, c: LineConfig) => unitPriceSen(menu, c);
 
-export function ReceiptDialog({ receiptKey, load, menuVersion, timeZone, onClose }: {
-  /** 用于记录打印次数的稳定 ID（订单 UUID）。 */
+export function ReceiptDialog({ receiptKey, load, loadBill, menuVersion, timeZone, onClose }: {
+  /** 用于记录打印次数的稳定 ID（订单 UUID）。整桌收据传 bill:{组长单}，载入后再接上张数。 */
   receiptKey: string;
-  load: () => Promise<ReceiptSource>;
   menuVersion: string;
   timeZone: string;
   onClose: () => void;
-}) {
-  const [src, setSrc] = useState<ReceiptSource | null>(null);
+} & (
+  | { load: () => Promise<ReceiptSource>; loadBill?: undefined }
+  /** 传了 loadBill 就打整桌收据。 */
+  | { load?: undefined; loadBill: () => Promise<ReceiptSource[]> }
+)) {
+  const [src, setSrc] = useState<ReceiptSource | ReceiptSource[] | null>(null);
+  const [printKey, setPrintKey] = useState(receiptKey);
   const [err, setErr] = useState<string | null>(null);
   const [width, setWidth] = useState<Width>(80);
   const [printCount, setPrintCount] = useState(0);
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    load().then(setSrc).catch((e) => setErr(e instanceof Error ? e.message : String(e)));
-    void kvGet<number>(`printCount:${receiptKey}`).then((n) => setPrintCount(n ?? 0));
+    const fail = (e: unknown) => setErr(e instanceof Error ? e.message : String(e));
+    const readCount = (key: string) => {
+      setPrintKey(key);
+      void kvGet<number>(`printCount:${key}`).then((n) => setPrintCount(n ?? 0));
+    };
+    if (loadBill) {
+      loadBill().then((list) => { setSrc(list); readCount(`${receiptKey}:${list.length}`); }).catch(fail);
+    } else {
+      load().then(setSrc).catch(fail);
+      readCount(receiptKey);
+    }
     void kvGet<Width>('receiptWidth').then((w) => w && setWidth(w));
     // load 每次渲染都是新函数；只按收据 ID 加载一次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receiptKey]);
 
   const menu = useMenu(menuVersion) ?? MENU_V1;
-  const receipt = src ? buildReceipt(menu, src, { printIndex: printCount, timeZone }) : null;
+  const printOpts = { printIndex: printCount, timeZone };
+  const receipt = !src ? null : Array.isArray(src) ? buildBillReceipt(menu, src, printOpts) : buildReceipt(menu, src, printOpts);
 
   function print() {
     setMsg(null);
@@ -82,7 +119,7 @@ export function ReceiptDialog({ receiptKey, load, menuVersion, timeZone, onClose
       window.print();
       const n = printCount + 1;
       setPrintCount(n);
-      void kvSet(`printCount:${receiptKey}`, n);
+      void kvSet(`printCount:${printKey}`, n);
     } catch {
       setMsg('打印没有成功。订单已经保存，可以稍后重印。');
     }
@@ -93,7 +130,7 @@ export function ReceiptDialog({ receiptKey, load, menuVersion, timeZone, onClose
       {receipt && <PrintPortal width={width}><ReceiptPaper receipt={receipt} width={width} /></PrintPortal>}
       <div className="flex max-h-full w-full max-w-md flex-col rounded-2xl bg-card p-4 shadow-xl">
         <div className="mb-3 flex items-center gap-2">
-          <h2 className="text-xl font-bold">收据</h2>
+          <h2 className="text-xl font-bold">{loadBill ? '整桌收据' : '收据'}</h2>
           <div className="ml-auto flex rounded-lg bg-subtle p-1" role="group" aria-label="纸宽">
             {([58, 80] as Width[]).map((w) => (
               <button key={w} type="button" aria-pressed={width === w} onClick={() => { setWidth(w); void kvSet('receiptWidth', w); }}

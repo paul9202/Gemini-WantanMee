@@ -2,15 +2,15 @@
  * Emulator 命令集成测试：真实 Auth 身份 → Callable（asia-southeast1）→ Functions 事务 → Firestore。
  * 覆盖：下单即送厨（无付款流水）→ 厨房确认 → 出餐自动释放餐牌 → 同牌新单 → 旧单补登记收款；
  * 以及幂等、并发、越权、篡改，收款独立登记、取消与成本、撤回不抢牌、跨日收款（DESIGN 2026-10-23 §11）；
- * 加单与同牌加单（一张牌挂多张单，逐张出餐 / 取消，全部摘完才释放）。
+ * 加单与同牌加单（一张牌挂多张单，逐张出餐 / 取消，全部摘完才释放；排队位置继承；一轮占用内并同桌账单）。
  */
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import {
-  admin, cleanupClients, countDocs, newClient, noodle, orderPayload, pay, payPayload, placeOrder, setupStore, uuid,
+  admin, cleanupClients, countDocs, newClient, noodle, orderPayload, pay, payPayload, placeOrder, setupStore, StoreFixture, uuid,
 } from './harness';
-import { BOM_V1, defaultConfig, MENU_V1, normalizeConfig } from '../../src/domain';
+import { arrangeKitchen, BOM_V1, defaultConfig, KitchenTicket, MENU_V1, normalizeConfig } from '../../src/domain';
 
 after(cleanupClients);
 
@@ -446,17 +446,20 @@ test('同牌加单：拿着 5 号牌再点一碗挂到同一张牌；各自厨�
   for (const id of [a.orderId, b.orderId]) assert.equal((await s(`orders/${id}`).get()).data()!.paymentState, 'paid');
 });
 
-test('同牌加单边界：原单已收款单独收；取消其中一张只摘它；牌已给别的客人被拒；牌已空闲则按新客人占同一号', async () => {
+test('同牌加单边界：原单已收款也并账、新单仍可自己收；取消其中一张只摘它；牌已给别的客人被拒；牌已空闲则按新客人占同一号', async () => {
   const f = await setupStore();
   const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
 
-  // 原单已收款：同牌加单不并组，自己单独收
+  // 原单已收款：同牌加单仍并入这桌的账（组长已收款，只收还没收的单），自己也能单独收
   const c = (await placeOrder(f, { tokenNumber: 6, paid: true })).result;
   const d = (await placeOrder(f, { tokenNumber: 6, joinTokenOrderId: c.orderId })).result;
-  assert.deepEqual([d.sharedToken, d.addOnToOrderId], [true, null]);
-  assert.equal((await s(`orders/${d.orderId}`).get()).data()!.addOnTo, null);
+  assert.deepEqual([d.sharedToken, d.addOnToOrderId], [true, c.orderId]);
+  assert.equal((await s(`orders/${d.orderId}`).get()).data()!.addOnTo.orderId, c.orderId);
   assert.deepEqual((await s('tokens/06').get()).data()!.orderIds, [c.orderId, d.orderId]);
+  // 显式指定已收款的原单仍被拒：只有同牌自动并账才能以已收款的单为组长
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 6, joinTokenOrderId: c.orderId, addOnToOrderId: c.orderId })), 'ADD_ON_NOT_ALLOWED');
   await pay(f, d.orderId, 700);
+  assert.equal(await countDocs(f.storeId, 'payments', 'orderId', c.orderId), 1, '原单不会再收一次');
 
   // 取消其中一张：牌继续由另一张占着
   const e = (await placeOrder(f, { tokenNumber: 7 })).result;
@@ -499,6 +502,180 @@ test('同牌加单自动并单不超过一次结账上限：同组未收款满 1
   const extra = (await placeOrder(f, { tokenNumber: 14, joinTokenOrderId: root.orderId })).result;
   assert.deepEqual([extra.sharedToken, extra.addOnToOrderId], [true, null], '第 11 张仍挂在 14 号上，但单独收款');
   assert.equal((await admin().doc(`stores/${f.storeId}/tokens/14`).get()).data()!.orderIds.length, 11);
+});
+
+test('同牌加单排队：继承同桌最早未完成单的位置，不重新排队；接单时间不变；接着再加还是同一个位置', async () => {
+  const f = await setupStore();
+  const ticket = async (id: string) => (await admin().doc(`stores/${f.storeId}/kitchenTickets/${id}`).get()).data()!;
+  const a = (await placeOrder(f, { tokenNumber: 5 })).result;
+  const x = (await placeOrder(f, { tokenNumber: 6 })).result;
+  const b = (await placeOrder(f, { tokenNumber: 5, joinTokenOrderId: a.orderId })).result;
+  const [ta, tx, tb] = await Promise.all([ticket(a.orderId), ticket(x.orderId), ticket(b.orderId)]);
+  assert.deepEqual([ta.queueAtMs, ta.queueGroupId], [undefined, undefined], '原单和普通单不写排队字段');
+  assert.deepEqual([tx.queueAtMs, tx.queueGroupId], [undefined, undefined]);
+  assert.deepEqual([tb.queueAtMs, tb.queueGroupId], [ta.acceptedAtEffectiveMs, a.orderId], 'B 继承 A 的位置');
+  assert.equal(b.queueInherited, true, '结果如实告诉收银排回了原位');
+  assert.ok(tb.acceptedAtEffectiveMs > tx.acceptedAtEffectiveMs, 'B 的接单时间不变，仍晚于 X');
+
+  const c = (await placeOrder(f, { tokenNumber: 5, joinTokenOrderId: b.orderId })).result;
+  const tc = await ticket(c.orderId);
+  assert.deepEqual([tc.queueAtMs, tc.queueGroupId], [ta.acceptedAtEffectiveMs, a.orderId], 'C 接着 B 再加：还是同一个位置、同一组');
+  assert.ok(tc.acceptedAtEffectiveMs > tb.acceptedAtEffectiveMs, 'C 的接单时间也不变');
+
+  const queue = arrangeKitchen([tx, tc, tb, ta] as KitchenTicket[]);
+  assert.deepEqual(queue.map((g) => g.tickets.map((t) => t.orderId)), [[a.orderId, b.orderId, c.orderId], [x.orderId]], '排在 X 前面');
+});
+
+test('同牌加单排队：A 已出餐、B 还占着牌，C 从 B 继承，仍是 A 那个位置和组', async () => {
+  const f = await setupStore();
+  const ticket = async (id: string) => (await admin().doc(`stores/${f.storeId}/kitchenTickets/${id}`).get()).data()!;
+  const a = (await placeOrder(f, { tokenNumber: 12 })).result;
+  await placeOrder(f, { tokenNumber: 13 });
+  const b = (await placeOrder(f, { tokenNumber: 12, joinTokenOrderId: a.orderId })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, a.orderId, 1));
+  const c = (await placeOrder(f, { tokenNumber: 12, joinTokenOrderId: b.orderId })).result;
+  assert.deepEqual([c.sharedToken, c.addOnToOrderId], [true, a.orderId]);
+  const [ta, tb, tc] = await Promise.all([ticket(a.orderId), ticket(b.orderId), ticket(c.orderId)]);
+  assert.equal(tb.queueAtMs, ta.acceptedAtEffectiveMs);
+  assert.deepEqual([tc.queueAtMs, tc.queueGroupId], [ta.acceptedAtEffectiveMs, a.orderId]);
+});
+
+test('同牌加单排队：牌上只有人工单时不继承（人工单不在电子队列里），照常排队尾；账仍并', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+  const manualId = uuid();
+  const sequence = f.seq.value + 1;
+  const r = await f.cashier.call<{ results: { status: string }[] }>('syncOfflineEvents', {
+    storeId: f.storeId,
+    events: [{
+      eventId: uuid(), registerId: f.claim.registerId, deviceId: f.claim.deviceId, registerEpoch: f.claim.registerEpoch, sequence, shiftId: f.shiftId,
+      type: 'offline_order_created', occurredAtDeviceMs: Date.now(), lastServerOffsetMs: 0,
+      payload: {
+        clientOrderId: manualId, offlineReceiptNumber: 'O-T01-0001', tokenNumber: 31, serviceMode: 'dine_in', menuVersion: MENU_V1.version,
+        lines: [{ lineId: uuid(), config: noodle(), quantity: 1 }], totalSen: 700, payment: null,
+      },
+    }],
+  });
+  assert.equal(r.results[0].status, 'accepted', JSON.stringify(r.results));
+  f.seq.value = sequence;
+  const manual = (await s(`kitchenTickets/${manualId}`).get()).data()!;
+  assert.deepEqual([manual.kitchenRouting, manual.fulfillmentStatus], ['manual', 'queued']);
+
+  const b = (await placeOrder(f, { tokenNumber: 31, joinTokenOrderId: manualId })).result;
+  assert.deepEqual([b.sharedToken, b.addOnToOrderId], [true, manualId]);
+  const tb = (await s(`kitchenTickets/${b.orderId}`).get()).data()!;
+  assert.deepEqual([tb.queueAtMs, tb.queueGroupId], [undefined, undefined]);
+});
+
+test('同桌账单：组长已收款，B、C 还欠；一键收 [B, C] 成功，组长不会被收第二次', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+  const a = (await placeOrder(f, { tokenNumber: 5, paid: true })).result;
+  const b = (await placeOrder(f, { tokenNumber: 5, joinTokenOrderId: a.orderId })).result;
+  assert.deepEqual([b.sharedToken, b.addOnToOrderId], [true, a.orderId]);
+  await f.kitchen.call('serveOrder', lifecycle(f, b.orderId, 1));
+  // A 还在做，牌还在：C 指着已出餐的 B 也算这一桌
+  const c = (await placeOrder(f, { tokenNumber: 5, joinTokenOrderId: b.orderId, lines: [{ config: noodle(), quantity: 2 }], expectedTotalSen: 1400 })).result;
+  assert.deepEqual([c.sharedToken, c.addOnToOrderId], [true, a.orderId]);
+  for (const id of [b.orderId, c.orderId]) assert.equal((await s(`orders/${id}`).get()).data()!.addOnTo.orderId, a.orderId);
+
+  const group = (orders: { orderId: string; amountSen: number }[]) => ({ storeId: f.storeId, operationId: uuid(), ...f.claim, orders });
+  const rest = [{ orderId: b.orderId, amountSen: 700 }, { orderId: c.orderId, amountSen: 1400 }];
+  assert.equal(await f.cashier.code('recordGroupPayment', group([{ orderId: a.orderId, amountSen: 700 }, ...rest])), 'ALREADY_PAID', '带上已收的组长：整组不写');
+  assert.equal((await s(`orders/${b.orderId}`).get()).data()!.paymentState, 'unpaid');
+  const paid = await f.cashier.call<{ amountSen: number }>('recordGroupPayment', group(rest));
+  assert.equal(paid.amountSen, 2100);
+  assert.equal(await countDocs(f.storeId, 'payments', 'orderId', a.orderId), 1, 'A 只有一笔收款');
+  assert.equal(await countDocs(f.storeId, 'payments'), 3);
+  const aDoc = (await s(`orders/${a.orderId}`).get()).data()!;
+  assert.deepEqual([aDoc.paymentState, aDoc.paidSen, aDoc.paymentSeq], ['paid', 700, 1]);
+});
+
+test('同牌加单指向上一桌的单：牌已换过一轮，不并账；只按牌上这一轮算', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+  const g = (await placeOrder(f, { tokenNumber: 8 })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, g.orderId, 1));
+  const h = (await placeOrder(f, { tokenNumber: 8 })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, h.orderId, 1));
+  assert.equal((await s('tokens/08').get()).data()!.state, 'available');
+
+  const j = (await placeOrder(f, { tokenNumber: 8, joinTokenOrderId: g.orderId })).result;
+  assert.deepEqual([j.sharedToken, j.addOnToOrderId], [false, null], 'G 不在这一轮占用里：号码相同也不并');
+  assert.equal((await s(`orders/${j.orderId}`).get()).data()!.addOnTo, null);
+  assert.deepEqual((await s('tokens/08').get()).data()!.sessionOrderIds, [j.orderId]);
+  const tj = (await s(`kitchenTickets/${j.orderId}`).get()).data()!;
+  assert.deepEqual([tj.queueAtMs, tj.queueGroupId], [undefined, undefined]);
+});
+
+test('全部出餐后再加：都收完是普通新单；还有欠款就并账，但排队尾', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+
+  // 都出餐、都收完：普通新单
+  const a = (await placeOrder(f, { tokenNumber: 15, paid: true })).result;
+  const b = (await placeOrder(f, { tokenNumber: 15, joinTokenOrderId: a.orderId, paid: true })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, a.orderId, 1));
+  await f.kitchen.call('serveOrder', lifecycle(f, b.orderId, 1));
+  const fresh = (await placeOrder(f, { tokenNumber: 15, joinTokenOrderId: b.orderId })).result;
+  assert.deepEqual([fresh.sharedToken, fresh.addOnToOrderId], [false, null]);
+  assert.equal((await s(`orders/${fresh.orderId}`).get()).data()!.addOnTo, null);
+  const tFresh = (await s(`kitchenTickets/${fresh.orderId}`).get()).data()!;
+  assert.deepEqual([tFresh.queueAtMs, tFresh.queueGroupId], [undefined, undefined]);
+
+  // 都出餐、C 已收、D 还欠：E 并到这桌的账上，牌按新一轮占，不继承位置
+  const c = (await placeOrder(f, { tokenNumber: 16, paid: true })).result;
+  const d = (await placeOrder(f, { tokenNumber: 16, joinTokenOrderId: c.orderId })).result;
+  await f.kitchen.call('serveOrder', lifecycle(f, c.orderId, 1));
+  await f.kitchen.call('serveOrder', lifecycle(f, d.orderId, 1));
+  const e = (await placeOrder(f, { tokenNumber: 16, joinTokenOrderId: d.orderId })).result;
+  assert.deepEqual([e.sharedToken, e.addOnToOrderId], [false, c.orderId]);
+  const te = (await s(`kitchenTickets/${e.orderId}`).get()).data()!;
+  assert.deepEqual([te.queueAtMs, te.queueGroupId], [undefined, undefined], '排队尾');
+  const paid = await f.cashier.call<{ amountSen: number }>('recordGroupPayment', {
+    storeId: f.storeId, operationId: uuid(), ...f.claim, orders: [{ orderId: d.orderId, amountSen: 700 }, { orderId: e.orderId, amountSen: 700 }],
+  });
+  assert.equal(paid.amountSen, 1400);
+});
+
+test('取消待确认：加单照常挂上这张牌；合并收款带上待取消的单被拒，整组不写；新单可以单独收', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+  const a = (await placeOrder(f, { tokenNumber: 17 })).result;
+  await f.cashier.call('requestCancel', lifecycle(f, a.orderId, 1, { reason: '点错了' }));
+  const b = (await placeOrder(f, { tokenNumber: 17, joinTokenOrderId: a.orderId })).result;
+  assert.equal(b.sharedToken, true);
+  assert.deepEqual((await s('tokens/17').get()).data()!.orderIds, [a.orderId, b.orderId]);
+
+  const group = { storeId: f.storeId, operationId: uuid(), ...f.claim, orders: [{ orderId: a.orderId, amountSen: 700 }, { orderId: b.orderId, amountSen: 700 }] };
+  assert.equal(await f.cashier.code('recordGroupPayment', group), 'CANCEL_PENDING');
+  assert.equal((await s(`orders/${b.orderId}`).get()).data()!.paymentState, 'unpaid', '整组不写');
+  assert.equal(await countDocs(f.storeId, 'payments'), 0);
+  await pay(f, b.orderId, 700);
+  assert.equal((await s(`orders/${b.orderId}`).get()).data()!.paymentState, 'paid');
+  assert.equal((await s(`orders/${a.orderId}`).get()).data()!.paymentState, 'unpaid');
+  assert.equal(await countDocs(f.storeId, 'payments'), 1);
+});
+
+test('日结：同一桌合并收款与逐张收款，关账数字一样', async () => {
+  const close = async (settle: (f: StoreFixture, orders: { orderId: string; amountSen: number }[]) => Promise<unknown>) => {
+    const f = await setupStore();
+    const a = (await placeOrder(f, { tokenNumber: 18 })).result;
+    const b = (await placeOrder(f, { tokenNumber: 18, joinTokenOrderId: a.orderId, lines: [{ config: noodle(), quantity: 2 }], expectedTotalSen: 1400 })).result;
+    await f.kitchen.call('serveOrder', lifecycle(f, a.orderId, 1));
+    await f.kitchen.call('serveOrder', lifecycle(f, b.orderId, 1));
+    await settle(f, [{ orderId: a.orderId, amountSen: 700 }, { orderId: b.orderId, amountSen: 1400 }]);
+    assert.equal(await countDocs(f.storeId, 'payments'), 2, '合并收款也是每单一条收款');
+    const closed = await f.owner.call<{ figures: any }>('closeBusinessDay', { storeId: f.storeId, operationId: uuid(), businessDate: a.businessDate, acknowledgeExceptions: true, exceptionReason: '测试关账' });
+    const fg = closed.figures;
+    return [fg.registeredSen, fg.netRegisteredSen, fg.validOrderCount, fg.validOrderSen, fg.unpaid.count, fg.unpaid.totalSen, fg.summary.receipts.unspecifiedSen];
+  };
+  const grouped = await close((f, orders) => f.cashier.call('recordGroupPayment', { storeId: f.storeId, operationId: uuid(), ...f.claim, orders }));
+  const single = await close(async (f, orders) => {
+    for (const o of orders) await pay(f, o.orderId, o.amountSen);
+  });
+  assert.deepEqual(grouped, [2100, 2100, 2, 2100, 0, 0, 2100]);
+  assert.deepEqual(single, grouped);
 });
 
 test('越权：匿名、非成员、他店、后厨下单、停用成员、旧收银机 epoch、缺号', async () => {

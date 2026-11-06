@@ -46,6 +46,8 @@ export interface AcceptedOrderInput {
   addOnTo?: AddOnLink | null;
   /** 同牌加单：挂在这桌客人已拿着的牌上（牌上还有别的单）。 */
   sharedToken?: boolean;
+  /** 同牌加单继承的排队位置与后厨分组；只写在厨单上，接单时间不变。 */
+  queue?: { queueAtMs: number; queueGroupId: string } | null;
   extra?: Record<string, unknown>;
 }
 
@@ -118,6 +120,7 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     addOnTo: a.addOnTo ? { tokenNumber: a.addOnTo.tokenNumber } : null,
     // 同牌加单：后厨据此提示「N 号再加的，和前面 N 号的一起送」。
     sharedToken: a.sharedToken ?? false,
+    ...(a.queue ?? {}),
     receiptNumber: a.receiptNumber,
     offlineReceiptNumber: a.offlineReceiptNumber,
   });

@@ -4,7 +4,8 @@
  * 接单进度只显示有依据的事实：本机已记录 → 云端已接单 → 后厨已收到；
  * 断网时只完成第一步，后两步明确显示「未同步」与「请人工传单」。
  * 收款是独立的事：下单后可立即确认，或送餐收钱后在常驻的「待登记收款」里按订单确认。
- * 同牌加单：同一桌客人拿着 N 号牌再点，新单挂在 N 号上（不用再给牌）；只能联网下单，断网时按新单给新牌。
+ * 同牌加单：同一桌客人拿着 N 号牌再点，新单挂在 N 号上（不用再给牌，后厨排回原位）；只能联网下单，断网时按新单给新牌。
+ * 手选的空闲牌，若这个号上一桌还没收款：只在本单上方提示，可一键并到一起算；不理它就是普通新客人。牌号全天复用，绝不按号自动并账。
  */
 import { useEffect, useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
@@ -15,7 +16,7 @@ import { formatRM } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, tokenFromDoc, tokenHolders, tokenSession, TokenStateName } from '../../domain/tokens';
 import { formatClock } from '../../domain/timing';
-import { kitchenHealth } from '../../domain/kitchenLink';
+import { DEFAULT_KITCHEN_LINK, kitchenHealth } from '../../domain/kitchenLink';
 import { useHeartbeat } from '../../data/heartbeat';
 import { db, storePath } from '../../data/firebase/client';
 import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
@@ -34,7 +35,7 @@ import { Icon } from '../../ui/visual';
 import { useLang, useT } from '../../app/i18n';
 import { ShellHeaderActions } from '../../app/Shell';
 import { lineName } from '../../domain/lineItem';
-import { PendingPaymentsDrawer, QuickPay, UnpaidOrder, useUnpaidOrders } from './PendingPayments';
+import { MAX_PAY_ORDERS, PendingPaymentsDrawer, QuickPay, UnpaidOrder, useUnpaidOrders } from './PendingPayments';
 import { CartPanel } from './CartPanel';
 import { Customizer } from './Customizer';
 import { OrderResultDialog, RecentOrder, ResultStage, ResultSummary } from './OrderResult';
@@ -53,15 +54,21 @@ interface CreateOrderResult {
   replayed?: boolean;
   /** 同牌加单且确实挂到了仍占用的牌上（牌已空出而重新占牌时为 false）。旧服务器不返回。 */
   sharedToken?: boolean;
-  /** 本单所在收款组的原单 ID；不是加单为 null。旧服务器不返回。 */
+  /** 厨单确实继承了同桌的排队位置（牌上只有人工单时不继承）。旧服务器不返回。 */
+  queueInherited?: boolean;
+  /** 本单所在收款组的组长单 ID（组长可能已收款）；不是加单为 null。旧服务器不返回。 */
   addOnToOrderId?: string | null;
 }
+
+/** 牌释放后多久内才提示「上一桌还没收款」：再久就不会是同一桌了。 */
+const SAME_TABLE_WINDOW_MS = 30 * 60_000;
 
 type Stage =
   | { kind: 'idle' }
   | { kind: 'saving' }
   | { kind: 'submitting' }
-  | { kind: 'accepted'; result: CreateOrderResult; summary: ResultSummary }
+  /** joinRequested：下单时要同牌加单（结果弹窗据此说明牌已空出的情况）。 */
+  | { kind: 'accepted'; result: CreateOrderResult; summary: ResultSummary; joinRequested: boolean }
   | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: number; summary: ResultSummary }
   | { kind: 'rejected'; reason: string; code: string }
   | { kind: 'unknown'; operationId: string }
@@ -82,7 +89,7 @@ export function PosPage() {
 
   const tokensQ = useLiveQuery<{
     number: number; state: TokenStateName; orderId: string | null; version: number;
-    orderIds?: string[]; sessionOrderIds?: string[]; lastReleasedOrderId?: string | null;
+    orderIds?: string[]; sessionOrderIds?: string[]; lastReleasedOrderId?: string | null; updatedAtMs?: number;
   }>(collection(db, storePath('tokens')), 'tokens');
   const tokensFromServer = !tokensQ.fromCache && tokensQ.data.length > 0;
   const unsynced = unsyncedEvents(rt);
@@ -94,7 +101,7 @@ export function PosPage() {
     else base = { ...rt.snapshot.tokens };
     return overlayLocalTokens(base, unsynced.map((r) => r.event));
   }, [tokensQ.data, tokensFromServer, rt.snapshot, unsynced]);
-  const queueQ = useLiveQuery<{ fulfillmentStatus: string; acceptedAtEffectiveMs: number }>(
+  const queueQ = useLiveQuery<{ fulfillmentStatus: string; acceptedAtEffectiveMs: number; kitchenAckAtMs?: number | null; manualHandoffAtMs?: number | null }>(
     query(collection(db, storePath('kitchenTickets')), where('kitchenRouting', '==', 'digital'), where('fulfillmentStatus', 'in', ['queued', 'preparing'])),
     'pos-queue',
   );
@@ -106,6 +113,8 @@ export function PosPage() {
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
   const [undo, setUndo] = useState<{ cart: Cart; label: string } | null>(null);
   const [token, setToken] = useState<number | null>(null);
+  // 收银在选牌器里亲手点的空闲牌（自动建议的牌不算）：只有手选才提示「上一桌还没收款」。
+  const [manualPick, setManualPick] = useState<number | null>(null);
   const [lastIssued, setLastIssued] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   // 窄屏（<1024）本单收起为底部条，点开后全屏显示。
@@ -149,6 +158,11 @@ export function PosPage() {
     if (joinTarget) return;
     if (token === null || board[token]?.state !== 'available') setToken(suggestNextToken(board, lastIssued));
   }, [board, token, lastIssued, tokensQ.loading, rt.snapshot, joinTarget]);
+
+  // 牌一变（下单后清空、牌失效改建议、改去同牌加单）手选标记就作废，之后再建议到同一个号也不算手选。
+  useEffect(() => {
+    if (manualPick !== null && manualPick !== token) setManualPick(null);
+  }, [manualPick, token]);
 
   // 同牌加单期间牌有变化：牌已给了别的客人 → 取消同牌加单并提示；原单已出餐但同桌别的单还占着牌 → 改挂到仍占牌的那张单上。
   // 牌显示空闲时不动：可能是这桌的单都出餐了（服务器会按同一个号重新占牌），也可能是刚下的单还没同步到本机。
@@ -247,6 +261,7 @@ export function PosPage() {
   function clearAfterAccept(tokenNumber: number, sharedToken = false) {
     if (!sharedToken) rememberIssued(tokenNumber);
     setToken(null);
+    setManualPick(null);
     setCart(emptyCart(cart.serviceMode));
     setEditingLineId(null);
     setUndo(null);
@@ -290,6 +305,7 @@ export function PosPage() {
 
   async function confirmOnline() {
     if (!menu || !reg.claim || !reg.shiftId || orderToken === null) return;
+    const joinRequested = Boolean(joinTarget);
     // 先补传离线日志，保证序号连续。
     if (unsynced.length) {
       setStage({ kind: 'submitting' });
@@ -305,7 +321,7 @@ export function PosPage() {
       order: {
         clientOrderId, tokenNumber: orderToken, serviceMode: cart.serviceMode, menuVersion: menu.version, lines: lines(), expectedTotalSen: totals.totalSen, deviceAcceptedAtMs: Date.now(),
         ...(addOnTarget ? { addOnToOrderId: addOnTarget.id } : {}),
-        // 同牌加单：挂到这桌正拿着的牌上；服务器在原单未收款时自动并入同一收款组。
+        // 同牌加单：挂到这桌正拿着的牌上；服务器自动并入这一轮的同桌账单（前面的单已收款也并，只收还没收的）。
         ...(joinTarget ? { joinTokenOrderId: joinTarget.withOrderId } : {}),
       },
     };
@@ -326,7 +342,7 @@ export function PosPage() {
       const result = await submit<CreateOrderResult>('createOrder', payload);
       await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
       if (!result.replayed) void recordServerOffset(result.acceptedAtMs - (sentAt + Date.now()) / 2);
-      setStage({ kind: 'accepted', result, summary: summaryOf() });
+      setStage({ kind: 'accepted', result, summary: summaryOf(), joinRequested });
       // 收款组以服务器为准（同牌加单可能被自动并入原单）；旧服务器不返回时按本机加单目标推算。
       setResultAddOnRoot(result.addOnToOrderId ?? (addOnTarget ? addOnTarget.addOnToOrderId ?? addOnTarget.id : null));
       setAddOnTarget(null);
@@ -344,7 +360,7 @@ export function PosPage() {
           setJoinTarget(null);
           setToken(null);
         }
-        // 原单不能并单结账（已收款等）：去掉加单目标；同牌加单保留，重试即在同一张牌上单独收款。
+        // 原单不能并单结账（已收款等）：去掉加单目标；同牌加单保留，重试时由服务器并入同桌账单。
         if (f.reasonCode === 'ADD_ON_NOT_ALLOWED') setAddOnTarget(null);
       } else {
         // 结果不明：保留原 ID，等待核对；绝不改成新的人工单。
@@ -384,7 +400,7 @@ export function PosPage() {
     : stage.kind === 'local_accepted' ? Boolean(localStatus?.paid) || rt.outbox.some((r) => r.event.type === 'offline_payment_recorded' && r.event.payload.clientOrderId === stage.clientOrderId) : false;
 
   const resultStage: ResultStage | null = stage.kind === 'accepted'
-    ? { kind: 'accepted', orderId: stage.result.orderId, receiptNumber: stage.result.receiptNumber, tokenNumber: stage.result.tokenNumber, totalSen: stage.result.totalSen, acceptedAtMs: stage.result.acceptedAtMs, summary: stage.summary, sharedToken: Boolean(stage.result.sharedToken) }
+    ? { kind: 'accepted', orderId: stage.result.orderId, receiptNumber: stage.result.receiptNumber, tokenNumber: stage.result.tokenNumber, totalSen: stage.result.totalSen, acceptedAtMs: stage.result.acceptedAtMs, summary: stage.summary, sharedToken: Boolean(stage.result.sharedToken), queueInherited: Boolean(stage.result.queueInherited), joinFellBack: stage.joinRequested && stage.result.sharedToken === false }
     : stage.kind === 'local_accepted'
       ? { kind: 'local_accepted', clientOrderId: stage.clientOrderId, offlineReceiptNumber: stage.offlineReceiptNumber, tokenNumber: stage.tokenNumber, totalSen: stage.totalSen, summary: stage.summary }
       : null;
@@ -433,6 +449,7 @@ export function PosPage() {
    * 从待登记收款的某张单开始加单（与原单一起结账）：关抽屉回点餐。
    * 原牌仍被这桌占着 → 同牌加单，不用再给牌；客人还在，不默认打包。
    * 原牌已空出 → 仍用同一个号；牌已给了别人 → 照常建议新牌。这两种多为吃完带走，本单还空着就默认打包。
+   * 手选空闲牌时的「并到一起算」也走这里（原牌已空出那一支）：显式挂到原单，后厨排队尾，钱合并。
    */
   function startAddOn(o: UnpaidOrder) {
     setAddOnTarget(o);
@@ -450,6 +467,20 @@ export function PosPage() {
     if (!busy) setStage({ kind: 'idle' });
   }
 
+  /**
+   * 待登记收款卡上的「加单」：一张账单可能跨两轮占用（上一轮的单已出餐、牌又被这桌占着），
+   * 优先用仍占着牌的那张单，否则会误以为牌已给了别人。
+   */
+  function startAddOnFromCard(o: UnpaidOrder) {
+    const root = o.addOnToOrderId ?? o.id;
+    const live = unpaid.orders.find((x) => {
+      if ((x.addOnToOrderId ?? x.id) !== root || x.offline || x.stage === 'cancel_pending') return false;
+      const t = board[x.tokenNumber];
+      return t?.state === 'held' && (tokenHolders(t).includes(x.id) || tokenSession(t).includes(x.id));
+    });
+    startAddOn(live ?? o);
+  }
+
   /** 取消加单 / 同牌加单：恢复为普通新单，重新建议新牌。 */
   function cancelAddOn() {
     setAddOnTarget(null);
@@ -457,12 +488,35 @@ export function PosPage() {
     setToken(null);
   }
 
-  /** 结果弹窗的收款：加单时连同原单（及其他加单）一起结；新单还没出现在待收款订阅里也算进去。 */
+  /**
+   * 结果弹窗的收款：加单时连同同桌还没收的单一起结；新单还没出现在待收款订阅里也算进去。
+   * 取消待后厨确认的单不计。超过单次上限时新单一定在内，其余的留在「待登记收款」（more）。
+   */
   function resultPayOrders(orderId: string, totalSen: number) {
     const group = resultAddOnRoot ? unpaid.orders.filter((o) => (o.addOnToOrderId ?? o.id) === resultAddOnRoot) : [];
-    const rest = group.filter((o) => o.id !== orderId).map((o) => ({ orderId: o.id, amountSen: o.totalSen }));
-    return [...rest, { orderId, amountSen: totalSen }];
+    const rest = group.filter((o) => o.id !== orderId && o.stage !== 'cancel_pending').map((o) => ({ orderId: o.id, amountSen: o.totalSen }));
+    // 新单还没出现在订阅里算要收；但它已收款、已取消或取消待确认就不算（列表里没有不等于还没同步）。
+    const selfDoc = stage.kind === 'accepted' && stage.result.orderId === orderId ? lastOrder.data : null;
+    const selfDone = resultPaid || unpaid.orders.find((o) => o.id === orderId)?.stage === 'cancel_pending'
+      || selfDoc?.fulfillmentStatus === 'cancelled' || (selfDoc?.paymentState !== undefined && selfDoc.paymentState !== 'unpaid');
+    const self = selfDone ? [] : [{ orderId, amountSen: totalSen }];
+    const room = MAX_PAY_ORDERS - self.length;
+    return { orders: [...rest.slice(0, room), ...self], more: Math.max(0, rest.length - room) };
   }
+  const resultPay = resultStage && resultPayOrders(resultStage.kind === 'accepted' ? resultStage.orderId : resultStage.clientOrderId, resultStage.totalSen);
+
+  /** 手选的空闲牌上一桌还没收款的最早一张单：可能是同一桌回头加点，也可能只是号码复用，所以只提示、由收银决定。 */
+  const sameTableOrder = (() => {
+    if (joinTarget || addOnTarget || offlineMode || !tokensFromServer || token === null || manualPick !== token) return null;
+    const t = board[token];
+    if (t?.state !== 'available') return null;
+    const releasedAtMs = tokensQ.data.find((d) => d.number === token)?.updatedAtMs;
+    if (releasedAtMs === undefined || serverNow(rt) - releasedAtMs > SAME_TABLE_WINDOW_MS) return null;
+    const session = tokenSession(t);
+    return unpaid.orders
+      .filter((o) => session.includes(o.id) && o.stage !== 'cancel_pending' && !o.offline)
+      .reduce<UnpaidOrder | null>((best, o) => (!best || o.acceptedAtMs < best.acceptedAtMs ? o : best), null);
+  })();
 
   function submitOrder() {
     if (busy || payDisabledReason) return;
@@ -512,7 +566,7 @@ export function PosPage() {
             {tr(`${counts.awaiting_return} 个旧版待回收`, `${counts.awaiting_return} legacy to collect`)}
           </button>
         )}
-        {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} />}
+        {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} tickets={queueQ.data} />}
         {!tokensFromServer && <span className="text-sm text-warn">{tr('餐牌为本机记录', 'Tokens from this device')}{rt.snapshot ? `（快照 ${new Date(rt.snapshot.savedAtMs).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}</span>}
       </ShellHeaderActions>
 
@@ -592,14 +646,14 @@ export function PosPage() {
                   <Icon name="plus" size={22} />
                   <span className="min-w-0 flex-1">
                     <b>{tr(`同牌加单 · ${joinTarget.tokenNumber} 号`, `Same-token add-on · No. ${joinTarget.tokenNumber}`)}</b>
-                    <span className="block text-xs">{tr(`不用再给牌，和 ${joinTarget.tokenNumber} 号前面的单一起送`, `No new token — served with token ${joinTarget.tokenNumber}'s earlier orders`)}</span>
+                    <span className="block text-xs">{tr('不用再给牌', 'No new token needed')}</span>
                     <span className="block text-xs">{addOnTarget
                       ? tr(`票号 ${addOnTarget.ticketNo} · 送厨后与原单一起结账`, `Receipt ${addOnTarget.ticketNo} · paid together with the original`)
-                      : tr(`${joinTarget.tokenNumber} 号的单还没收款就并在一起结账；已收款就单收这张`, `If token ${joinTarget.tokenNumber}'s order is unpaid, they are paid together; if already paid, collect this one on its own`)}</span>
+                      : tr(`和 ${joinTarget.tokenNumber} 号这桌合并算钱，已收的不会再收`, `Billed together with token ${joinTarget.tokenNumber}'s table; anything already paid is not charged again`)}</span>
                   </span>
                   <button type="button" onClick={cancelAddOn} className="min-h-14 shrink-0 px-2 font-semibold underline underline-offset-4">{tr('取消加单', 'Cancel add-on')}</button>
                 </div>
-              ) : addOnTarget && (
+              ) : addOnTarget ? (
                 <div role="status" className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-brand bg-brand-soft px-3 py-2 text-sm text-brand xl:mx-5">
                   <Icon name="bag" size={22} />
                   <span className="min-w-0 flex-1">
@@ -607,6 +661,14 @@ export function PosPage() {
                     <span className="block text-xs">{tr(`票号 ${addOnTarget.ticketNo} · 送厨后与原单一起结账`, `Receipt ${addOnTarget.ticketNo} · paid together with the original`)}</span>
                   </span>
                   <button type="button" onClick={cancelAddOn} className="min-h-14 shrink-0 px-2 font-semibold underline underline-offset-4">{tr('取消加单', 'Cancel add-on')}</button>
+                </div>
+              ) : sameTableOrder && (
+                <div role="status" className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-brand bg-brand-soft px-3 py-2 text-sm text-brand xl:mx-5">
+                  <span className="min-w-0 flex-1 font-semibold">{tr(
+                    `${sameTableOrder.tokenNumber} 号上一桌（票号 ${sameTableOrder.ticketNo} · ${formatRM(sameTableOrder.totalSen)}）还没收款。是同一桌？`,
+                    `Token ${sameTableOrder.tokenNumber}'s last table (receipt ${sameTableOrder.ticketNo} · ${formatRM(sameTableOrder.totalSen)}) is still unpaid. Same table?`,
+                  )}</span>
+                  <button type="button" onClick={() => startAddOn(sameTableOrder)} className="h-14 shrink-0 rounded-xl bg-brand px-3 font-bold text-white">{tr('并到一起算', 'Bill together')}</button>
                 </div>
               )}
               onEdit={editLine} onQuantity={changeQuantity} onServiceMode={(id, m) => setCart(setLineServiceMode(cart, id, m))} onClear={clearCart}
@@ -645,11 +707,11 @@ export function PosPage() {
       {receipt && <ReceiptDialog receiptKey={receipt.key} load={receipt.load} menuVersion={menu.version} timeZone={config.timeZone} onClose={() => setReceipt(null)} />}
       {pickerOpen && (
         <TokenPicker board={board} current={orderToken} onRelease={releaseTokenAction} onClose={() => setPickerOpen(false)}
-          onPick={(n) => { setJoinTarget(null); setToken(n); }}
+          onPick={(n) => { setJoinTarget(null); setToken(n); setManualPick(n); }}
           onJoin={(n, id) => { setAddOnTarget(null); setJoinTarget({ tokenNumber: n, withOrderId: id }); setToken(null); }}
           joinDisabledReason={offlineMode ? joinOfflineReason : null} />
       )}
-      {payListOpen && <PendingPaymentsDrawer onClose={() => setPayListOpen(false)} nameOf={(c) => lineName(menu, c, lang)} onAddOn={startAddOn} />}
+      {payListOpen && <PendingPaymentsDrawer onClose={() => setPayListOpen(false)} nameOf={(c) => lineName(menu, c, lang)} onAddOn={startAddOnFromCard} />}
       {resultProps && resultOpen && !receipt && (
         <OrderResultDialog {...resultProps} onClose={() => setResultOpen(false)}
           onAddSameToken={stage.kind === 'accepted' ? () => {
@@ -664,9 +726,9 @@ export function PosPage() {
             setJoinTarget({ tokenNumber: n, withOrderId: anchor });
             setToken(null);
           } : undefined}
-          extra={resultStage && (
+          extra={resultStage && resultPay && (resultPay.orders.length > 0 || resultPaid) && (
             <QuickPay key={resultStage.kind === 'accepted' ? resultStage.orderId : resultStage.clientOrderId}
-              orders={resultPayOrders(resultStage.kind === 'accepted' ? resultStage.orderId : resultStage.clientOrderId, resultStage.totalSen)} paid={resultPaid}
+              orders={resultPay.orders} more={resultPay.more} paid={resultPaid && resultPay.orders.length === 0} paidSen={resultStage.totalSen}
               label={resultStage.kind === 'accepted' ? `${resultStage.receiptNumber} · ${tr('原餐牌', 'token')} ${resultStage.tokenNumber}` : `${resultStage.offlineReceiptNumber} · ${tr('原餐牌', 'token')} ${resultStage.tokenNumber}`} />
           )} />
       )}
@@ -674,11 +736,15 @@ export function PosPage() {
   );
 }
 
-function KitchenHealthBadge({ lastSeenMs }: { lastSeenMs: number | null }) {
+/** 排队中的电子单超过告警时间还没有后厨回执（已递纸单的不算）时，「后厨已连接」换成未收到提示；刚下的单有几秒回执时间，不算未收到。 */
+function KitchenHealthBadge({ lastSeenMs, tickets }: { lastSeenMs: number | null; tickets: { acceptedAtEffectiveMs: number; kitchenAckAtMs?: number | null; manualHandoffAtMs?: number | null }[] }) {
   useNow(5000);
   const rt = useOfflineRuntime();
   const tr = useT();
-  const h = kitchenHealth(lastSeenMs, serverNow(rt));
+  const now = serverNow(rt);
+  const h = kitchenHealth(lastSeenMs, now);
+  const unacked = tickets.filter((t) => t.kitchenAckAtMs == null && !t.manualHandoffAtMs && now - t.acceptedAtEffectiveMs >= DEFAULT_KITCHEN_LINK.ackAlarmMs).length;
+  if (h === 'online' && unacked > 0) return <span className="inline-flex items-center whitespace-nowrap rounded-lg bg-danger-bg px-2.5 py-1.5 text-[13px] font-semibold text-danger">{tr(`${unacked} 张单后厨未收到`, `${unacked} not received by kitchen`)}</span>;
   if (h === 'online') return <span className="inline-flex items-center gap-1.5 rounded-lg bg-ok-bg px-2.5 py-1.5 text-[13px] font-semibold text-ok"><span className="h-2 w-2 rounded-full bg-ok" />{tr('后厨已连接', 'Kitchen online')}</span>;
   return (
     <span className="inline-flex items-center gap-1.5 rounded-lg bg-danger-bg px-2.5 py-1.5 text-[13px] font-semibold text-danger">

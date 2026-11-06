@@ -159,7 +159,7 @@ export async function placeOrder(f: StoreFixture, o: OrderOptions = {}) {
   const payload = orderPayload(f, o);
   const result = await f.cashier.call<{
     orderId: string; receiptNumber: string; totalSen: number; businessDate: string; paymentState: string; fulfillmentStatus: string;
-    sharedToken: boolean; addOnToOrderId: string | null;
+    sharedToken: boolean; queueInherited: boolean; addOnToOrderId: string | null;
   }>('createOrder', payload);
   f.seq.value = payload.sequence;
   if (o.paid) await pay(f, result.orderId, result.totalSen);

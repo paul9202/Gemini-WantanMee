@@ -55,6 +55,10 @@ export interface KitchenTicket {
   addOnTo?: { tokenNumber: number } | null;
   /** 同牌加单：这桌客人拿着同一张牌又加的单（和前面同号的一起送）。旧单缺省。 */
   sharedToken?: boolean;
+  /** 排队位置：同牌加单继承同桌最早未完成单的时间，不重新排队。缺省用接单时间。计时与统计仍按接单时间。 */
+  queueAtMs?: number;
+  /** 后厨同一个框的分组键（同桌第一张单的 ID）。缺省自成一组。 */
+  queueGroupId?: string;
 }
 
 export interface KitchenTicketSource {
@@ -112,6 +116,27 @@ export function buildKitchenTicket(menu: MenuVersion, src: KitchenTicketSource):
 /** FIFO：等得最久的在前；同时间按稳定 ID。 */
 export function sortFifo<T extends { acceptedAtEffectiveMs: number; orderId: string }>(tickets: T[]): T[] {
   return [...tickets].sort((a, b) => a.acceptedAtEffectiveMs - b.acceptedAtEffectiveMs || a.orderId.localeCompare(b.orderId));
+}
+
+type QueueTicket = { acceptedAtEffectiveMs: number; orderId: string; queueAtMs?: number; queueGroupId?: string };
+
+export interface KitchenGroup<T> {
+  key: string;
+  /** 组内按接单先后。 */
+  tickets: T[];
+  queueAtMs: number;
+}
+
+/** 后厨队列：同桌的单放进一组，按组内最早的排队位置排；原单先出餐后，加单仍留在原位。 */
+export function arrangeKitchen<T extends QueueTicket>(tickets: T[]): KitchenGroup<T>[] {
+  const groups = new Map<string, T[]>();
+  for (const t of sortFifo(tickets)) {
+    const key = t.queueGroupId ?? t.orderId;
+    groups.set(key, [...(groups.get(key) ?? []), t]);
+  }
+  return [...groups.entries()]
+    .map(([key, list]) => ({ key, tickets: list, queueAtMs: Math.min(...list.map((t) => t.queueAtMs ?? t.acceptedAtEffectiveMs)) }))
+    .sort((a, b) => a.queueAtMs - b.queueAtMs || a.key.localeCompare(b.key));
 }
 
 export interface BatchCounts {

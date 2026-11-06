@@ -1,6 +1,7 @@
 /**
  * 设备心跳（O11）：页面可见且联网时每 20 秒一次；切到后台或断网就停发，
  * 让前台能看出后厨屏可能已离线。同时测量服务器时间偏移。
+ * appVersion 上报构建号（git 短 SHA），可据此核对设备跑的是哪个版本；服务器只保留前 40 个字符。
  */
 import { useEffect } from 'react';
 import { DEFAULT_KITCHEN_LINK } from '../domain/kitchenLink';
@@ -15,7 +16,7 @@ export function useHeartbeat(deviceId: string | null, enabled: boolean) {
       if (stopped || document.visibilityState !== 'visible' || !navigator.onLine) return;
       const t0 = Date.now();
       try {
-        const r = await call<{ serverNowMs: number }>('heartbeatDevice', { deviceId, appVersion: import.meta.env.MODE });
+        const r = await call<{ serverNowMs: number }>('heartbeatDevice', { deviceId, appVersion: __APP_BUILD_ID__ });
         void recordServerOffset(r.serverNowMs - (t0 + Date.now()) / 2);
       } catch {
         // 心跳失败不影响营业；前台会因心跳过期而提示。
