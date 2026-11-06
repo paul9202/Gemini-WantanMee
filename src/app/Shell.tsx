@@ -10,6 +10,7 @@ import { Role, useSession } from './session';
 import { applyUpdate, useSwState } from './swUpdate';
 import { useLang, useT } from './i18n';
 import { unsyncedEvents, useOfflineRuntime } from '../data/offline/runtime';
+import { UpdateNotice, useUnseenUpdates } from '../features/updates/UpdatesPage';
 
 const NAV: { route: Route; label: string; en: string; icon: IconName; roles: Role[] }[] = [
   { route: '/pos', label: '点餐', en: 'Order', icon: 'bowl', roles: ['cashier', 'owner'] },
@@ -18,6 +19,7 @@ const NAV: { route: Route; label: string; en: string; icon: IconName; roles: Rol
   { route: '/owner', label: '经营', en: 'Owner', icon: 'chart', roles: ['owner'] },
   { route: '/sync', label: '同步', en: 'Sync', icon: 'refresh', roles: ['cashier', 'owner'] },
   { route: '/training', label: '图卡', en: 'Cards', icon: 'help', roles: ['cashier', 'owner', 'kitchen'] },
+  { route: '/updates', label: '更新', en: 'Updates', icon: 'sparkle', roles: ['cashier', 'owner', 'kitchen'] },
   { route: '/device', label: '设备', en: 'Device', icon: 'sliders', roles: ['cashier', 'owner', 'kitchen'] },
 ];
 
@@ -32,6 +34,7 @@ const TITLES: Record<string, { zh: string; en: string; subZh: string; subEn: str
   '/owner/close': { zh: '日结关账', en: 'Close day', subZh: '核对现金、QR 与差额。', subEn: '' },
   '/owner/settings': { zh: '设置', en: 'Settings', subZh: '成员、菜单与成本。', subEn: '' },
   '/training': { zh: '员工图卡', en: 'Training cards', subZh: '前台与后厨使用相同图示。', subEn: 'Same pictures at the counter and in the kitchen.' },
+  '/updates': { zh: '更新记录', en: 'Updates', subZh: '最新的功能和改动都在这里。', subEn: 'New features and changes.' },
   '/device': { zh: '连接与设备', en: 'Connection & device', subZh: '营业状态，一眼放心。', subEn: 'Business status at a glance.' },
 };
 
@@ -58,6 +61,9 @@ export function Shell({ route, title, children }: { route: Route; title?: Route;
   const unsynced = unsyncedEvents(rt).length;
   const date = config ? businessDateOf(now, { timeZone: config.timeZone, cutoverMinutes: config.cutoverMinutes }) : '';
   const nav = NAV.filter((n) => member && n.roles.includes(member.role));
+  const { unseen } = useUnseenUpdates();
+  // 导航上的小红点：还有没看过的更新。
+  const navDot = (r: Route) => r === '/updates' && unseen.length > 0 && <span className="absolute right-1/4 top-1 h-2.5 w-2.5 rounded-full bg-danger" />;
   const head = TITLES[title ?? route] ?? TITLES['/pos'];
   const sub = lang === 'en' ? head.subEn : head.subZh;
   const dateLabel = date ? new Intl.DateTimeFormat(lang === 'en' ? 'en-MY' : 'zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) : '';
@@ -71,8 +77,8 @@ export function Shell({ route, title, children }: { route: Route; title?: Route;
             const active = route === n.route;
             return (
               <button key={n.route} type="button" onClick={() => navigate(n.route)} aria-current={active ? 'page' : undefined}
-                className={`flex min-h-14 w-full shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[13px] ${active ? 'bg-brand-soft font-bold text-brand' : 'text-ink-2 hover:bg-subtle hover:text-ink'}`}>
-                <Icon name={n.icon} size={24} />{tr(n.label, n.en)}
+                className={`relative flex min-h-14 w-full shrink-0 flex-col items-center justify-center gap-0.5 rounded-2xl py-1.5 text-[13px] ${active ? 'bg-brand-soft font-bold text-brand' : 'text-ink-2 hover:bg-subtle hover:text-ink'}`}>
+                <Icon name={n.icon} size={24} />{tr(n.label, n.en)}{navDot(n.route)}
               </button>
             );
           })}
@@ -116,6 +122,7 @@ export function Shell({ route, title, children }: { route: Route; title?: Route;
             <button type="button" disabled={unsynced > 0} onClick={() => void applyUpdate()} className="ml-auto h-10 rounded-lg border border-control bg-card px-3 font-semibold disabled:opacity-40">{tr('更新并重新载入', 'Update & reload')}</button>
           </div>
         )}
+        {route !== '/updates' && <UpdateNotice className="border-b border-brand/30 bg-brand-soft px-4 py-2 text-brand lg:px-8" primaryClassName="bg-brand text-[#fff8e8]" />}
         <HeaderSlot.Provider value={slot}>
           <main className="min-h-0 flex-1 overflow-y-auto print:overflow-visible">{children}</main>
         </HeaderSlot.Provider>
@@ -124,8 +131,8 @@ export function Shell({ route, title, children }: { route: Route; title?: Route;
             const active = route === n.route;
             return (
               <button key={n.route} type="button" onClick={() => navigate(n.route)} aria-current={active ? 'page' : undefined}
-                className={`mx-0.5 my-1 flex min-h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] ${active ? 'bg-brand-soft font-bold text-brand' : 'text-ink-2'}`}>
-                <Icon name={n.icon} size={22} /><span className="max-w-full truncate px-0.5">{tr(n.label, n.en)}</span>
+                className={`relative mx-0.5 my-1 flex min-h-14 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-xl text-[12px] ${active ? 'bg-brand-soft font-bold text-brand' : 'text-ink-2'}`}>
+                <Icon name={n.icon} size={22} /><span className="max-w-full truncate px-0.5">{tr(n.label, n.en)}</span>{navDot(n.route)}
               </button>
             );
           })}

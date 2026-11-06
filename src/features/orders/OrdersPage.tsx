@@ -10,6 +10,7 @@
 import { useRef, useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
 import { billIdOf, BillSummary, summarizeBill } from '../../domain/bill';
+import { hasNoTomato } from '../../domain/lineItem';
 import { businessDateOf } from '../../domain/businessDay';
 import { OrderServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import { PICTOGRAMS } from '../../domain/pictograms';
@@ -66,11 +67,11 @@ interface OrderRow {
   businessDate: string;
   version: number;
   /** items 带下单时的完整配置；这里只用到辣度（汤品为 null）。 */
-  items: { lineId: string; nameZh: string; quantity: number; photoId: string; spice?: Spice | null }[];
+  items: { lineId: string; nameZh: string; quantity: number; photoId: string; spice?: Spice | null; note?: string | null }[];
 }
 
-/** 订单页的餐品文字：品名 + 辣度，例如「黑酱面 · 小 · 辣」。 */
-const itemName = (i: OrderRow['items'][number]) => (i.spice ? `${i.nameZh} · ${PICTOGRAMS[`spice:${i.spice}`].zh}` : i.nameZh);
+/** 订单页的餐品文字：品名 + 辣度 + 不要番茄酱，例如「红酱面 · 小 · 辣 · 不要番茄酱」。 */
+const itemName = (i: OrderRow['items'][number]) => [i.nameZh, i.spice ? PICTOGRAMS[`spice:${i.spice}`].zh : null, hasNoTomato(i) ? PICTOGRAMS['sauce:no_tomato'].zh : null].filter(Boolean).join(' · ');
 
 type Filter = 'all' | 'unpaid' | 'queued' | 'preparing' | 'served' | 'cancelled';
 const CANCEL_REASONS: [string, string][] = [['顾客离开', 'Customer left'], ['点错单', 'Wrong order'], ['重复下单', 'Duplicate order'], ['改单', 'Changing order'], ['其他', 'Other']];

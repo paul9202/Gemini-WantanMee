@@ -11,7 +11,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, cartServiceMode, computeTotals, emptyCart, setLineQuantity, setLineServiceMode, setServiceMode, updateLineConfig } from '../../domain/cart';
-import { defaultConfig, LineConfig, normalizeConfig } from '../../domain/lineItem';
+import { defaultConfig, hasNoTomato, LineConfig, normalizeConfig } from '../../domain/lineItem';
+import { PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, tokenFromDoc, tokenHolders, tokenSession, TokenStateName } from '../../domain/tokens';
@@ -232,9 +233,7 @@ export function PosPage() {
       setCart(addLine(menu, cart, draft, crypto.randomUUID(), draftQty));
       setDraftQty(1);
     }
-    // 每次加入后特殊选项归默认，防止上一位顾客的走青或 Kosong 残留；保留所选餐品与面种。
-    const keep = defaultConfig(menu, draft.productKind, draft.sauce);
-    setDraft({ ...keep, noodleType: keep.noodleType ? draft.noodleType : null });
+    resetDraftOptions();
     if (stage.kind !== 'idle' && !busy) setStage({ kind: 'idle' });
   }
 
@@ -242,24 +241,36 @@ export function PosPage() {
     if (q > 50) return;
     if (q === 0) setUndo({ cart, label: tr('已移除一行', 'Removed') });
     setCart(setLineQuantity(cart, lineId, q));
-    if (q === 0 && editingLineId === lineId) setEditingLineId(null);
+    if (q === 0 && editingLineId === lineId) {
+      setEditingLineId(null);
+      resetDraftOptions(); // 正在改的这行删掉了：不把它的要求带给下一碗。
+    }
   }
 
   function clearCart() {
     if (!cart.lines.length) return;
     setUndo({ cart, label: tr('已清空本单', 'Order cleared') });
     setCart(emptyCart(cart.serviceMode));
+    if (editingLineId) resetDraftOptions();
     setEditingLineId(null);
   }
 
   const summaryOf = (): ResultSummary => ({
     serviceMode: cartServiceMode(cart),
-    firstItem: cart.lines.map((l) => `${lineName(menu, l.config, lang)}${l.quantity > 1 ? ` ×${l.quantity}` : ''}`).join('，'),
+    firstItem: cart.lines.map((l) => `${lineName(menu, l.config, lang)}${hasNoTomato(l.config) ? ` · ${lang === 'en' ? PICTOGRAMS['sauce:no_tomato'].en : PICTOGRAMS['sauce:no_tomato'].zh}` : ''}${l.quantity > 1 ? ` ×${l.quantity}` : ''}`).join('，'),
   });
 
   /** sharedToken：挂在客人已拿着的牌上，没有发出新牌，不改变循环建议的起点。 */
+  /** 特殊选项归默认，防止上一位顾客的走青、Kosong、不要番茄酱残留；保留所选餐品与面种。 */
+  function resetDraftOptions() {
+    if (!menu || !draft) return;
+    const keep = defaultConfig(menu, draft.productKind, draft.sauce);
+    setDraft({ ...keep, noodleType: keep.noodleType ? draft.noodleType : null });
+  }
+
   function clearAfterAccept(tokenNumber: number, sharedToken = false) {
     if (!sharedToken) rememberIssued(tokenNumber);
+    resetDraftOptions();
     setToken(null);
     setManualPick(null);
     setCart(emptyCart(cart.serviceMode));
@@ -691,7 +702,7 @@ export function PosPage() {
       {undo && (
         <div role="status" className="fixed bottom-40 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-ink px-4 py-2 whitespace-nowrap text-white shadow-xl md:top-2 md:right-4 md:bottom-auto md:left-auto md:translate-x-0">
           {undo.label}
-          <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); setEditingLineId(null); }} className="h-14 rounded-xl border border-white/40 px-5 font-semibold">{tr('撤销', 'Undo')}</button>
+          <button type="button" onClick={() => { setCart(undo.cart); setUndo(null); if (editingLineId) resetDraftOptions(); setEditingLineId(null); }} className="h-14 rounded-xl border border-white/40 px-5 font-semibold">{tr('撤销', 'Undo')}</button>
         </div>
       )}
 

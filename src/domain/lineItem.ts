@@ -11,6 +11,20 @@ import type { Sen } from './money';
 
 export const NOTE_MAX_LENGTH = 80;
 export const MAX_LINE_QUANTITY = 50;
+/**
+ * 「不要番茄酱」用备注字段的固定值表示：备注已在所有线上版本里接受并存储，不用改后台也不用担心旧设备拒单。
+ * 旧订单靠这个值识别，发布后不能改字。只有现调的红酱才有番茄酱。
+ */
+export const NOTE_NO_TOMATO = '不要番茄酱';
+export const NO_TOMATO_SAUCES: readonly Sauce[] = ['red'];
+
+export function hasNoTomato(cfg: { note?: string | null }): boolean {
+  return cfg.note === NOTE_NO_TOMATO;
+}
+
+export function allowsNoTomato(cfg: { sauce: Sauce | null }): boolean {
+  return cfg.sauce !== null && NO_TOMATO_SAUCES.includes(cfg.sauce);
+}
 
 export interface LineConfig {
   productKind: ProductKind;
@@ -55,6 +69,7 @@ export function defaultConfig(menu: MenuVersion, productKind: ProductKind, sauce
  * 把任意（可能残留旧字段的）配置收敛为有效配置。
  * - 汤品：sauce/spice/lard 为 null；无面餐品：noodleType 为 null。
  * - Kosong：仅允许的品类；开启时清除全部肉类加料（关闭不自动恢复）。
+ * - 不要番茄酱：换成没有番茄酱的酱或汤品时清除（换回来不自动恢复）。这里只收敛 POS 选择，服务端校验不管它。
  */
 export function normalizeConfig(menu: MenuVersion, cfg: LineConfig): LineConfig {
   const product = menu.products[cfg.productKind];
@@ -68,7 +83,8 @@ export function normalizeConfig(menu: MenuVersion, cfg: LineConfig): LineConfig 
   const addOns = ADD_ON_IDS.filter(
     (id) => cfg.addOns.includes(id) && product.addOns.includes(id) && !(isKosong && menu.addOns[id].isMeat),
   );
-  const note = cfg.note.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, NOTE_MAX_LENGTH);
+  const cleanNote = cfg.note.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, NOTE_MAX_LENGTH);
+  const note = hasNoTomato({ note: cleanNote }) && !allowsNoTomato({ sauce }) ? '' : cleanNote;
   return { productKind: cfg.productKind, size, noodleType, sauce, spice, lard, scallion, isKosong, addOns, note };
 }
 

@@ -312,3 +312,14 @@ test('同牌加单结果不明转人工补账：带着同桌原单同步，挂�
   (bad.payload as Record<string, unknown>).joinTokenOrderId = other.result.orderId;
   assert.deepEqual((await sync(f, [bad])).map((x) => x.reasonCode), ['TOKEN_CONFLICT']);
 });
+
+test('不要番茄酱：断网下的单补同步后，备注原样进订单和厨单', async () => {
+  const f = await setupStore();
+  const ev = makeEvents(f);
+  const id = uuid();
+  const created = ev.create(id, 21, { method: 'none', totalSen: 700 });
+  (created.payload as { lines: unknown[] }).lines = [{ lineId: uuid(), config: noodle({ sauce: 'red', note: '不要番茄酱' }), quantity: 1 }];
+  assert.deepEqual((await sync(f, [created])).map((x) => x.status), ['accepted']);
+  assert.equal((await doc(f, `orders/${id}`))!.items[0].note, '不要番茄酱');
+  assert.equal((await doc(f, `kitchenTickets/${id}`))!.lines[0].note, '不要番茄酱');
+});

@@ -14,6 +14,7 @@ import { ReviewPage } from '../features/owner/ReviewPage';
 import { ClosePage } from '../features/owner/ClosePage';
 import { SettingsPage } from '../features/owner/SettingsPage';
 import { TrainingPage } from '../features/training/TrainingPage';
+import { UpdatesPage } from '../features/updates/UpdatesPage';
 import { IconSprite } from '../ui/visual';
 import { Login } from './Login';
 import { navigate, Route, useRoute } from './router';
@@ -36,6 +37,7 @@ const ALLOWED: Record<Exclude<Route, '/login'>, Role[]> = {
   '/owner/close': ['owner'],
   '/owner/settings': ['owner'],
   '/training': ['owner', 'cashier', 'kitchen'],
+  '/updates': ['owner', 'cashier', 'kitchen'],
 };
 const HOME: Record<Role, Route> = { owner: '/owner', cashier: '/pos', kitchen: '/kitchen' };
 
@@ -70,6 +72,7 @@ function Routes() {
   if (route === '/owner/settings') return <Shell route="/owner" title="/owner/settings"><SettingsPage /></Shell>;
   if (route === '/device') return <Shell route="/device"><DevicePage /></Shell>;
   if (route === '/training') return <Shell route="/training"><TrainingPage /></Shell>;
+  if (route === '/updates') return <Shell route="/updates"><UpdatesPage /></Shell>;
   return <Shell route="/pos"><PosPage /></Shell>;
 }
 

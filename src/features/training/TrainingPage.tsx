@@ -15,13 +15,14 @@ const GROUPS: { zh: string; en: string; ids: PictogramId[] }[] = [
   { zh: '辣度', en: 'Chili', ids: ['spice:none', 'spice:less', 'spice:normal', 'spice:extra'] },
   { zh: '葱', en: 'Scallion', ids: ['scallion:normal', 'scallion:extra', 'scallion:none'] },
   { zh: '油渣', en: 'Lard crisps', ids: ['lard:normal', 'lard:extra', 'lard:none'] },
-  { zh: '净面与加料', en: 'Kosong & add-ons', ids: ['kosong:on', 'addon:char_siew', 'addon:wanton_3'] },
+  { zh: '净面与加料', en: 'Kosong & add-ons', ids: ['kosong:on', 'addon:char_siew', 'addon:wanton_3', 'sauce:no_tomato'] },
   { zh: '堂食 / 打包', en: 'Dine in / Takeaway', ids: ['service:dine_in', 'service:takeaway', 'takeaway:no_side_soup', 'soup:base'] },
   { zh: '后厨动作与餐牌', en: 'Kitchen actions & tokens', ids: ['action:start', 'action:serve', 'action:undo', 'token:return'] },
 ];
 
 const NOTES: Record<string, { zh: string; en: string }> = {
   'kosong:on': { zh: '半价 · 不能加肉', en: 'Half price · no meat add-ons' },
+  'sauce:no_tomato': { zh: '红酱才有 · 不是过敏保证', en: 'Red sauce only · not an allergy promise' },
   'addon:char_siew': { zh: '每份 +RM2', en: '+RM2 each' },
   'addon:wanton_3': { zh: '每份 +RM2', en: '+RM2 each' },
   'takeaway:no_side_soup': { zh: '打包干捞不附汤', en: 'Dry takeaway: no side soup' },

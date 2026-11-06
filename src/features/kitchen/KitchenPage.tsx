@@ -30,7 +30,9 @@ import { useLang, useT } from '../../app/i18n';
 import { lineNameEn, LineConfig } from '../../domain/lineItem';
 import { MENU_V1, OrderServiceMode, SAUCE_NAMES, SERVICE_MODE_NAMES, ServiceMode } from '../../domain/menu';
 import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
+import { hasNoTomato } from '../../domain/lineItem';
 import { useKdsTheme, useNewTicketChime, useScreenWakeLock } from './prefs';
+import { UpdateNotice, UpdatesDialog } from '../updates/UpdatesPage';
 
 type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean; manualHandoffAtMs?: number | null; receiptNumber?: string | null };
 // 不再提供 startOrder：新单接单即制作中，旧 queued 单也直接出餐。撤回走 undoServed。
@@ -65,6 +67,8 @@ export function KitchenPage() {
   const tr = useT();
   const lang = useLang();
   const [theme, toggleTheme] = useKdsTheme();
+  // 更新记录在当前页上打开面板：不离开厨单，新单提示音和回执继续工作。
+  const [updatesOpen, setUpdatesOpen] = useState(false);
   const sw = useSwState();
   useHeartbeat(deviceId, true);
   useScreenWakeLock();
@@ -215,6 +219,9 @@ export function KitchenPage() {
           <Icon name={sound.state === 'off' ? 'mute' : 'volume'} size={22} />
           {sound.state === 'needs_tap' && <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-kds-warning" />}
         </button>
+        <button type="button" onClick={() => setUpdatesOpen(true)} className={iconBtn} aria-label={tr('更新记录', 'Updates')}>
+          <Icon name="sparkle" size={22} />
+        </button>
         <button type="button" onClick={toggleTheme} className={iconBtn} aria-label={theme === 'dark' ? tr('切换浅色', 'Light mode') : tr('切换深色', 'Dark mode')}>
           <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={22} />
         </button>
@@ -240,6 +247,8 @@ export function KitchenPage() {
         </div>
       )}
 
+      {updatesOpen && <UpdatesDialog onClose={() => setUpdatesOpen(false)} />}
+      <UpdateNotice className="border-b border-kds-line bg-kds-soft px-4 py-3 sm:px-7" primaryClassName="bg-kds-action text-kds-action-ink" />
       {sw === 'update' && (
         <div role="status" className="flex flex-wrap items-center gap-4 border-b border-kds-line bg-kds-soft px-4 py-3 sm:px-7">
           <Icon name="refresh" size={26} />
@@ -272,7 +281,8 @@ export function KitchenPage() {
               <span key={l as string} className={`whitespace-nowrap ${v ? '' : 'opacity-50'}`}>{l} <b className="text-lg">{v}</b></span>
             ))}
           </div>
-          {a.kosong > 0 && <div className="mt-1 text-sm font-bold text-kds-action">{tr(`其中净面 ${a.kosong} 份`, `incl. Kosong ${a.kosong}`)}</div>}
+          {a.kosong > 0 && <div className="mt-1 text-sm font-bold text-kds-warning">{tr(`其中净面 ${a.kosong} 份`, `incl. Kosong ${a.kosong}`)}</div>}
+          {a.noTomato > 0 && <div className="mt-1 text-sm font-bold text-kds-warning">{tr(`其中不要番茄酱 ${a.noTomato} 份`, `incl. no tomato sauce ${a.noTomato}`)}</div>}
           {sum.cancelPending > 0 && (
             <div className="mt-1 text-sm font-bold text-kds-danger">{tr(`取消待确认 ${sum.cancelPending} 单，不计入合计`, `${sum.cancelPending} cancel request(s) pending · not in totals`)}</div>
           )}
@@ -518,7 +528,7 @@ function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode
   const name = lang === 'en' ? lineNameEn(MENU_V1, cfg) : l.nameZh;
   // 按当前规则重算：l.pictograms 是下单时服务端存的，旧厨单里默认的「辣」没有强调。
   const pictograms = linePictograms(MENU_V1, cfg, serviceMode);
-  const special = pictograms.filter((p) => p.emphasized && p.id !== 'kosong:on' && !p.id.startsWith('noodle:') && p.id !== 'takeaway:no_side_soup');
+  const special = pictograms.filter((p) => p.emphasized && p.id !== 'kosong:on' && p.id !== 'sauce:no_tomato' && !p.id.startsWith('noodle:') && p.id !== 'takeaway:no_side_soup');
   const standard = pictograms.filter((p) => !p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'soup:base');
   const isSoup = l.productKind === 'wanton_soup' || l.productKind === 'soup_noodle';
   const label = (id: keyof typeof PICTOGRAMS) => (lang === 'en' ? PICTOGRAMS[id].en : PICTOGRAMS[id].zh);
@@ -573,6 +583,11 @@ function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode
           <PictoArt id="kosong:on" size={30} />{tr('净面 · 不放叉烧 / 云吞', 'Kosong · no char siew / wantan')}
         </div>
       )}
+      {hasNoTomato(l) && (
+        <div className="mt-2 flex items-center gap-2 rounded-lg bg-kds-action px-3 py-2 text-lg font-bold text-kds-action-ink">
+          <PictoArt id="sauce:no_tomato" size={30} />{l.sauce ? tr(`${SAUCE_NAMES[l.sauce].zh} · 不要番茄酱`, `${SAUCE_NAMES[l.sauce].en} · no tomato sauce`) : tr('不要番茄酱', 'No tomato sauce')}
+        </div>
+      )}
       {special.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {special.map((p) => (
@@ -590,7 +605,7 @@ function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode
           {isSoup ? <Icon name="bag" size={20} /> : <PictoArt id="takeaway:no_side_soup" size={22} />}{isSoup ? tr('汤品打包 · 保留原汤', 'Soup takeaway · keep the soup') : tr('干捞打包 · 不附送清汤', 'Dry takeaway · no side soup')}
         </p>
       )}
-      {l.note && <p className={`mt-1 ${muted}`}>{tr('备注：', 'Note: ')}{l.note}</p>}
+      {l.note && !hasNoTomato(l) && <p className={`mt-1 ${muted}`}>{tr('备注：', 'Note: ')}{l.note}</p>}
     </li>
   );
 }

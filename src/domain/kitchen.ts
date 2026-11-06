@@ -2,7 +2,7 @@
  * 厨房投影与合计。厨房文档不含售价、付款、成本字段（Firestore 读取是文档级，
  * 只能靠独立文档隔离）。合计只从投影纯计算，不每秒写库。
  */
-import { LineConfig, lineNameZh, linePhotoId, linePortions } from './lineItem';
+import { hasNoTomato, LineConfig, lineNameZh, linePhotoId, linePortions } from './lineItem';
 import type { OrderLineInput } from './cart';
 import { MenuVersion, OrderServiceMode, orderServiceMode, ServiceMode } from './menu';
 import { linePictograms, PictogramId } from './pictograms';
@@ -153,13 +153,15 @@ export interface BatchCounts {
   wantonSoup: number;
   /** 额外标记：已经计入上面的份数，不再重复加总。 */
   kosong: number;
+  /** 红酱不要番茄酱的份数（包含在酱料份数里）。 */
+  noTomato: number;
 }
 
 function emptyCounts(): BatchCounts {
   const z = () => ({ black: 0, white: 0, red: 0 });
   return {
     orders: 0, portions: 0, thinEggHalfUnits: 0, meePohHalfUnits: 0, noodleHalfUnits: 0, wantons: 0,
-    sauce: z(), dryNoodleBySauce: z(), dryWantonBySauce: z(), soupNoodle: 0, wantonSoup: 0, kosong: 0,
+    sauce: z(), dryNoodleBySauce: z(), dryWantonBySauce: z(), soupNoodle: 0, wantonSoup: 0, kosong: 0, noTomato: 0,
   };
 }
 
@@ -179,6 +181,7 @@ function addTicket(c: BatchCounts, t: KitchenTicket) {
     if (l.productKind === 'soup_noodle') c.soupNoodle += q;
     if (l.productKind === 'wanton_soup') c.wantonSoup += q;
     if (l.isKosong) c.kosong += q;
+    if (hasNoTomato(l)) c.noTomato += q;
   }
 }
 

@@ -2,7 +2,7 @@
  * 图卡语义表（06 §4）。POS、购物车、KDS、培训卡共用同一语义 ID，
  * UI 只负责把 ID 渲染成同一张图，不允许各页面自行解释含义。
  */
-import type { LineConfig } from './lineItem';
+import { hasNoTomato, LineConfig } from './lineItem';
 import type { MenuVersion, ServiceMode } from './menu';
 
 export type PictogramId =
@@ -12,7 +12,7 @@ export type PictogramId =
   | 'addon:char_siew' | 'addon:wanton_3' | 'kosong:on'
   | 'service:dine_in' | 'service:takeaway'
   | 'noodle:thin_egg' | 'noodle:mee_poh'
-  | 'soup:base' | 'takeaway:no_side_soup'
+  | 'soup:base' | 'takeaway:no_side_soup' | 'sauce:no_tomato'
   | 'action:start' | 'action:serve' | 'action:undo' | 'token:return';
 
 export interface PictogramDef {
@@ -42,6 +42,7 @@ export const PICTOGRAMS: Record<PictogramId, PictogramDef> = {
   'noodle:thin_egg': { id: 'noodle:thin_egg', zh: '细面', en: 'Thin', strike: false },
   'noodle:mee_poh': { id: 'noodle:mee_poh', zh: '面薄', en: 'Mee Poh', strike: false },
   'soup:base': { id: 'soup:base', zh: '原汁汤底', en: 'Soup', strike: false },
+  'sauce:no_tomato': { id: 'sauce:no_tomato', zh: '不要番茄酱', en: 'No tomato sauce', strike: true },
   'takeaway:no_side_soup': { id: 'takeaway:no_side_soup', zh: '不附送清汤', en: 'No side soup', strike: true },
   'action:start': { id: 'action:start', zh: '开始制作', en: 'Start', strike: false },
   'action:serve': { id: 'action:serve', zh: '完成出餐', en: 'Served', strike: false },
@@ -62,6 +63,7 @@ export function linePictograms(menu: MenuVersion, cfg: LineConfig, serviceMode: 
   if (cfg.noodleType) out.push({ id: `noodle:${cfg.noodleType}`, emphasized: cfg.noodleType !== 'thin_egg' });
   if (cfg.isKosong) out.push({ id: 'kosong:on', emphasized: true });
   if (product.isSoup) out.push({ id: 'soup:base', emphasized: false });
+  if (hasNoTomato(cfg)) out.push({ id: 'sauce:no_tomato', emphasized: true });
   if (cfg.spice) out.push({ id: `spice:${cfg.spice}`, emphasized: true });
   out.push({ id: `scallion:${cfg.scallion}`, emphasized: cfg.scallion !== 'normal' });
   if (cfg.lard) out.push({ id: `lard:${cfg.lard}`, emphasized: cfg.lard !== 'normal' });

@@ -783,3 +783,13 @@ test('后厨「继续做，拒绝取消」：结束申请、通知前台；不�
   assert.equal(served.fulfillmentStatus, 'served');
   assert.equal((await s('tokens/23').get()).data()!.state, 'available');
 });
+
+test('不要番茄酱：在线下单时备注原样进订单和厨单，价钱不变', async () => {
+  const f = await setupStore();
+  const lines = [{ config: noodle({ sauce: 'red', note: '不要番茄酱' }), quantity: 1 }];
+  const { result } = await placeOrder(f, { tokenNumber: 20, lines });
+  assert.equal(result.totalSen, 700);
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+  assert.equal((await s(`orders/${result.orderId}`).get()).data()!.items[0].note, '不要番茄酱');
+  assert.equal((await s(`kitchenTickets/${result.orderId}`).get()).data()!.lines[0].note, '不要番茄酱');
+});

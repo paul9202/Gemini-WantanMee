@@ -140,6 +140,8 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
         <p className="mt-1 text-ink-2">
           {tr(SERVICE_MODE_NAMES[s.serviceMode].zh, SERVICE_MODE_NAMES[s.serviceMode].en)} · {formatRM(stage.totalSen)} · {props.paid ? tr('已收款', 'Paid') : tr('待收款', 'Unpaid')}
         </p>
+        {/* 这单点了什么（含不要番茄酱）：断网递纸单时要照着写。 */}
+        <p className="mt-1 break-words text-sm font-semibold">{s.firstItem}</p>
         <div className="mt-5 text-7xl font-black tabular-nums text-ok">{stage.tokenNumber}</div>
         <p className="mt-1 font-semibold">{shared
           ? (stage.kind === 'accepted' && stage.queueInherited

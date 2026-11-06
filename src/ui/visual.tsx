@@ -127,6 +127,7 @@ export function PictoArt({ id, size = 32 }: { id: PictogramId; size?: number }) 
     case 'noodle:thin_egg': return <Photo id="noodle.thin_egg" size={size} rounded={6} />;
     case 'noodle:mee_poh': return <Photo id="noodle.mee_poh" size={size} rounded={6} />;
     case 'soup:base': return <Icon name="soup" size={size} />;
+    case 'sauce:no_tomato': return <Strike size={size}><Icon name="tomato" size={size} /></Strike>;
     case 'takeaway:no_side_soup': return <Strike size={size}><Icon name="soup" size={size} /></Strike>;
     case 'action:start': return <Icon name="cook" size={size} />;
     case 'action:serve': return <Icon name="serve" size={size} />;
