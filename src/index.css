@@ -41,6 +41,9 @@
   --color-kds-warning: #f3d596;
   --color-kds-warning-bg: #3d3824;
   --color-kds-live: #8fd6a8;
+  /* 面薄专用（只表示面薄，不和加单黄、超时红、出餐绿混用）；浅色主题同色。 */
+  --color-kds-pok: #7cc7ff;
+  --color-kds-pok-ink: #0b2a44;
 
   --shadow-card: 0 5px 20px #28312808;
 }

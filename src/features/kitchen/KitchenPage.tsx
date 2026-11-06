@@ -5,6 +5,7 @@
  * 餐牌、堂食/打包、接单至今时间、面种份量、特殊要求、动作按钮都在固定位置。
  * 收到非缓存厨单才发送「后厨已收到」回执；断网或数据来自缓存时冻结操作并提示画面可能过期。
  * 取消待确认单冻结：不能正常出餐，只能由后厨确认「未做」或「已下锅/已用料」；确认后餐牌（同牌没有别的单时）自动释放。
+ * 面种放在每行最前面：面薄约占一成，容易凭习惯煮成细面，所以整行蓝底大字，卡片与合计也单独标出。
  * 同牌加单：同一张餐牌可挂多单。加单排在同桌原位，同桌的单放进一个粗框，可逐张或「全部出餐」（30 秒内可全部撤回）；
  * 顶部横幅提醒还没点「知道了」的加单，提示音最多响 3 次；旧单没有排队字段，不进框，卡片上标出同牌还有几单。出餐 / 撤回提示带票号区分。
  * 不显示售价、付款金额或付款状态（厨房投影本身不含这些字段）；厨房按钮只负责出餐，不确认收款。
@@ -259,7 +260,7 @@ export function KitchenPage() {
 
       <section className="grid grid-cols-3 gap-2 px-4 pt-4 sm:gap-3 sm:px-7 sm:pt-5 lg:grid-cols-4 lg:gap-4" aria-label={tr('制作中合计', 'In-progress totals')}>
         <CountCard art={<Photo id="noodle.thin_egg" size={64} rounded={10} />} label={tr('制作中 · 细面', 'In progress · Thin')} value={balls(a.thinEggHalfUnits)} unit={tr('团', 'balls')} />
-        <CountCard art={<Photo id="noodle.mee_poh" size={64} rounded={10} />} label={tr('制作中 · 面薄', 'In progress · Mee pok')} value={balls(a.meePohHalfUnits)} unit={tr('团', 'balls')} />
+        <CountCard art={<Photo id="noodle.mee_poh" size={64} rounded={10} />} label={tr('制作中 · 面薄', 'In progress · Mee pok')} value={balls(a.meePohHalfUnits)} unit={tr('团', 'balls')} hot={a.meePohHalfUnits > 0} />
         <CountCard art={<Icon name="dumpling" size={56} />} label={tr('制作中 · 云吞', 'In progress · Wantan')} value={String(a.wantons)} unit={tr('粒', 'pcs')} />
         <div className="col-span-3 flex flex-col justify-center rounded-2xl border border-kds-line bg-kds-card px-5 py-3 lg:col-span-1">
           <div className="text-sm text-kds-muted">{tr(`口味 · 共 ${a.orders} 单`, `Flavours · ${a.orders} orders`)}</div>
@@ -362,13 +363,14 @@ function balls(halfUnits: number): string {
   return formatNoodleBalls(halfUnits).replace(/\.5$/, '½').replace(/^0½$/, '½');
 }
 
-function CountCard({ art, label, value, unit }: { art: React.ReactNode; label: string; value: string; unit: string }) {
+function CountCard({ art, label, value, unit, hot = false }: { art: React.ReactNode; label: string; value: string; unit: string; hot?: boolean }) {
+  const muted = hot ? '' : 'text-kds-muted';
   return (
-    <div className="flex flex-col items-center gap-1 rounded-2xl border border-kds-line bg-kds-card px-2 py-3 text-center sm:flex-row sm:gap-4 sm:px-5 sm:text-left">
+    <div className={`flex flex-col items-center gap-1 rounded-2xl border px-2 py-3 text-center sm:flex-row sm:gap-4 sm:px-5 sm:text-left ${hot ? 'border-kds-pok bg-kds-pok text-kds-pok-ink' : 'border-kds-line bg-kds-card'}`}>
       <span className="shrink-0 [&>*]:max-sm:!h-11 [&>*]:max-sm:!w-11">{art}</span>
       <div className="min-w-0">
-        <div className="text-xs text-kds-muted sm:text-sm">{label}</div>
-        <div className="text-4xl font-black leading-tight tabular-nums">{value}<span className="ml-1 text-base font-semibold text-kds-muted">{unit}</span></div>
+        <div className={`text-xs sm:text-sm ${muted}`}>{label}</div>
+        <div className="text-4xl font-black leading-tight tabular-nums">{value}<span className={`ml-1 text-base font-semibold ${muted}`}>{unit}</span></div>
       </div>
     </div>
   );
@@ -407,7 +409,11 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId 
   const urgency = kitchenUrgency(elapsed);
   const u = URGENCY[urgency];
   const frozen = t.kitchenCancelRequested;
-  const noodle = t.lines.reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
+  const ofType = (type: 'mee_poh' | 'thin_egg') => t.lines.filter((l) => l.noodleType === type);
+  const pokBowls = ofType('mee_poh').reduce((s, l) => s + l.quantity, 0);
+  const thinBowls = ofType('thin_egg').reduce((s, l) => s + l.quantity, 0);
+  const pokHalf = ofType('mee_poh').reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
+  const thinHalf = ofType('thin_egg').reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
   const wantons = t.lines.reduce((s, l) => s + l.wantonCount * l.quantity, 0);
   const ref: TicketRef = { id: t.id, version: t.version, tokenNumber: t.tokenNumber, receiptNumber: t.receiptNumber };
   // 只有人工开工（旧流程 startOrder）才显示具体开工时刻；自动或旧 queued 单一律标为自动。
@@ -416,8 +422,10 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId 
     : tr('自动（接单即制作）', 'Auto (cooking from order)');
   return (
     <article id={anchorId} className={`flex scroll-mt-28 flex-col overflow-hidden rounded-2xl border bg-kds-card ${frozen ? 'border-[#e0735c]' : u.border}`} aria-label={tr(`${t.tokenNumber}号`, `No. ${t.tokenNumber}`)}>
-      <div className="flex items-center gap-3 border-b border-kds-line px-5 pt-2.5 pb-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-kds-line px-5 pt-2.5 pb-2">
         <span className="text-[42px] font-black leading-none tabular-nums">{t.tokenNumber}</span>
+        {pokBowls > 0 && <span className="rounded-lg bg-kds-pok px-2.5 py-1 text-lg font-black text-kds-pok-ink">{tr('面薄', 'Mee pok')} ×{pokBowls}</span>}
+        {pokBowls > 0 && thinBowls > 0 && <span className="rounded-lg border border-kds-line px-2 py-1 font-bold">{tr('细面', 'Thin')} ×{thinBowls}</span>}
         {sameToken > 1 && <span className="rounded-lg bg-kds-action px-2 py-1 text-sm font-bold text-kds-action-ink">{tr(`同牌 ${sameToken} 单`, `${sameToken} on this token`)}</span>}
         <span className="ml-auto inline-flex items-center gap-2 rounded-xl bg-kds-soft px-3 py-2 font-bold">
           {t.serviceMode !== 'takeaway' && <PictoArt id="service:dine_in" size={26} />}
@@ -477,7 +485,8 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId 
       ) : (
         <div className="flex items-end gap-4 px-5 pb-3.5">
           <div className="shrink-0 text-sm leading-6 text-kds-muted">
-            {noodle > 0 && <div>{tr('面', 'Noodle')} {balls(noodle)} {tr('团', 'balls')}</div>}
+            {thinHalf > 0 && <div>{tr('细面', 'Thin')} {balls(thinHalf)} {tr('团', 'balls')}</div>}
+            {pokHalf > 0 && <div className="rounded bg-kds-pok px-1.5 font-bold text-kds-pok-ink">{tr('面薄', 'Mee pok')} {balls(pokHalf)} {tr('团', 'balls')}</div>}
             {wantons > 0 && <div>{tr('云吞', 'Wantan')} {wantons} {tr('粒', 'pcs')}</div>}
           </div>
           <button type="button" disabled={disabled} onClick={() => onAct('serveOrder', ref)}
@@ -513,36 +522,52 @@ function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode
   const standard = pictograms.filter((p) => !p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'soup:base');
   const isSoup = l.productKind === 'wanton_soup' || l.productKind === 'soup_noodle';
   const label = (id: keyof typeof PICTOGRAMS) => (lang === 'en' ? PICTOGRAMS[id].en : PICTOGRAMS[id].zh);
+  const isPok = l.noodleType === 'mee_poh';
+  const muted = isPok ? '' : 'text-kds-muted';
+  const chipTone = isPok ? 'bg-kds-card text-kds-text' : 'bg-kds-soft';
+  const modeChip = mixed && (
+    <span className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-0.5 text-base font-bold ${serviceMode === 'takeaway' ? 'bg-kds-action text-kds-action-ink' : chipTone}`}>
+      <PictoArt id={`service:${serviceMode}`} size={20} />{tr(SERVICE_MODE_NAMES[serviceMode].zh, SERVICE_MODE_NAMES[serviceMode].en)}
+    </span>
+  );
+  const sauceDot = l.sauce && <span className={`h-4 w-4 shrink-0 rounded-full border border-kds-muted ${l.sauce === 'red' ? 'bg-[#c7482c]' : l.sauce === 'white' ? 'bg-[#efe3c4]' : 'bg-[#2b211c]'}`} />;
   return (
-    <li>
+    <li className={l.noodleType ? `rounded-xl border-2 p-2.5 ${isPok ? 'border-kds-pok bg-kds-pok text-kds-pok-ink' : 'border-kds-line'}` : ''}>
+      {l.noodleType ? (
+        <>
+          {/* 先看面种：面薄大字大图，细面保持安静。 */}
+          <div className="flex items-center gap-3">
+            <Photo id={`noodle.${l.noodleType}`} size={isPok ? 76 : 56} rounded={10} />
+            <b className={isPok ? 'text-[44px] font-black leading-none' : 'text-[28px] font-extrabold leading-none'}>{isPok ? tr('面薄', 'Mee pok') : tr('细面', 'Thin')}</b>
+            <b className={`ml-auto shrink-0 text-[32px] font-black tabular-nums ${l.quantity > 1 && !isPok ? 'text-kds-action' : ''}`}>×{l.quantity}</b>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            {sauceDot}
+            <b className="text-lg leading-tight">{name}</b>
+            {modeChip}
+            <span className={`ml-auto text-sm ${muted}`}>{balls(l.noodleHalfUnits)} {tr('团 / 份', 'ball(s) each')}</span>
+          </div>
+        </>
+      ) : (
       <div className="flex items-start gap-3">
         <Photo id={l.photoId} size={60} rounded={12} />
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
             <b className="text-xl leading-tight">{name}</b>
-            {mixed && (
-              <span className={`inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-0.5 text-base font-bold ${serviceMode === 'takeaway' ? 'bg-kds-action text-kds-action-ink' : 'bg-kds-soft'}`}>
-                <PictoArt id={`service:${serviceMode}`} size={20} />{tr(SERVICE_MODE_NAMES[serviceMode].zh, SERVICE_MODE_NAMES[serviceMode].en)}
-              </span>
-            )}
+            {modeChip}
             <b className={`ml-auto shrink-0 text-2xl tabular-nums ${l.quantity > 1 ? 'text-kds-action' : ''}`}>×{l.quantity}</b>
           </div>
-          {l.noodleType ? (
-            <span className="mt-1 inline-flex items-center gap-2 text-kds-muted">
-              <Photo id={`noodle.${l.noodleType}`} size={24} rounded={5} />
-              <span className="font-semibold text-kds-text">{l.noodleType === 'thin_egg' ? tr('细面', 'Thin') : tr('面薄', 'Mee pok')}</span>
-              · {balls(l.noodleHalfUnits)} {tr('团 / 份', 'ball(s) each')}
-            </span>
-          ) : isSoup ? (
+          {isSoup ? (
             <span className="mt-1 block text-kds-muted">{tr('云吞 · 原汁汤底', 'Wantan · house soup')}</span>
           ) : l.sauce ? (
             <span className="mt-1 inline-flex items-center gap-2 text-kds-muted">
-              <span className={`h-4 w-4 rounded-full border border-kds-line ${l.sauce === 'red' ? 'bg-[#c7482c]' : l.sauce === 'white' ? 'bg-[#efe3c4]' : 'bg-[#2b211c]'}`} />
+              {sauceDot}
               <span className="font-semibold text-kds-text">{tr(SAUCE_NAMES[l.sauce].zh, SAUCE_NAMES[l.sauce].en)}</span> · {tr('干捞云吞', 'dry wantan')}
             </span>
           ) : null}
         </div>
       </div>
+      )}
       {l.isKosong && (
         <div className="mt-2 flex items-center gap-2 rounded-lg bg-kds-action px-3 py-2 text-lg font-bold text-kds-action-ink">
           <PictoArt id="kosong:on" size={30} />{tr('净面 · 不放叉烧 / 云吞', 'Kosong · no char siew / wantan')}
@@ -551,21 +576,21 @@ function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode
       {special.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {special.map((p) => (
-            <span key={p.id} className="inline-flex items-center gap-2 rounded-xl border border-kds-line bg-kds-soft px-2.5 py-1.5 font-bold">
+            <span key={p.id} className={`inline-flex items-center gap-2 rounded-xl border border-kds-line px-2.5 py-1.5 font-bold ${chipTone}`}>
               <PictoArt id={p.id} size={28} />{label(p.id)}
             </span>
           ))}
         </div>
       )}
       {special.length === 0 && !l.isKosong && standard.length > 0 && (
-        <p className="mt-1 text-sm text-kds-muted">{tr('标准配料', 'Standard')} · {standard.map((p) => label(p.id)).join(' · ')}</p>
+        <p className={`mt-1 text-sm ${muted}`}>{tr('标准配料', 'Standard')} · {standard.map((p) => label(p.id)).join(' · ')}</p>
       )}
       {serviceMode === 'takeaway' && (
-        <p className="mt-2 flex items-center gap-2 text-sm text-kds-muted">
+        <p className={`mt-2 flex items-center gap-2 text-sm ${muted}`}>
           {isSoup ? <Icon name="bag" size={20} /> : <PictoArt id="takeaway:no_side_soup" size={22} />}{isSoup ? tr('汤品打包 · 保留原汤', 'Soup takeaway · keep the soup') : tr('干捞打包 · 不附送清汤', 'Dry takeaway · no side soup')}
         </p>
       )}
-      {l.note && <p className="mt-1 text-kds-muted">{tr('备注：', 'Note: ')}{l.note}</p>}
+      {l.note && <p className={`mt-1 ${muted}`}>{tr('备注：', 'Note: ')}{l.note}</p>}
     </li>
   );
 }
