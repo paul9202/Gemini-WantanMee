@@ -21,8 +21,9 @@ export type ResultStage =
   /**
    * sharedToken：同牌加单，挂在客人已拿着的牌上（不用再给牌）。queueInherited：后厨排回原位（服务器确实继承了才说）。
    * joinFellBack：要同牌加单，但这桌都出餐了、牌已空出：这张单按新单排队，牌要再给客人。
+   * extraOnly：下单后加料。它排在那一碗的位置，不是新单排队，牌空出时说「把 N 号牌给客人」。
    */
-  | { kind: 'accepted'; orderId: string; receiptNumber: string; tokenNumber: number; totalSen: Sen; acceptedAtMs: number; summary: ResultSummary; sharedToken?: boolean; queueInherited?: boolean; joinFellBack?: boolean }
+  | { kind: 'accepted'; orderId: string; receiptNumber: string; tokenNumber: number; totalSen: Sen; acceptedAtMs: number; summary: ResultSummary; sharedToken?: boolean; queueInherited?: boolean; joinFellBack?: boolean; extraOnly?: boolean }
   | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: Sen; summary: ResultSummary };
 
 interface Facts {
@@ -116,12 +117,13 @@ function Alerts({ stage, facts, handedOff, onlineHandoffAtMs, onHandoff, onOnlin
 
 /**
  * 下单完成后的弹窗（餐牌大字、三个独立事实、人工交接入口、独立的收款区）。
- * 同牌加单的单提示客人已拿着牌、后厨排回原位；这桌已全部出餐时提示按新单排队。云端已接单时可「这桌再加一单」（挂在同一张牌上）。
+ * 同牌加单的单提示客人已拿着牌、后厨排回原位；这桌已全部出餐时提示按新单排队。云端已接单时可「这桌再加一单」（挂在同一张牌上）或「加料」（不是加料单才有）。
  */
-export function OrderResultDialog(props: Props & { onClose: () => void; extra?: ReactNode; onAddSameToken?: () => void }) {
-  const { stage, onClose, onReceipt, onAddSameToken } = props;
+export function OrderResultDialog(props: Props & { onClose: () => void; extra?: ReactNode; onAddSameToken?: () => void; onExtra?: () => void }) {
+  const { stage, onClose, onReceipt, onAddSameToken, onExtra } = props;
   const shared = stage.kind === 'accepted' && Boolean(stage.sharedToken);
   const fellBack = stage.kind === 'accepted' && Boolean(stage.joinFellBack);
+  const extraOnly = stage.kind === 'accepted' && Boolean(stage.extraOnly);
   const tr = useT();
   const facts = useFacts(stage, props.kitchenAckAtMs, props.kitchenLastSeenMs, props.offsetMs, props.handedOff);
   const offline = stage.kind === 'local_accepted';
@@ -149,7 +151,9 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
             : tr(`客人已拿着 ${stage.tokenNumber} 号牌，不用再给牌`, `The customer already holds token ${stage.tokenNumber} — no new token needed`))
           : fellBack
             ? tr(`这桌前面的都出餐了，这碗按新单排队 · 把 ${stage.tokenNumber} 号牌给客人`, `This table's earlier orders are all served — this one queues as a new order · give token ${stage.tokenNumber} to the customer`)
-            : tr('把这张餐牌交给客人', 'Give this token to the customer')}</p>
+            : extraOnly
+              ? tr(`把 ${stage.tokenNumber} 号牌给客人`, `Give token ${stage.tokenNumber} to the customer`)
+              : tr('把这张餐牌交给客人', 'Give this token to the customer')}</p>
         <p className="text-xs text-ink-2">
           {stage.kind === 'accepted' ? tr(`${stage.tokenNumber}号 · 票号 ${stage.receiptNumber}`, `No. ${stage.tokenNumber} · receipt ${stage.receiptNumber}`) : tr(`${stage.tokenNumber}号 · 临时号 ${stage.offlineReceiptNumber}`, `No. ${stage.tokenNumber} · temp ${stage.offlineReceiptNumber}`)}
         </p>
@@ -161,6 +165,11 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
           {onAddSameToken && stage.kind === 'accepted' && (
             <button type="button" onClick={onAddSameToken} className="flex h-14 items-center gap-2 rounded-xl border border-brand bg-brand-soft px-5 font-bold text-brand">
               <Icon name="plus" size={22} />{tr('这桌再加一单', 'Add more for this table')}
+            </button>
+          )}
+          {onExtra && stage.kind === 'accepted' && (
+            <button type="button" onClick={onExtra} className="flex h-14 items-center gap-2 rounded-xl border border-brand bg-brand-soft px-5 font-bold text-brand">
+              <Icon name="plus" size={22} />{tr('加料', 'Add extras')}
             </button>
           )}
           <button type="button" onClick={onClose} autoFocus className="flex h-14 items-center gap-2 rounded-xl bg-ok px-7 font-bold text-white">{tr('下一单', 'Next order')}<Icon name="arrow" size={20} /></button>

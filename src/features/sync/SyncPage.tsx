@@ -260,13 +260,15 @@ function Step({ done, label, disabled, onClick }: { done: boolean; label: string
 }
 
 function DecisionRow({ op, busy, disabled, onRetry, onConvert }: { op: PendingOp; busy: boolean; disabled: boolean; onRetry: () => void; onConvert: () => void }) {
+  // 加料单不能转人工单：人工单的记录里没有「给哪一碗」，只能按原单重新提交。
+  const isExtra = Boolean((op.payload.order as { extraForOrderId?: string | null }).extraForOrderId);
   return (
     <div className="mt-3 rounded-xl bg-warn-bg p-3">
       <b>{op.summary.tokenNumber}号 · {formatRM(op.summary.totalSen)} · {op.summary.method === 'cash' ? '现金' : 'QR'}：云端没有这张单。</b>
       <p className="text-sm text-warn">钱已经收了，请勿再次收钱。先问厨房：这张单做了吗？</p>
       <div className="mt-2 flex flex-wrap gap-2">
         <button type="button" disabled={busy || disabled} onClick={onRetry} className="h-12 rounded-lg bg-brand px-4 font-bold text-white disabled:bg-control">厨房没做：按原单重新提交</button>
-        <button type="button" disabled={busy} onClick={onConvert} className="h-12 rounded-lg border border-warn bg-card px-4 font-semibold">已人工处理：转人工单补账</button>
+        {!isExtra && <button type="button" disabled={busy} onClick={onConvert} className="h-12 rounded-lg border border-warn bg-card px-4 font-semibold">已人工处理：转人工单补账</button>}
       </div>
     </div>
   );

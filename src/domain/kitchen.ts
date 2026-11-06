@@ -59,6 +59,10 @@ export interface KitchenTicket {
   queueAtMs?: number;
   /** 后厨同一个框的分组键（同桌第一张单的 ID）。缺省自成一组。 */
   queueGroupId?: string;
+  /** 下单后加料的小单：只有叉烧 / 云吞，没有面。旧单缺省。 */
+  extraOnly?: boolean;
+  /** 加料是给哪一张单的：那张厨单还在队列里就是那碗还没出。 */
+  extraForOrderId?: string | null;
 }
 
 export interface KitchenTicketSource {
@@ -104,7 +108,9 @@ export function buildKitchenTicket(menu: MenuVersion, src: KitchenTicketSource):
     lines: lines.map(({ lineId, config: c, quantity, serviceMode }) => {
       const p = linePortions(menu, c);
       return {
-        lineId, productKind: c.productKind, size: c.size, noodleType: c.noodleType, sauce: c.sauce, isKosong: c.isKosong,
+        // 厨单上的加料行写成干捞云吞、不带酱：还没更新的旧后厨屏只认识四种餐品，遇到 extra 会白屏。
+        // 订单本身存真实的 extra，厨单只给后厨显示；云吞数算进合计，酱料合计不受影响（sauce 为 null）。
+        lineId, productKind: c.productKind === 'extra' ? 'dry_wanton' : c.productKind, size: c.size, noodleType: c.noodleType, sauce: c.sauce, isKosong: c.isKosong,
         spice: c.spice, lard: c.lard, scallion: c.scallion, addOns: [...c.addOns], note: c.note, quantity, serviceMode,
         noodleHalfUnits: p.noodleHalfUnits, wantonCount: p.wantonCount,
         nameZh: lineNameZh(menu, c), photoId: linePhotoId(c), pictograms: linePictograms(menu, c, serviceMode),

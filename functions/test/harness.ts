@@ -116,7 +116,7 @@ export function noodle(patch: Partial<LineConfig> = {}): LineConfig {
 
 export interface OrderOptions {
   tokenNumber?: number;
-  lines?: { config: unknown; quantity: number; lineId?: string; serviceMode?: unknown }[];
+  lines?: { config: unknown; quantity: number; lineId?: string; serviceMode?: unknown; forLineId?: string }[];
   serviceMode?: 'dine_in' | 'takeaway';
   expectedTotalSen?: number;
   /** 下单后立即登记全额收款（另一条命令，下单本身不收款）。 */
@@ -128,11 +128,13 @@ export interface OrderOptions {
   addOnToOrderId?: string;
   /** 同牌加单：挂到这张仍占着该牌的单所在的牌上。 */
   joinTokenOrderId?: string;
+  /** 下单后加料：给这张单加料；每行用 forLineId 说明给哪一碗。 */
+  extraForOrderId?: string;
 }
 
 export function orderPayload(f: StoreFixture, o: OrderOptions = {}) {
   const lines = (o.lines ?? [{ config: noodle(), quantity: 1 }]).map((l) => ({
-    lineId: l.lineId ?? randomUUID(), config: l.config, quantity: l.quantity, ...(l.serviceMode === undefined ? {} : { serviceMode: l.serviceMode }),
+    lineId: l.lineId ?? randomUUID(), config: l.config, quantity: l.quantity, ...(l.serviceMode === undefined ? {} : { serviceMode: l.serviceMode }), ...(l.forLineId === undefined ? {} : { forLineId: l.forLineId }),
   }));
   return {
     storeId: f.storeId,
@@ -150,6 +152,7 @@ export function orderPayload(f: StoreFixture, o: OrderOptions = {}) {
       deviceAcceptedAtMs: Date.now(),
       ...(o.addOnToOrderId ? { addOnToOrderId: o.addOnToOrderId } : {}),
       ...(o.joinTokenOrderId ? { joinTokenOrderId: o.joinTokenOrderId } : {}),
+      ...(o.extraForOrderId ? { extraForOrderId: o.extraForOrderId } : {}),
     },
   };
 }

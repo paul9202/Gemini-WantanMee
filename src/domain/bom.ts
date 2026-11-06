@@ -42,5 +42,7 @@ export const BOM_VERSIONS: Record<string, BomVersion> = { [BOM_V1.version]: BOM_
 export function unitCostUnits(menu: MenuVersion, bom: BomVersion, cfg: LineConfig): CostUnits {
   const p = linePortions(menu, cfg);
   const noodle = cfg.noodleType ? p.noodleHalfUnits * bom.noodleHalfBall[cfg.noodleType] : 0;
-  return noodle + p.wantonCount * bom.wanton + p.charSiewPortions * bom.charSiewPortion + bom.base[cfg.productKind];
+  // 加料没有底料，成本和下单时点同样的加料一样。
+  const base = cfg.productKind === 'extra' ? 0 : bom.base[cfg.productKind];
+  return noodle + p.wantonCount * bom.wanton + p.charSiewPortions * bom.charSiewPortion + base;
 }

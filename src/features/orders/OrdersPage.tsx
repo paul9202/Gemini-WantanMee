@@ -5,6 +5,7 @@
  * - 老板可「更正误登记收款」（有原因、有审计，追加反向调整，不是退款），也可登记退款（不强制选择渠道）。
  * - 旧订单保留真实付款渠道（现金 / DuitNow QR）。餐牌会复用：订单以票号 + 原餐牌号 + 时间识别，操作绑定订单 ID。
  * - 同牌加单：一张餐牌可同时挂几单；同牌还有单在做时，已出餐的单不显示「餐牌已释放」。
+ * - 下单后加料：一张小单（extraOnly），餐品后面写给哪一碗；取消原单时提醒加料单要分开取消。
  * - 同桌账单：按账单 ID 汇总显示；一个按钮收整桌还没收的单（超过 10 张才逐单收）。更正、退款仍逐单。可打整桌收据。
  */
 import { useRef, useState } from 'react';
@@ -12,7 +13,7 @@ import { collection, orderBy, query, where } from 'firebase/firestore';
 import { billIdOf, BillSummary, summarizeBill } from '../../domain/bill';
 import { hasNoTomato } from '../../domain/lineItem';
 import { businessDateOf } from '../../domain/businessDay';
-import { OrderServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
+import { LineKind, OrderServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import { PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import type { PaymentMethod } from '../../domain/payment';
@@ -58,6 +59,10 @@ interface OrderRow {
   addOnTo?: { orderId: string; tokenNumber: number; receiptNumber: string | null } | null;
   /** 同牌加单：客人拿着同一张牌又加的单（旧单缺省）。 */
   sharedToken?: boolean;
+  /** 下单后加料的小单（旧单缺省）。 */
+  extraOnly?: boolean;
+  /** 加料是给哪一张单的。 */
+  extraForOrderId?: string | null;
   source?: 'online' | 'offline';
   offlineReceiptNumber?: string | null;
   /** 后厨「继续做，拒绝取消」的记录。 */
@@ -66,12 +71,12 @@ interface OrderRow {
   writeOff?: { reason: string; amountSen: number; atMs: number } | null;
   businessDate: string;
   version: number;
-  /** items 带下单时的完整配置；这里只用到辣度（汤品为 null）。 */
-  items: { lineId: string; nameZh: string; quantity: number; photoId: string; spice?: Spice | null; note?: string | null }[];
+  /** items 带下单时的完整配置；这里只用到辣度（汤品为 null）和加料的备注。 */
+  items: { lineId: string; nameZh: string; quantity: number; photoId: string; productKind?: LineKind; spice?: Spice | null; note?: string | null }[];
 }
 
-/** 订单页的餐品文字：品名 + 辣度 + 不要番茄酱，例如「红酱面 · 小 · 辣 · 不要番茄酱」。 */
-const itemName = (i: OrderRow['items'][number]) => [i.nameZh, i.spice ? PICTOGRAMS[`spice:${i.spice}`].zh : null, hasNoTomato(i) ? PICTOGRAMS['sauce:no_tomato'].zh : null].filter(Boolean).join(' · ');
+/** 订单页的餐品文字：品名 + 辣度 + 不要番茄酱，例如「红酱面 · 小 · 辣 · 不要番茄酱」；加料写给哪一碗，例如「加叉烧 · 给 红酱面 · 中」。 */
+const itemName = (i: OrderRow['items'][number]) => [i.nameZh, i.spice ? PICTOGRAMS[`spice:${i.spice}`].zh : null, hasNoTomato(i) ? PICTOGRAMS['sauce:no_tomato'].zh : null, i.productKind === 'extra' ? i.note : null].filter(Boolean).join(' · ');
 
 type Filter = 'all' | 'unpaid' | 'queued' | 'preparing' | 'served' | 'cancelled';
 const CANCEL_REASONS: [string, string][] = [['顾客离开', 'Customer left'], ['点错单', 'Wrong order'], ['重复下单', 'Duplicate order'], ['改单', 'Changing order'], ['其他', 'Other']];
@@ -180,6 +185,10 @@ export function OrdersPage() {
     return { orders, summary: summarizeBill(orders, localPaid), complete: q.data.some((x) => x.id === id) };
   };
 
+  /** 取消原单时：同桌已载入的单里还有没取消的加料（厨房不会连带取消）。 */
+  // 按碗判断：同桌别的碗的加料不算；已出餐的加料也取消不了，不提醒。
+  const hasOpenExtra = (o: OrderRow) => !o.extraOnly && [...carried, ...q.data].some((x) => x.extraForOrderId === o.id && (x.fulfillmentStatus === 'queued' || x.fulfillmentStatus === 'preparing') && !x.kitchenCancelRequested);
+
   /** o 是点按钮的那一行，结果显示在这行；防连点覆盖这次要收的所有单。 */
   async function confirmPaid(o: OrderRow, payable: BillSummary['payable']) {
     const ids = payable.map((p) => p.orderId);
@@ -287,7 +296,9 @@ export function OrdersPage() {
           <div className="flex shrink-0 -space-x-3">{o.items.slice(0, 2).map((i) => <Photo key={i.lineId} id={i.photoId} size={44} rounded={22} className="border-2 border-white" />)}</div>
           <div className="min-w-0">
             <div className="text-sm font-bold">{tr('票号', 'Receipt')} {o.receiptNumber}{o.offlineReceiptNumber ? `（${o.offlineReceiptNumber}）` : ''}
-              {o.sharedToken ? (
+              {o.extraOnly ? (
+                <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">{tr('加料', 'Extra')}</span>
+              ) : o.sharedToken ? (
                 <span className="ml-2 rounded bg-brand-soft px-1.5 text-xs font-semibold text-brand">
                   {tr('同牌加单', 'Same-token add-on')}
                   {o.addOnTo && tr(` · 和 ${o.addOnTo.receiptNumber ?? `${o.addOnTo.tokenNumber} 号`} 一桌`, ` · same table as ${o.addOnTo.receiptNumber ?? `token ${o.addOnTo.tokenNumber}`}`)}
@@ -427,13 +438,14 @@ export function OrdersPage() {
       {billRoot && config && (
         <ReceiptDialog receiptKey={`bill:${billRoot}`} loadBill={() => billSourcesFromRoot(billRoot, config.name, localPaid)} menuVersion={config.activeMenuVersion} timeZone={config.timeZone} onClose={() => setBillRoot(null)} />
       )}
-      {dialog && <ActionDialog dialog={dialog} busy={busy} onClose={() => setDialog(null)} onRun={run} />}
+      {dialog && <ActionDialog dialog={dialog} hasOpenExtra={hasOpenExtra(dialog.order)} busy={busy} onClose={() => setDialog(null)} onRun={run} />}
     </div>
   );
 }
 
-function ActionDialog({ dialog, busy, onClose, onRun }: {
+function ActionDialog({ dialog, hasOpenExtra, busy, onClose, onRun }: {
   dialog: Dialog;
+  hasOpenExtra: boolean;
   busy: boolean;
   onClose: () => void;
   onRun: (name: RunName, o: OrderRow, extra: Record<string, unknown>) => void;
@@ -459,6 +471,11 @@ function ActionDialog({ dialog, busy, onClose, onRun }: {
               {o.fulfillmentStatus === 'preparing' ? tr('已在制作中：需要后厨确认停止制作。', 'Already preparing: the kitchen must confirm it stopped. ') : tr('尚未开始制作，会直接取消。', 'Not started yet — it will be cancelled now. ')}
               {o.paymentState === 'unpaid' ? tr('这单还没收款，取消后无需收款、也不用退款。', 'Not paid yet: nothing will be due and no refund is needed.') : tr('取消不等于已退款，退款由老板另行登记。', 'Cancelling is not a refund; the owner records refunds separately.')}
             </p>
+            {hasOpenExtra && (
+              <p role="alert" className="mt-2 rounded-lg bg-warn-bg p-2 text-sm font-semibold text-warn">
+                {tr('这碗还有加料单，也要分开取消', 'This bowl also has an extra order; cancel that one separately too')}
+              </p>
+            )}
             {!online && (
               <p role="alert" className="mt-2 rounded-lg bg-warn-bg p-2 text-sm font-semibold text-warn">
                 {tr('现在断网：系统取消无法完成。请口头通知厨房停做；联网后再在这里完成取消。系统取消完成前餐牌仍占用，后厨屏也没有收到取消通知。', 'Offline: the cancel cannot be completed in the system. Tell the kitchen in person; finish the cancel here once back online. Until then the token stays in use and the kitchen screen has not been told.')}

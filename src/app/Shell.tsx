@@ -103,7 +103,7 @@ export function Shell({ route, title, children }: { route: Route; title?: Route;
               <span className={`h-2 w-2 rounded-full ${online ? 'bg-ok' : 'bg-danger'}`} />
               <span className="sr-only sm:not-sr-only">{online ? tr('门店在线', 'Online') : tr('已断网', 'Offline')}</span>
             </span>
-            {dateLabel && <span className="hidden text-[13px] text-ink-2 xl:inline" title={tr('营业日', 'Business day')}>{dateLabel}</span>}
+            {dateLabel && <span className="hidden text-[13px] text-ink-2 2xl:inline" title={tr('营业日', 'Business day')}>{dateLabel}</span>}
             <button type="button" onClick={() => void signOut()} title={user?.email ?? ''} className="flex h-14 items-center rounded-lg border border-line px-3 text-sm text-ink-2 hover:text-ink md:hidden">
               {tr('退出', 'Sign out')}
             </button>

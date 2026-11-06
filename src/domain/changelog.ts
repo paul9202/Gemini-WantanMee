@@ -21,6 +21,15 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-06-extras', date: '2026-11-06', roles: ALL,
+    title: { zh: '下单后也能加叉烧、加云吞', en: 'Add char siew or wantan after ordering' },
+    items: [
+      { zh: '收银点「＋加料」找到这桌，选给哪一碗；原单不变，加料算在同一桌的账上。', en: 'Tap + Extra, find the table and pick the bowl. The original order stays the same, and the extra goes on the same table’s bill.' },
+      { zh: '后厨有横幅和提示音；那碗没出就放进碗里或小碟一起送，出了就小碟单独送。', en: 'The kitchen gets a banner and chime. If the bowl is not out yet, add it to the bowl or send a small plate with it; if it is out, send a small plate on its own.' },
+      { zh: '净面不能加肉，断网时不能加料。', en: 'Kosong bowls cannot add meat, and extras cannot be added while offline.' },
+    ],
+  },
+  {
     id: '2026-11-06-no-tomato', date: '2026-11-06', roles: ALL,
     title: { zh: '红酱可以「不要番茄酱」', en: 'Red sauce can be made without tomato sauce' },
     items: [

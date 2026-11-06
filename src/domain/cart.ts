@@ -148,9 +148,11 @@ export function computeTotals(menu: MenuVersion, bom: BomVersion, cart: Cart): O
       wantonCount: p.wantonCount * l.quantity,
     };
   });
-  const portionCount = cart.lines.reduce((s, l) => s + l.quantity, 0);
+  // 加料不是一碗：不算份数，也不计打包包装。
+  const bowls = cart.lines.filter((l) => l.config.productKind !== 'extra');
+  const portionCount = bowls.reduce((s, l) => s + l.quantity, 0);
   const ingredientCostUnits = lines.reduce((s, l) => s + l.lineCostUnits, 0);
-  const takeawayPortionCount = cart.lines.reduce((s, l) => s + (l.serviceMode === 'takeaway' ? l.quantity : 0), 0);
+  const takeawayPortionCount = bowls.reduce((s, l) => s + (l.serviceMode === 'takeaway' ? l.quantity : 0), 0);
   const packagingCostUnits = takeawayPortionCount * bom.packagingPerPortion;
   return {
     totalSen: lines.reduce((s, l) => s + l.lineTotalSen, 0),

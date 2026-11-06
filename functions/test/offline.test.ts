@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { admin, cleanupClients, countDocs, noodle, orderPayload, pay, placeOrder, setupStore, StoreFixture, uuid } from './harness';
 import { MENU_V1 } from '../../src/domain';
+import { extraConfig } from '../../src/domain/extras';
 
 after(cleanupClients);
 
@@ -322,4 +323,17 @@ test('不要番茄酱：断网下的单补同步后，备注原样进订单和�
   assert.deepEqual((await sync(f, [created])).map((x) => x.status), ['accepted']);
   assert.equal((await doc(f, `orders/${id}`))!.items[0].note, '不要番茄酱');
   assert.equal((await doc(f, `kitchenTickets/${id}`))!.lines[0].note, '不要番茄酱');
+});
+
+test('离线不能下单后加料：加料行进待核对，不接单、不占牌、不送厨', async () => {
+  const f = await setupStore();
+  const ev = makeEvents(f);
+  const id = uuid();
+  const e = ev.create(id, 9, { method: 'none', totalSen: 200 });
+  (e.payload as { lines: unknown[] }).lines = [{ lineId: uuid(), config: extraConfig('char_siew'), quantity: 1 }];
+  const r = await sync(f, [e]);
+  assert.deepEqual(r.map((x) => [x.status, x.reasonCode]), [['needs_review', 'INVALID_MODIFIER']]);
+  assert.equal(await countDocs(f.storeId, 'orders'), 0);
+  assert.equal(await countDocs(f.storeId, 'kitchenTickets'), 0);
+  assert.equal((await doc(f, 'tokens/09'))!.state, 'available');
 });

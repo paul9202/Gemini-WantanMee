@@ -174,7 +174,10 @@ test('同牌加单拒绝：牌属于别的客人 / 旧版待回收；牌已空�
   let free = must(holdToken(createTokenBoard(), 8, 'A'));
   free = must(releaseHeldToken(free, 8, 'A'));
   free = must(joinToken(free, 8, 'B', 'A'));
-  assert.deepEqual([free[8].state, free[8].orderIds, free[8].sessionOrderIds, free[8].lastReleasedOrderId], ['held', ['B'], ['B'], null], '牌已空闲：新一轮占用');
+  assert.deepEqual([free[8].state, free[8].orderIds, free[8].sessionOrderIds, free[8].lastReleasedOrderId], ['held', ['B'], ['A', 'B'], null], '牌已空闲、还是这桌：重新占牌，这一轮记录保留');
+  free = must(releaseHeldToken(free, 8, 'B'));
+  free = must(joinToken(free, 8, 'C', 'OTHER'));
+  assert.deepEqual(free[8].sessionOrderIds, ['C'], '牌已空闲、不是这桌：新一轮占用');
 });
 
 test('同牌加单撤回出餐：同一桌仍占着或最后由这桌释放可挂回；牌给了新客人就拒绝', () => {

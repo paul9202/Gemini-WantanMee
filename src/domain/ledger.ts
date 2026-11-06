@@ -237,16 +237,18 @@ const NOODLE_LABEL: Record<string, string> = { thin_egg: '细面', mee_poh: '面
 /** 销量与餐品结构：只统计实际已出餐的份数（退款但已出餐的仍算出餐）。 */
 export function productMix(orders: OrderReportRow[]): ProductMix {
   const served = orders.filter((o) => o.fulfillmentStatus === 'served');
+  // 下单后加料不是一碗，不算进份数和餐品结构。
+  const isBowl = (i: OrderReportRow['items'][number]) => i.productKind !== 'extra';
   const count = (key: (i: OrderReportRow['items'][number]) => string | null, labels: Record<string, string>) => {
     const m = new Map<string, number>();
-    for (const o of served) for (const i of o.items) {
+    for (const o of served) for (const i of o.items.filter(isBowl)) {
       const k = key(i);
       if (k) m.set(k, (m.get(k) ?? 0) + i.quantity);
     }
     return [...m.entries()].map(([k, portions]) => ({ key: k, label: labels[k] ?? k, portions })).sort((a, b) => b.portions - a.portions);
   };
   return {
-    portionsServed: served.reduce((s, o) => s + o.items.reduce((t, i) => t + i.quantity, 0), 0),
+    portionsServed: served.reduce((s, o) => s + o.items.filter(isBowl).reduce((t, i) => t + i.quantity, 0), 0),
     byProduct: count((i) => i.productKind, PRODUCT_LABEL),
     bySauce: count((i) => i.sauce, SAUCE_LABEL),
     byNoodle: count((i) => i.noodleType, NOODLE_LABEL),
@@ -305,7 +307,8 @@ export function receiptsTrend(payments: PaymentDoc[], refunds: RefundDoc[], rang
 }
 
 export function orderServiceStats(orders: OrderReportRow[]): ServiceStats {
-  return serviceStats(orders.map((o): ServiceSampleSource => ({
+  // 下单后加料是一小碟，不算出餐速度。
+  return serviceStats(orders.filter((o) => !o.items.every((i) => i.productKind === 'extra')).map((o): ServiceSampleSource => ({
     orderId: o.id, serviceMode: o.serviceMode, fulfillmentStatus: o.fulfillmentStatus,
     acceptedAtEffectiveMs: o.acceptedAtEffectiveMs, servedAtMs: o.servedAtMs, timeQuality: o.timeQuality,
   })));

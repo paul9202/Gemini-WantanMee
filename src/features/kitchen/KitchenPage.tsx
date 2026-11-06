@@ -8,6 +8,7 @@
  * 面种放在每行最前面：面薄约占一成，容易凭习惯煮成细面，所以整行蓝底大字，卡片与合计也单独标出。
  * 同牌加单：同一张餐牌可挂多单。加单排在同桌原位，同桌的单放进一个粗框，可逐张或「全部出餐」（30 秒内可全部撤回）；
  * 顶部横幅提醒还没点「知道了」的加单，提示音最多响 3 次；旧单没有排队字段，不进框，卡片上标出同牌还有几单。出餐 / 撤回提示带票号区分。
+ * 下单后加料（extraOnly）：一张小卡，只写加什么、给哪一碗，不按面种排版；排在那碗的位置，同组就进同一个框。卡上的送法横幅按同组还有没有没出的碗实时算，不存状态。提醒和提示音同加单。
  * 不显示售价、付款金额或付款状态（厨房投影本身不含这些字段）；厨房按钮只负责出餐，不确认收款。
  * 后厨路由没有 Shell：在本页提供更新入口；打开期间保持屏幕常亮。
  */
@@ -26,7 +27,7 @@ import { useHeartbeat } from '../../data/heartbeat';
 import { navigate } from '../../app/router';
 import { applyUpdate, useSwState } from '../../app/swUpdate';
 import { Icon, Photo, PictoArt } from '../../ui/visual';
-import { useLang, useT } from '../../app/i18n';
+import { Lang, useLang, useT } from '../../app/i18n';
 import { lineNameEn, LineConfig } from '../../domain/lineItem';
 import { MENU_V1, OrderServiceMode, SAUCE_NAMES, SERVICE_MODE_NAMES, ServiceMode } from '../../domain/menu';
 import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
@@ -62,7 +63,7 @@ export function KitchenPage() {
   const [undo, setUndo] = useState<{ items: UndoItem[]; servedAt: number } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const acked = useRef(new Set<string>());
-  // 已点「知道了」的同牌加单：只存内存，刷新后重新提醒。
+  // 已点「知道了」的同牌加单 / 加料：只存内存，刷新后重新提醒。
   const [notedAddOns, setNotedAddOns] = useState<ReadonlySet<string>>(() => new Set());
   const tr = useT();
   const lang = useLang();
@@ -91,12 +92,13 @@ export function KitchenPage() {
   // 单一工作区：全部未出餐电子单（含旧 queued），取消待确认单留在原位但冻结。
   const working = tickets;
   // 同牌加单：同一餐牌号在工作区里有几张未出餐单（含取消待确认），卡片上提示「同牌 k 单」。
+  const queuedIds = new Set(working.map((t) => t.id));
   const tokenCounts = new Map<number, number>();
   for (const t of working) tokenCounts.set(t.tokenNumber, (tokenCounts.get(t.tokenNumber) ?? 0) + 1);
   const openIds = working.filter((t) => !t.kitchenCancelRequested).map((t) => t.id);
   const newIds = useMemo(() => openIds, [openIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-  // 还没点「知道了」的同牌加单（取消待确认的不提醒，卡片上已有冻结提示），最早的在前。
-  const addOns = sortFifo(working.filter((t) => t.sharedToken && !t.kitchenCancelRequested && !notedAddOns.has(t.id)));
+  // 还没点「知道了」的同牌加单和加料（取消待确认的不提醒，卡片上已有冻结提示），最早的在前。
+  const addOns = sortFifo(working.filter((t) => (t.sharedToken || t.extraOnly) && !t.kitchenCancelRequested && !notedAddOns.has(t.id)));
   const addOnIds = addOns.map((t) => t.id);
   const repeatIds = useMemo(() => addOnIds, [addOnIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   const sound = useNewTicketChime(newIds, !q.fromCache && !q.loading, repeatIds);
@@ -297,7 +299,7 @@ export function KitchenPage() {
         {!q.loading && working.length === 0 && <Empty text={tr('暂无要做的单', 'Nothing to cook')} />}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {groups.map((g) => {
-            const cardProps = { now, today: date, disabled: stale || busyId !== null, onAct: act };
+            const cardProps = { now, today: date, disabled: stale || busyId !== null, onAct: act, openIds: queuedIds };
             if (g.tickets.length === 1) {
               const t = g.tickets[0];
               return <TicketCard key={t.id} anchorId={`kds-group-${g.key}`} t={t} sameToken={tokenCounts.get(t.tokenNumber) ?? 1} busy={busyId === t.id} {...cardProps} />;
@@ -346,21 +348,22 @@ function failureText(e: unknown): string {
   return e instanceof CommandFailure ? reasonText(e.reasonCode) : String(e);
 }
 
-/** 同牌加单提醒：占自己的一行、停在页面顶部，不盖住任何出餐按钮；不点「知道了」也能照常出餐。 */
+/** 同牌加单 / 加料提醒：占自己的一行、停在页面顶部，不盖住任何出餐按钮；不点「知道了」也能照常出餐。 */
 function AddOnAlert({ t, more, onNote }: { t: Ticket; more: number; onNote: () => void }) {
   const tr = useT();
   const lang = useLang();
   const mode = (m: OrderServiceMode) => tr(SERVICE_MODE_NAMES[m].zh, SERVICE_MODE_NAMES[m].en);
   const mixed = t.serviceMode === 'mixed';
   const lines = t.lines.map((l) => {
+    if (t.extraOnly) return `${extraLineName(l, lang)} ×${l.quantity}${l.note ? ` · ${l.note}` : ''}`;
     const name = lang === 'en' ? lineNameEn(MENU_V1, l as unknown as LineConfig) : l.nameZh;
     return `${name} ×${l.quantity}${mixed ? ` ${mode(kitchenLineMode(t, l))}` : ''}`;
   }).join(lang === 'en' ? ', ' : '、');
   return (
     <div role="alert" className="sticky top-0 z-30 flex flex-wrap items-center gap-x-4 gap-y-2 bg-kds-action px-4 py-2 text-kds-action-ink sm:px-7">
-      <Icon name="users" size={28} />
+      <Icon name={t.extraOnly ? 'dumpling' : 'users'} size={28} />
       <b className="line-clamp-2 min-w-0 flex-1 text-xl">
-        {tr(`${t.tokenNumber} 号 加单`, `No. ${t.tokenNumber} add-on`)} · {lines}{mixed ? '' : ` · ${mode(t.serviceMode)}`}
+        {t.extraOnly ? tr(`${t.tokenNumber} 号 加料`, `No. ${t.tokenNumber} extra`) : tr(`${t.tokenNumber} 号 加单`, `No. ${t.tokenNumber} add-on`)} · {lines}{mixed || t.extraOnly ? '' : ` · ${mode(t.serviceMode)}`}
       </b>
       {more > 0 && <span className="shrink-0 font-bold">{tr(`还有 ${more} 条`, `${more} more`)}</span>}
       <button type="button" onClick={onNote} className="h-14 shrink-0 rounded-xl border-2 border-current px-6 text-lg font-bold">{tr('知道了', 'Got it')}</button>
@@ -407,9 +410,9 @@ const URGENCY = {
   overdue: { bar: 'bg-kds-danger-bg', text: 'text-kds-danger', label: '已超时 · 请优先处理', en: 'Overdue · do first', border: 'border-[#e0735c]' },
 };
 
-function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId }: {
-  /** sameToken：要在卡片上标出的同牌单数（含本单）；在框里的卡片传 1，不重复标。anchorId：提醒横幅滚动的目标。 */
-  t: Ticket; sameToken: number; now: number; today: string; disabled: boolean; busy: boolean; anchorId?: string;
+function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId, openIds }: {
+  /** sameToken：要在卡片上标出的同牌单数（含本单）；在框里的卡片传 1，不重复标。anchorId：提醒横幅滚动的目标。openIds：队列里还没出餐的单（加料卡据此判断那碗出了没有）。 */
+  t: Ticket; sameToken: number; now: number; today: string; disabled: boolean; busy: boolean; anchorId?: string; openIds: ReadonlySet<string>;
   onAct: (name: Action, t: TicketRef, extra?: ActExtra) => void;
 }) {
   const tr = useT();
@@ -425,6 +428,7 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId 
   const pokHalf = ofType('mee_poh').reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
   const thinHalf = ofType('thin_egg').reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
   const wantons = t.lines.reduce((s, l) => s + l.wantonCount * l.quantity, 0);
+  const charSiew = t.extraOnly ? t.lines.filter((l) => l.addOns.includes('char_siew')).reduce((s, l) => s + l.quantity, 0) : 0;
   const ref: TicketRef = { id: t.id, version: t.version, tokenNumber: t.tokenNumber, receiptNumber: t.receiptNumber };
   // 只有人工开工（旧流程 startOrder）才显示具体开工时刻；自动或旧 queued 单一律标为自动。
   const startLabel = t.startedSource === 'manual' && t.startedAtMs != null
@@ -434,6 +438,7 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId 
     <article id={anchorId} className={`flex scroll-mt-28 flex-col overflow-hidden rounded-2xl border bg-kds-card ${frozen ? 'border-[#e0735c]' : u.border}`} aria-label={tr(`${t.tokenNumber}号`, `No. ${t.tokenNumber}`)}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-kds-line px-5 pt-2.5 pb-2">
         <span className="text-[42px] font-black leading-none tabular-nums">{t.tokenNumber}</span>
+        {t.extraOnly && <span className="rounded-lg bg-kds-action px-2.5 py-1 text-lg font-black text-kds-action-ink">{tr('加料', 'Extra')}</span>}
         {pokBowls > 0 && <span className="rounded-lg bg-kds-pok px-2.5 py-1 text-lg font-black text-kds-pok-ink">{tr('面薄', 'Mee pok')} ×{pokBowls}</span>}
         {pokBowls > 0 && thinBowls > 0 && <span className="rounded-lg border border-kds-line px-2 py-1 font-bold">{tr('细面', 'Thin')} ×{thinBowls}</span>}
         {sameToken > 1 && <span className="rounded-lg bg-kds-action px-2 py-1 text-sm font-bold text-kds-action-ink">{tr(`同牌 ${sameToken} 单`, `${sameToken} on this token`)}</span>}
@@ -458,11 +463,27 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId 
       )}
       {t.manualHandoffAtMs && <Banner tone="danger"><PictoArt id="token:return" size={24} />{tr('收银已递纸单 · 先核对是否已做，避免做两份', 'Paper ticket given · check before cooking twice')}</Banner>}
       {/* 同牌加单自动并入同一结账组，也带 addOnTo；只显示同牌提示，避免误以为是吃完再加的打包单。 */}
-      {t.sharedToken && <Banner tone="action"><Icon name="users" size={22} />{tr(`同牌加单 · ${t.tokenNumber} 号的客人再加（和前面 ${t.tokenNumber} 号的一起送）`, `Same-token add-on · token ${t.tokenNumber} ordered more (serve with the earlier ${t.tokenNumber})`)}</Banner>}
-      {t.addOnTo && !t.sharedToken && <Banner tone="action"><PictoArt id="service:takeaway" size={24} />{tr(`加单 · 原 ${t.addOnTo.tokenNumber} 号的客人（吃完再加）`, `Add-on · for token ${t.addOnTo.tokenNumber}'s customer`)}</Banner>}
+      {/* 加料也带 sharedToken、addOnTo：它有自己的送法提示，不显示这两条。取消待确认时已冻结，也不提示送法。 */}
+      {t.extraOnly && !frozen && t.lines.some((l) => kitchenLineMode(t, l) === 'takeaway') && (
+        <Banner tone="warn"><PictoArt id="service:takeaway" size={24} />{tr(`打包 → 单独装袋，交给 ${t.tokenNumber} 号`, `Takeaway → bag it separately, hand to No. ${t.tokenNumber}`)}</Banner>
+      )}
+      {t.extraOnly && !frozen && t.lines.some((l) => kitchenLineMode(t, l) !== 'takeaway') && (
+        <Banner tone="warn">
+          {/* 人工单的碗不在电子队列里，分不清出了没有（没有 queueGroupId），只说送到哪。 */}
+          {!t.queueGroupId
+            ? tr(`小碟送到 ${t.tokenNumber} 号`, `Small plate to No. ${t.tokenNumber}`)
+            : t.extraForOrderId && openIds.has(t.extraForOrderId)
+              ? tr('还没出 → 放进这碗；已装好 → 小碟一起送', 'Bowl not out → add to it; already dished up → small plate alongside')
+              : tr(`碗已出 → 小碟送到 ${t.tokenNumber} 号`, `Bowl is out → small plate to No. ${t.tokenNumber}`)}
+        </Banner>
+      )}
+      {t.sharedToken && !t.extraOnly && <Banner tone="action"><Icon name="users" size={22} />{tr(`同牌加单 · ${t.tokenNumber} 号的客人再加（和前面 ${t.tokenNumber} 号的一起送）`, `Same-token add-on · token ${t.tokenNumber} ordered more (serve with the earlier ${t.tokenNumber})`)}</Banner>}
+      {t.addOnTo && !t.sharedToken && !t.extraOnly && <Banner tone="action"><PictoArt id="service:takeaway" size={24} />{tr(`加单 · 原 ${t.addOnTo.tokenNumber} 号的客人（吃完再加）`, `Add-on · for token ${t.addOnTo.tokenNumber}'s customer`)}</Banner>}
       {t.routedFromManual &&<Banner tone="action"><PictoArt id="token:return" size={24} />{tr('人工单转入 · 收银已核实厨房未做', 'From paper ticket · cashier confirmed not cooked')}</Banner>}
       <ul className={`flex-1 space-y-3 px-5 py-3 ${frozen ? 'opacity-60' : ''}`}>
-        {t.lines.map((l) => <KitchenLineRow key={l.lineId} l={l} serviceMode={kitchenLineMode(t, l)} mixed={t.serviceMode === 'mixed'} />)}
+        {t.lines.map((l) => t.extraOnly
+          ? <ExtraLineRow key={l.lineId} l={l} />
+          : <KitchenLineRow key={l.lineId} l={l} serviceMode={kitchenLineMode(t, l)} mixed={t.serviceMode === 'mixed'} />)}
       </ul>
       {frozen ? (
         <div className="m-4 mt-0 rounded-xl bg-kds-danger-bg p-3 text-kds-danger">
@@ -498,6 +519,7 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId 
             {thinHalf > 0 && <div>{tr('细面', 'Thin')} {balls(thinHalf)} {tr('团', 'balls')}</div>}
             {pokHalf > 0 && <div className="rounded bg-kds-pok px-1.5 font-bold text-kds-pok-ink">{tr('面薄', 'Mee pok')} {balls(pokHalf)} {tr('团', 'balls')}</div>}
             {wantons > 0 && <div>{tr('云吞', 'Wantan')} {wantons} {tr('粒', 'pcs')}</div>}
+            {charSiew > 0 && <div>{tr('叉烧', 'Char siew')} {charSiew} {tr('份', charSiew > 1 ? 'portions' : 'portion')}</div>}
           </div>
           <button type="button" disabled={disabled} onClick={() => onAct('serveOrder', ref)}
             className="flex h-14 flex-1 items-center justify-center gap-3 rounded-xl bg-kds-serve text-xl font-bold text-kds-action-ink disabled:opacity-45">
@@ -518,6 +540,26 @@ function clock(ms: number): string {
 function Banner({ tone, children }: { tone: 'warn' | 'danger' | 'action'; children: React.ReactNode }) {
   const cls = tone === 'danger' ? 'bg-kds-danger-bg text-kds-danger' : tone === 'action' ? 'bg-kds-action text-kds-action-ink' : 'bg-kds-warning-bg text-kds-warning';
   return <div className={`mx-5 mt-3 flex items-center gap-2 rounded-lg px-3 py-1.5 font-bold ${cls}`}>{children}</div>;
+}
+
+/** 加料的品名。厨单把加料行写成干捞云吞（旧后厨屏兼容），lineNameEn 不适用，英文按加料本身取。 */
+function extraLineName(l: KitchenLine, lang: Lang): string {
+  return lang === 'en' ? (MENU_V1.addOns[l.addOns[0]]?.nameEn ?? l.nameZh) : l.nameZh;
+}
+
+/** 加料行：加什么、几份、给哪一碗。note 是服务器写的「给 红酱面 · 中 · 细面 · 辣」，存的就是中文。 */
+function ExtraLineRow({ l }: { l: KitchenLine }) {
+  const lang = useLang();
+  return (
+    <li className="rounded-xl border-2 border-kds-line p-2.5">
+      <div className="flex items-center gap-3">
+        <Photo id={l.photoId} size={56} rounded={10} />
+        <b className="min-w-0 text-[28px] font-black leading-none">{extraLineName(l, lang)}</b>
+        <b className={`ml-auto shrink-0 text-[32px] font-black tabular-nums ${l.quantity > 1 ? 'text-kds-action' : ''}`}>×{l.quantity}</b>
+      </div>
+      {l.note && <p className="mt-2 text-lg font-bold leading-tight">{l.note}</p>}
+    </li>
+  );
 }
 
 /** mixed：同一单有堂食也有打包，每行醒目标出这碗是哪一种。 */

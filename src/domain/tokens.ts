@@ -114,7 +114,7 @@ export function holdToken(board: TokenBoard, n: number, orderId: string, expecte
 /**
  * 同牌加单：把新单挂到 withOrderId 那桌客人正拿着的牌上。
  * - 牌仍被这桌（本轮占用里有 withOrderId）占着：挂上，牌继续占用；
- * - 牌已空闲（原单都已出餐 / 取消，牌没给别人）：按新客人正常占牌，号码不变；
+ * - 牌已空闲（原单都已出餐 / 取消，牌没给别人）：重新占牌，号码不变，这一轮记录保留；
  * - 牌已给了别的客人、或是旧版待回收：TOKEN_OCCUPIED，绝不挂到别人的牌上。
  */
 export function joinToken(board: TokenBoard, n: number, orderId: string, withOrderId: string): TokenResult {
@@ -122,10 +122,37 @@ export function joinToken(board: TokenBoard, n: number, orderId: string, withOrd
   const t = board[n];
   const holders = tokenHolders(t);
   if (t.state === 'held' && holders.includes(orderId)) return { ok: true, board, token: t }; // 幂等
-  if (t.state === 'available') return holdToken(board, n, orderId);
   const session = tokenSession(t);
+  // 牌空着：这桌回来再占，这一轮记录保留（后面加料、撤回出餐还认这张牌）；不是这桌就是新客人。
+  if (t.state === 'available') {
+    if (!session.includes(withOrderId)) return holdToken(board, n, orderId);
+    return put(board, t, { state: 'held', orderIds: [orderId], sessionOrderIds: session.includes(orderId) ? session : [...session, orderId], lastReleasedOrderId: null });
+  }
   if (t.state !== 'held' || !(holders.includes(withOrderId) || session.includes(withOrderId))) return { ok: false, error: 'TOKEN_OCCUPIED', token: t };
   return put(board, t, { state: 'held', orderIds: [...holders, orderId], sessionOrderIds: session.includes(orderId) ? session : [...session, orderId] });
+}
+
+/**
+ * 下单后加料占牌：牌空闲时占下（把原来那碗记进这一轮，这样再加一份料、撤回那碗出餐都还认这张牌）；
+ * 牌还被这桌占着就挂上；牌已给了别的客人就 TOKEN_OCCUPIED。
+ */
+export function holdForExtra(board: TokenBoard, n: number, orderId: string, bowlOrderId: string): TokenResult {
+  if (!isTokenNumber(n)) return { ok: false, error: 'TOKEN_OUT_OF_RANGE' };
+  const t = board[n];
+  if (t.state !== 'available') return joinToken(board, n, orderId, bowlOrderId);
+  const session = tokenSession(t);
+  return put(board, t, { state: 'held', orderIds: [orderId], sessionOrderIds: session.includes(bowlOrderId) ? [...session, orderId] : [bowlOrderId, orderId], lastReleasedOrderId: null });
+}
+
+/**
+ * 加料该用哪张牌：这桌这一轮还在用的牌 → 原来的号（空闲才能再占）→ 下一个空闲的号（原来的号给了别人）。
+ * 全满返回 null。
+ */
+export function tokenForExtra(board: TokenBoard, bowl: { id: string; tokenNumber: number }, lastIssued: number | null): number | null {
+  const own = Object.values(board).find((t) => t.state === 'held' && tokenSession(t).includes(bowl.id));
+  if (own) return own.number;
+  if (board[bowl.tokenNumber]?.state === 'available') return bowl.tokenNumber;
+  return suggestNextToken(board, lastIssued);
 }
 
 /**

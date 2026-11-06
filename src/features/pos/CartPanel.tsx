@@ -6,7 +6,7 @@ import { ReactNode } from 'react';
 import { Cart, OrderTotals } from '../../domain/cart';
 import { LineConfig, lineName, linePhotoId } from '../../domain/lineItem';
 import { useLang, useT } from '../../app/i18n';
-import { MenuVersion, NOODLE_TYPE_NAMES, SAUCE_NAMES, ServiceMode, SERVICE_MODE_NAMES } from '../../domain/menu';
+import { MenuVersion, NOODLE_TYPE_NAMES, SAUCE_NAMES, ServiceMode, SERVICE_MODE_NAMES, productOf } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
 import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
 import { Icon, Photo } from '../../ui/visual';
@@ -17,7 +17,7 @@ export function useLineText(menu: MenuVersion) {
   const tr = useT();
   const lang = useLang();
   return (cfg: LineConfig, serviceMode: ServiceMode) => {
-    const size = menu.products[cfg.productKind].sizes.find((s) => s.id === cfg.size);
+    const size = productOf(menu, cfg.productKind).sizes.find((s) => s.id === cfg.size);
     const sz = size ? tr(size.nameZh, size.nameEn) : '';
     const full = lineName(menu, cfg, lang);
     const name = sz && full.endsWith(` · ${sz}`) ? full.slice(0, -(sz.length + 3)) : full;

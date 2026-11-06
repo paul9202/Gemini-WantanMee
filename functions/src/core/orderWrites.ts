@@ -48,6 +48,8 @@ export interface AcceptedOrderInput {
   sharedToken?: boolean;
   /** 同牌加单继承的排队位置与后厨分组；只写在厨单上，接单时间不变。 */
   queue?: { queueAtMs: number; queueGroupId: string } | null;
+  /** 下单后加料的小单：给哪一张单加的。 */
+  extraForOrderId?: string | null;
   extra?: Record<string, unknown>;
 }
 
@@ -79,7 +81,7 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     items, totalSen: a.totals.totalSen, portionCount: a.totals.portionCount,
     paymentMethod: legacy?.method ?? null, cashTenderedSen: legacy?.method === 'cash' ? legacy.tenderedSen : null, changeSen: legacy?.changeSen ?? null,
     paymentSeq: legacy ? 1 : 0, paymentId, paidAtMs: legacy ? a.acceptedAtEffectiveMs : null, paymentBusinessDate: legacy ? a.businessDate : null,
-    tokenReleasedAtMs: null, tokenReleaseSource: null, addOnTo: a.addOnTo ?? null, sharedToken: a.sharedToken ?? false,
+    tokenReleasedAtMs: null, tokenReleaseSource: null, addOnTo: a.addOnTo ?? null, sharedToken: a.sharedToken ?? false, ...(a.extraForOrderId ? { extraOnly: true, extraForOrderId: a.extraForOrderId } : {}),
     acceptedAtEffective: Timestamp.fromMillis(a.acceptedAtEffectiveMs), acceptedAtEffectiveMs: a.acceptedAtEffectiveMs,
     deviceAcceptedAtMs: a.deviceAcceptedAtMs, cloudReceivedAtMs: a.cloudReceivedAtMs,
     kitchenAckAtMs: null, timeQuality: a.timeQuality, businessDate: a.businessDate, menuVersion: a.menu.version,
@@ -121,6 +123,7 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     // 同牌加单：后厨据此提示「N 号再加的，和前面 N 号的一起送」。
     sharedToken: a.sharedToken ?? false,
     ...(a.queue ?? {}),
+    ...(a.extraForOrderId ? { extraOnly: true, extraForOrderId: a.extraForOrderId } : {}),
     receiptNumber: a.receiptNumber,
     offlineReceiptNumber: a.offlineReceiptNumber,
   });

@@ -3,7 +3,7 @@
  * UI 只负责把 ID 渲染成同一张图，不允许各页面自行解释含义。
  */
 import { hasNoTomato, LineConfig } from './lineItem';
-import type { MenuVersion, ServiceMode } from './menu';
+import { MenuVersion, productOf, ServiceMode } from './menu';
 
 export type PictogramId =
   | 'spice:none' | 'spice:less' | 'spice:normal' | 'spice:extra'
@@ -58,7 +58,7 @@ export interface LinePictogram {
 
 /** 某行在 POS/KDS/收据上显示的图卡序列（顺序固定）。 */
 export function linePictograms(menu: MenuVersion, cfg: LineConfig, serviceMode: ServiceMode): LinePictogram[] {
-  const product = menu.products[cfg.productKind];
+  const product = productOf(menu, cfg.productKind);
   const out: LinePictogram[] = [];
   if (cfg.noodleType) out.push({ id: `noodle:${cfg.noodleType}`, emphasized: cfg.noodleType !== 'thin_egg' });
   if (cfg.isKosong) out.push({ id: 'kosong:on', emphasized: true });
@@ -68,6 +68,6 @@ export function linePictograms(menu: MenuVersion, cfg: LineConfig, serviceMode: 
   out.push({ id: `scallion:${cfg.scallion}`, emphasized: cfg.scallion !== 'normal' });
   if (cfg.lard) out.push({ id: `lard:${cfg.lard}`, emphasized: cfg.lard !== 'normal' });
   for (const a of cfg.addOns) out.push({ id: `addon:${a}`, emphasized: true });
-  if (serviceMode === 'takeaway' && !product.isSoup) out.push({ id: 'takeaway:no_side_soup', emphasized: true });
+  if (serviceMode === 'takeaway' && !product.isSoup && cfg.productKind !== 'extra') out.push({ id: 'takeaway:no_side_soup', emphasized: true });
   return out;
 }

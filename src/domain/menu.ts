@@ -6,9 +6,11 @@
 import type { Sen } from './money';
 
 export type ProductKind = 'dry_noodle' | 'soup_noodle' | 'dry_wanton' | 'wanton_soup';
+/** 订单行的种类：除餐品外还有「下单后加料」（只卖加料，不在菜单和 POS 入口里，也不进售罄和底料）。 */
+export type LineKind = ProductKind | 'extra';
 export type NoodleSize = 'small' | 'medium' | 'large';
 export type WantonSize = 'w10' | 'w15';
-export type SizeId = NoodleSize | WantonSize;
+export type SizeId = NoodleSize | WantonSize | 'one';
 export type NoodleType = 'thin_egg' | 'mee_poh';
 export type Sauce = 'black' | 'white' | 'red';
 export type Spice = 'none' | 'less' | 'normal' | 'extra';
@@ -42,7 +44,7 @@ export interface SizeDef {
 }
 
 export interface ProductDef {
-  kind: ProductKind;
+  kind: LineKind;
   nameZh: string;
   nameEn: string;
   sizes: SizeDef[];
@@ -121,11 +123,22 @@ export const MENU_V1: MenuVersion = {
   soldOut: [],
 };
 
+/** 下单后加料这种行：本身不要钱、没有面和云吞，价钱和份量全在加料上。 */
+export const EXTRA_PRODUCT: ProductDef = {
+  kind: 'extra', nameZh: '加料', nameEn: 'Extra',
+  sizes: [{ id: 'one', nameZh: '', nameEn: '', badge: '', priceSen: 0, kosongPriceSen: null, noodleHalfUnits: 0, wantonCount: 0, charSiewPortions: 0 }],
+  defaultSize: 'one', sauces: [], hasNoodle: false, allowsSpiceAndLard: false, addOns: ['char_siew', 'wanton_3'], allowsKosong: false, isSoup: false,
+};
+
+export function productOf(menu: MenuVersion, kind: LineKind): ProductDef {
+  return kind === 'extra' ? EXTRA_PRODUCT : menu.products[kind];
+}
+
 /** 已发布、可用于校验历史订单的菜单版本。 */
 export const MENU_VERSIONS: Record<string, MenuVersion> = { [MENU_V1.version]: MENU_V1 };
 
-export function getSize(menu: MenuVersion, kind: ProductKind, size: SizeId): SizeDef | undefined {
-  return menu.products[kind].sizes.find((s) => s.id === size);
+export function getSize(menu: MenuVersion, kind: LineKind, size: SizeId): SizeDef | undefined {
+  return productOf(menu, kind).sizes.find((s) => s.id === size);
 }
 
 /** POS 6 张图片入口 → 4 个 productKind（前三张是干捞面的酱料快捷入口）。 */

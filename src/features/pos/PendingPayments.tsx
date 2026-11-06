@@ -7,6 +7,7 @@
  * 取消待后厨确认的单留在卡上但不计钱，其余的照常收；整组都在等取消才不能登记。原单已收款时卡上只收还没收的。
  * 一组超过服务器单次上限（10 张）时拆成连续几张卡，每张卡的按钮都能用。
  * 每张卡有「加单」：回点餐页给这位客人再点，送厨后仍挂在同一组里；原牌仍被这桌占着时同牌加单，不用再给牌。
+ * 还有「加料」：开加料面板，预选这组第一张正常的单（加料单本身不能再加料）。
  */
 import { useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
@@ -34,6 +35,8 @@ export interface UnpaidOrder {
   stage: 'served' | 'cooking' | 'cancel_pending';
   /** 加单挂在哪张原单上；普通单为 null。 */
   addOnToOrderId: string | null;
+  /** 下单后加料的小单。 */
+  extraOnly?: boolean;
 }
 
 /** 一张卡：原单 + 它的加单（原单已另行收款时只剩加单）。按接单时间排，原单在前。 */
@@ -105,6 +108,7 @@ interface OrderDoc {
   paymentState: string;
   items: { nameZh: string; quantity: number }[];
   addOnTo?: { orderId: string } | null;
+  extraOnly?: boolean;
 }
 
 /** 云端待收款订单 + 本机尚未同步的离线未付款单，扣除本机已登记（待同步）的。 */
@@ -122,6 +126,7 @@ export function useUnpaidOrders(nameOf?: (c: LineConfig) => string): { orders: U
         acceptedAtMs: o.acceptedAtEffectiveMs, items: (o.items ?? []).map((i) => ({ name: i.nameZh, quantity: i.quantity })), totalSen: o.totalSen,
         stage: o.kitchenCancelRequested ? 'cancel_pending' : o.fulfillmentStatus === 'served' ? 'served' : 'cooking',
         addOnToOrderId: o.addOnTo?.orderId ?? null,
+        extraOnly: Boolean(o.extraOnly),
       });
     }
     for (const o of rt.localOrders) {
@@ -144,7 +149,7 @@ export function useUnpaidOrders(nameOf?: (c: LineConfig) => string): { orders: U
 }
 
 /** 一张待收款卡（单张订单，或原单 + 加单一组）：主按钮登记这张卡上现在能收的单；成功后显示明确反馈。 */
-export function PaymentCard({ group, onRecorded, onAddOn }: { group: UnpaidGroup; onRecorded?: (ids: string[]) => void; onAddOn?: (order: UnpaidOrder) => void }) {
+export function PaymentCard({ group, onRecorded, onAddOn, onExtra }: { group: UnpaidGroup; onRecorded?: (ids: string[]) => void; onAddOn?: (order: UnpaidOrder) => void; onExtra?: (order: UnpaidOrder) => void }) {
   const tr = useT();
   const record = useRecordPayments();
   const [busy, setBusy] = useState(false);
@@ -157,6 +162,8 @@ export function PaymentCard({ group, onRecorded, onAddOn }: { group: UnpaidGroup
   const multi = group.orders.length > 1;
   const first = group.orders[0];
   const head = due[0] ?? first;
+  // 取消待确认的单不能加料，面板里也没有它。
+  const extraOrder = group.orders.find((o) => !o.extraOnly && o.stage !== 'cancel_pending');
   const stageText = (s: UnpaidOrder['stage']) => s === 'served' ? tr('已出餐 · 未收款', 'Served · unpaid')
     : s === 'cancel_pending' ? tr('取消待后厨确认，不计', 'Cancel pending · not counted') : tr('制作中 · 未收款', 'Cooking · unpaid');
 
@@ -235,6 +242,11 @@ export function PaymentCard({ group, onRecorded, onAddOn }: { group: UnpaidGroup
               <Icon name="bag" size={22} />{tr('加单', 'Add on')}
             </button>
           )}
+          {onExtra && extraOrder && !extraOrder.offline && (
+            <button type="button" onClick={() => onExtra(extraOrder)} className="flex h-14 shrink-0 items-center gap-2 rounded-xl border border-line px-3 font-semibold">
+              <Icon name="plus" size={22} />{tr('加料', 'Extras')}
+            </button>
+          )}
         </div>
       )}
       {qr && due.length > 0 && <ReceivingQrDialog amountSen={dueSen} label={due.length > 1 ? tr(`${head.ticketNo} 等 ${due.length} 张 · 原餐牌 ${head.tokenNumber}`, `${head.ticketNo} +${due.length - 1} · token ${head.tokenNumber}`) : tr(`${head.ticketNo} · 原餐牌 ${head.tokenNumber}`, `${head.ticketNo} · token ${head.tokenNumber}`)} onClose={() => setQr(false)} />}
@@ -242,7 +254,7 @@ export function PaymentCard({ group, onRecorded, onAddOn }: { group: UnpaidGroup
   );
 }
 
-export function PendingPaymentsDrawer({ onClose, nameOf, onAddOn }: { onClose: () => void; nameOf?: (c: LineConfig) => string; onAddOn?: (order: UnpaidOrder) => void }) {
+export function PendingPaymentsDrawer({ onClose, nameOf, onAddOn, onExtra }: { onClose: () => void; nameOf?: (c: LineConfig) => string; onAddOn?: (order: UnpaidOrder) => void; onExtra?: (order: UnpaidOrder) => void }) {
   const tr = useT();
   const { orders, totalSen, fromCache } = useUnpaidOrders(nameOf);
   // 本抽屉里登记成功的卡：订阅更新后它已不在待收款查询里，仍留在原位显示成功反馈，直到关闭抽屉。
@@ -271,7 +283,7 @@ export function PendingPaymentsDrawer({ onClose, nameOf, onAddOn }: { onClose: (
         {fromCache && <p className="border-b border-warn/40 bg-warn-bg px-4 py-2 text-sm text-warn">{tr('画面可能不是最新（离线或缓存）；后厨在云端出餐的单，本机可能看不到。', 'May be out of date (offline/cache); orders served in the cloud may not show here.')}</p>}
         <ul className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
           {groups.length === 0 && <li className="py-16 text-center text-ink-2">{tr('没有待登记收款的订单', 'Nothing to record')}</li>}
-          {groups.map((g) => <PaymentCard key={g.key} group={g} onRecorded={keep} onAddOn={onAddOn} />)}
+          {groups.map((g) => <PaymentCard key={g.key} group={g} onRecorded={keep} onAddOn={onAddOn} onExtra={onExtra} />)}
         </ul>
       </div>
     </div>

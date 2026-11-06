@@ -4,8 +4,8 @@
  * 保证 POS、服务器、成本、厨单看到的是同一份有效配置。
  */
 import {
-  ADD_ON_IDS, AddOnId, LEVELS, Level, MenuVersion, NOODLE_TYPES, NoodleType, PRODUCT_KINDS,
-  ProductKind, SAUCES, SAUCE_NAMES, SPICES, Sauce, SizeId, Spice, getSize,
+  ADD_ON_IDS, AddOnId, LEVELS, Level, LineKind, MenuVersion, NOODLE_TYPES, NoodleType, PRODUCT_KINDS,
+  ProductKind, SAUCES, SAUCE_NAMES, SPICES, Sauce, SizeId, Spice, getSize, productOf,
 } from './menu';
 import type { Sen } from './money';
 
@@ -27,7 +27,7 @@ export function allowsNoTomato(cfg: { sauce: Sauce | null }): boolean {
 }
 
 export interface LineConfig {
-  productKind: ProductKind;
+  productKind: LineKind;
   size: SizeId;
   noodleType: NoodleType | null;
   sauce: Sauce | null;
@@ -49,8 +49,8 @@ export interface ValidationIssue {
   field: string;
 }
 
-export function defaultConfig(menu: MenuVersion, productKind: ProductKind, sauce: Sauce | null = null): LineConfig {
-  const product = menu.products[productKind];
+export function defaultConfig(menu: MenuVersion, productKind: LineKind, sauce: Sauce | null = null): LineConfig {
+  const product = productOf(menu, productKind);
   return normalizeConfig(menu, {
     productKind,
     size: product.defaultSize,
@@ -72,7 +72,7 @@ export function defaultConfig(menu: MenuVersion, productKind: ProductKind, sauce
  * - 不要番茄酱：换成没有番茄酱的酱或汤品时清除（换回来不自动恢复）。这里只收敛 POS 选择，服务端校验不管它。
  */
 export function normalizeConfig(menu: MenuVersion, cfg: LineConfig): LineConfig {
-  const product = menu.products[cfg.productKind];
+  const product = productOf(menu, cfg.productKind);
   const size = getSize(menu, cfg.productKind, cfg.size) ? cfg.size : product.defaultSize;
   const noodleType = product.hasNoodle ? (cfg.noodleType && NOODLE_TYPES.includes(cfg.noodleType) ? cfg.noodleType : 'thin_egg') : null;
   const sauce = product.sauces.length === 0 ? null : cfg.sauce && product.sauces.includes(cfg.sauce) ? cfg.sauce : product.sauces[0];
@@ -93,7 +93,7 @@ const CONFIG_KEYS: (keyof LineConfig)[] = [
 ];
 
 /** 严格解析不可信输入（服务端/补同步）。不做任何纠正，只报告问题。 */
-export function parseLineConfig(menu: MenuVersion, raw: unknown): { ok: true; value: LineConfig } | { ok: false; issues: ValidationIssue[] } {
+export function parseLineConfig(menu: MenuVersion, raw: unknown, opts: { allowExtra?: boolean } = {}): { ok: true; value: LineConfig } | { ok: false; issues: ValidationIssue[] } {
   const issues: ValidationIssue[] = [];
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     return { ok: false, issues: [{ code: 'INVALID_TYPE', field: 'config' }] };
@@ -102,7 +102,9 @@ export function parseLineConfig(menu: MenuVersion, raw: unknown): { ok: true; va
   for (const key of Object.keys(obj)) {
     if (!CONFIG_KEYS.includes(key as keyof LineConfig)) issues.push({ code: 'UNKNOWN_FIELD', field: key });
   }
-  if (typeof obj.productKind !== 'string' || !PRODUCT_KINDS.includes(obj.productKind as ProductKind)) {
+  // 「加料」行只有下单后加料的命令才接受；普通下单、离线补同步、核对补入一律拒绝。
+  const isExtra = obj.productKind === 'extra' && opts.allowExtra === true;
+  if (!isExtra && (typeof obj.productKind !== 'string' || !PRODUCT_KINDS.includes(obj.productKind as ProductKind))) {
     issues.push({ code: 'UNKNOWN_PRODUCT', field: 'productKind' });
     return { ok: false, issues };
   }
@@ -123,7 +125,7 @@ export function parseLineConfig(menu: MenuVersion, raw: unknown): { ok: true; va
 /** 对已具备正确类型的配置做业务规则校验。 */
 export function validateConfig(menu: MenuVersion, cfg: LineConfig): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const product = menu.products[cfg.productKind];
+  const product = productOf(menu, cfg.productKind);
   if (!product) return [{ code: 'UNKNOWN_PRODUCT', field: 'productKind' }];
   if (!getSize(menu, cfg.productKind, cfg.size)) issues.push({ code: 'INVALID_SIZE', field: 'size' });
 
@@ -155,9 +157,10 @@ export function validateConfig(menu: MenuVersion, cfg: LineConfig): ValidationIs
     if (!ADD_ON_IDS.includes(id) || !product.addOns.includes(id)) issues.push({ code: 'INVALID_ADDON', field: 'addOns' });
     else if (cfg.isKosong && menu.addOns[id].isMeat) issues.push({ code: 'KOSONG_MEAT_ADDON', field: 'addOns' });
   }
+  if (cfg.productKind === 'extra' && cfg.addOns.length !== 1) issues.push({ code: 'INVALID_ADDON', field: 'addOns' });
   if (cfg.note.length > NOTE_MAX_LENGTH) issues.push({ code: 'NOTE_TOO_LONG', field: 'note' });
   if (/[\u0000-\u001f\u007f]/.test(cfg.note) || cfg.note !== cfg.note.trim()) issues.push({ code: 'INVALID_TYPE', field: 'note' });
-  if (menu.soldOut.includes(cfg.productKind)) issues.push({ code: 'SOLD_OUT', field: 'productKind' });
+  if (cfg.productKind !== 'extra' && menu.soldOut.includes(cfg.productKind)) issues.push({ code: 'SOLD_OUT', field: 'productKind' });
   return issues;
 }
 
@@ -219,21 +222,24 @@ export function lineMergeKey(cfg: LineConfig): string {
 
 /** 行项目照片：Kosong 必须换成熟净面图，不能继续用带肉图。 */
 export function linePhotoId(cfg: LineConfig): string {
+  if (cfg.productKind === 'extra') return cfg.addOns[0] === 'char_siew' ? 'ingredient.char_siew' : 'dish.dry_wanton';
   if (cfg.isKosong) return 'dish.kosong_noodle';
   if (cfg.productKind === 'dry_noodle') return `dish.dry_noodle.${cfg.sauce ?? 'black'}`;
   return `dish.${cfg.productKind}`;
 }
 
 export function lineNameZh(menu: MenuVersion, cfg: LineConfig): string {
+  if (cfg.productKind === 'extra') return menu.addOns[cfg.addOns[0]].nameZh;
   const sauceName = cfg.sauce ? { black: '黑酱', white: '白酱', red: '红酱' }[cfg.sauce] : '';
   const size = getSize(menu, cfg.productKind, cfg.size);
-  const base = cfg.productKind === 'dry_noodle' ? `${sauceName}面` : menu.products[cfg.productKind].nameZh;
+  const base = cfg.productKind === 'dry_noodle' ? `${sauceName}面` : productOf(menu, cfg.productKind).nameZh;
   return `${cfg.isKosong ? '净面 · ' : ''}${base} · ${size?.nameZh ?? cfg.size}`;
 }
 
 export function lineNameEn(menu: MenuVersion, cfg: LineConfig): string {
+  if (cfg.productKind === 'extra') return menu.addOns[cfg.addOns[0]].nameEn;
   const size = getSize(menu, cfg.productKind, cfg.size);
-  const base = cfg.productKind === 'dry_noodle' ? `${SAUCE_NAMES[cfg.sauce ?? 'black'].en} Sauce Noodles` : menu.products[cfg.productKind].nameEn;
+  const base = cfg.productKind === 'dry_noodle' ? `${SAUCE_NAMES[cfg.sauce ?? 'black'].en} Sauce Noodles` : productOf(menu, cfg.productKind).nameEn;
   return `${cfg.isKosong ? 'Kosong · ' : ''}${base} · ${size?.nameEn ?? cfg.size}`;
 }
 

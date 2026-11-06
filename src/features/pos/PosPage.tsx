@@ -6,6 +6,7 @@
  * 收款是独立的事：下单后可立即确认，或送餐收钱后在常驻的「待登记收款」里按订单确认。
  * 同牌加单：同一桌客人拿着 N 号牌再点，新单挂在 N 号上（不用再给牌，后厨排回原位）；只能联网下单，断网时按新单给新牌。
  * 手选的空闲牌，若这个号上一桌还没收款：只在本单上方提示，可一键并到一起算；不理它就是普通新客人。牌号全天复用，绝不按号自动并账。
+ * 下单后加料：页头「＋加料」开面板，给已下的单加叉烧 / 云吞，单独一张小单，不动当前这张单、餐牌和加单目标；只能联网。
  */
 import { useEffect, useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
@@ -39,6 +40,7 @@ import { lineName } from '../../domain/lineItem';
 import { MAX_PAY_ORDERS, PendingPaymentsDrawer, QuickPay, UnpaidOrder, useUnpaidOrders } from './PendingPayments';
 import { CartPanel } from './CartPanel';
 import { Customizer } from './Customizer';
+import { ExtraRequest, ExtraSheet } from './ExtraSheet';
 import { OrderResultDialog, RecentOrder, ResultStage, ResultSummary } from './OrderResult';
 import { ProductGrid } from './ProductGrid';
 import { TokenPicker } from './TokenPicker';
@@ -68,8 +70,8 @@ type Stage =
   | { kind: 'idle' }
   | { kind: 'saving' }
   | { kind: 'submitting' }
-  /** joinRequested：下单时要同牌加单（结果弹窗据此说明牌已空出的情况）。 */
-  | { kind: 'accepted'; result: CreateOrderResult; summary: ResultSummary; joinRequested: boolean }
+  /** joinRequested：下单时要同牌加单（结果弹窗据此说明牌已空出的情况）。extraOnly：这是一份下单后加料。 */
+  | { kind: 'accepted'; result: CreateOrderResult; summary: ResultSummary; joinRequested: boolean; extraOnly?: boolean }
   | { kind: 'local_accepted'; clientOrderId: string; offlineReceiptNumber: string; tokenNumber: number; totalSen: number; summary: ResultSummary }
   | { kind: 'rejected'; reason: string; code: string }
   | { kind: 'unknown'; operationId: string }
@@ -121,6 +123,8 @@ export function PosPage() {
   // 窄屏（<1024）本单收起为底部条，点开后全屏显示。
   const [cartOpen, setCartOpen] = useState(false);
   const [payListOpen, setPayListOpen] = useState(false);
+  // 下单后加料面板；orderId 是打开时预选的单。
+  const [extraSheet, setExtraSheet] = useState<{ orderId: string | null } | null>(null);
   // 加单：客人吃完再加（多为打包），新单挂到这张未收款的原单上，收款时一起结账。
   const [addOnTarget, setAddOnTarget] = useState<UnpaidOrder | null>(null);
   // 同牌加单：新单挂在客人已拿着的 N 号牌上（withOrderId 为牌上现有的一张单），不再给新牌；期间不自动建议新牌。
@@ -221,6 +225,14 @@ export function PosPage() {
     : orderToken === null ? tr('没有可用餐牌：牌在出餐或取消成立后自动可用', 'No free token — tokens free up when orders are served or cancelled')
     : addOnTarget && offlineMode ? tr('断网时不能加单：先取消加单，按新单下单', 'Cannot add on while offline — cancel add-on and place a new order')
     : !offlineMode && blockingOnline.length > 0 ? tr('有订单待你决定处理方式，请先到「同步」页处理', 'An order needs your decision — open Sync first')
+    : null;
+  /** 现在不能送加料的原因，显示在加料面板里；餐牌不是服务器最新时也不送，否则「客人已拿着」这句话没有依据。 */
+  const extraBlocked = offlineMode ? tr('断网时不能加料：联网后再加', 'Extras cannot be added while offline — try again once online')
+    : writer !== 'held' ? tr('另一个标签页正在收银，这里只能查看', 'Another tab is the register — view only here')
+    : busy ? tr('正在送单，请稍等', 'Sending — please wait')
+    : unresolved.length > 0 ? tr('还有单结果未确认或待处理：请先到「同步」页处理，再加料', 'An order is unconfirmed or needs a decision — check Sync first, then add extras')
+    : !reg.claim || !reg.shiftId ? tr('收银机未就绪', 'Register not ready')
+    : !tokensFromServer ? tr('餐牌还没同步到最新，请稍等', 'Tokens are not up to date yet — please wait')
     : null;
 
   function addOrSave() {
@@ -344,6 +356,7 @@ export function PosPage() {
     try {
       await putPendingOp(op);
     } catch (e) {
+      await voidRejectedSequence({ operationId, clientOrderId, sequence }, claim, reg.shiftId).catch(() => {}); // 没发出去：序号还回去，后面的单不会卡住
       setStage({ kind: 'local_failed', message: e instanceof Error ? e.message : String(e) });
       return; // 不清空购物车，不声称成功
     }
@@ -382,6 +395,81 @@ export function PosPage() {
     await reloadLocal();
   }
 
+  /**
+   * 下单后加料：和 confirmOnline 同样的步骤（先补同步、分配序号、PendingOp 跟踪、被拒作废序号、结果不明留待核对），
+   * 但不清空当前这张单，也不动餐牌和加单目标。返回要留在面板里的错误；接单成功返回 null 并关面板。
+   */
+  async function sendExtra(req: ExtraRequest): Promise<string | null> {
+    if (!menu || !reg.claim || !reg.shiftId || busy) return tr('收银机未就绪', 'Register not ready');
+    const claim = reg.claim;
+    const shiftId = reg.shiftId;
+    const notSent = (e: unknown) => {
+      setStage({ kind: 'idle' });
+      return `${tr('本机保存失败，这份加料没有送出', 'Could not save on this device — this extra was not sent')}（${e instanceof Error ? e.message : String(e)}）`;
+    };
+    let sequence: number;
+    try {
+      // 先补传离线日志，保证序号连续。
+      if (unsynced.length) {
+        setStage({ kind: 'submitting' });
+        await syncNow();
+        await reloadLocal();
+      }
+      sequence = await reg.allocate();
+    } catch (e) {
+      return notSent(e);
+    }
+    const operationId = newOperationId();
+    const clientOrderId = crypto.randomUUID();
+    const payload = {
+      operationId, ...claim, sequence, shiftId,
+      order: { clientOrderId, tokenNumber: req.tokenNumber, serviceMode: req.serviceMode, menuVersion: menu.version, lines: req.lines, expectedTotalSen: req.totalSen, deviceAcceptedAtMs: Date.now(), extraForOrderId: req.bowlOrderId },
+    };
+    const op: PendingOp = {
+      operationId, name: 'createOrder', payload, status: 'submitting', createdAtMs: Date.now(), updatedAtMs: Date.now(),
+      summary: { tokenNumber: req.tokenNumber, totalSen: req.totalSen },
+    };
+    setStage({ kind: 'saving' });
+    try {
+      await putPendingOp(op);
+    } catch (e) {
+      await voidRejectedSequence({ operationId, clientOrderId, sequence }, claim, shiftId).catch(() => {}); // 没发出去：序号还回去，后面的单不会卡住
+      return notSent(e);
+    }
+    setStage({ kind: 'submitting' });
+    const sentAt = Date.now();
+    let failure: string | null = null;
+    try {
+      const result = await submit<CreateOrderResult>('createOrder', payload);
+      await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
+      if (!result.replayed) void recordServerOffset(result.acceptedAtMs - (sentAt + Date.now()) / 2);
+      const mixed = new Set(req.lines.map((l) => l.serviceMode ?? req.serviceMode)).size > 1;
+      setStage({ kind: 'accepted', result, summary: { serviceMode: mixed ? 'mixed' : req.serviceMode, firstItem: req.summary }, joinRequested: false, extraOnly: true });
+      setResultAddOnRoot(result.addOnToOrderId ?? null);
+      setExtraSheet(null);
+      setResultOpen(true);
+      // 只有发出新号才改变循环建议的起点；客人手上的牌、还给客人的原号都不算。
+      if (!result.sharedToken && result.tokenNumber !== req.bowlTokenNumber) rememberIssued(result.tokenNumber);
+    } catch (e) {
+      const f = e instanceof CommandFailure ? e : new CommandFailure('unknown', 'UNKNOWN_RESULT', String(e));
+      if (f.kind === 'rejected') {
+        setStage({ kind: 'idle' }); // 错误显示在面板里，不留到点餐页的本单上。
+        failure = `${tr('云端未接单：', 'Not accepted: ')}${reasonText(f.reasonCode)}`;
+        await putPendingOp({ ...op, status: 'rejected', reasonCode: f.reasonCode, updatedAtMs: Date.now() });
+        await voidRejectedSequence({ operationId, clientOrderId, sequence }, claim, shiftId);
+      } else {
+        // 结果不明：保留原 ID，等待核对；不能再送一次。
+        setStage({ kind: 'unknown', operationId });
+        // 关掉面板：核对完按钮会重新亮起，数量还留着就可能再发一次。
+        setExtraSheet(null);
+        setNotice(tr('加料结果未确认，正在核对；请勿重复加料。请问厨房是否收到这张单。', 'Result unconfirmed, checking. Do NOT send it again. Ask the kitchen if they got it.'));
+        await putPendingOp({ ...op, status: 'unknown_result', updatedAtMs: Date.now() });
+      }
+    }
+    await reloadLocal();
+    return failure;
+  }
+
   /** 旧版待回收牌（改版前出餐的单）：实体牌收回后逐张释放。新单出餐 / 取消即自动释放。 */
   async function releaseTokenAction(n: number, orderId: string): Promise<string | null> {
     if (!reg.claim || !reg.shiftId) return '收银机未就绪';
@@ -411,7 +499,7 @@ export function PosPage() {
     : stage.kind === 'local_accepted' ? Boolean(localStatus?.paid) || rt.outbox.some((r) => r.event.type === 'offline_payment_recorded' && r.event.payload.clientOrderId === stage.clientOrderId) : false;
 
   const resultStage: ResultStage | null = stage.kind === 'accepted'
-    ? { kind: 'accepted', orderId: stage.result.orderId, receiptNumber: stage.result.receiptNumber, tokenNumber: stage.result.tokenNumber, totalSen: stage.result.totalSen, acceptedAtMs: stage.result.acceptedAtMs, summary: stage.summary, sharedToken: Boolean(stage.result.sharedToken), queueInherited: Boolean(stage.result.queueInherited), joinFellBack: stage.joinRequested && stage.result.sharedToken === false }
+    ? { kind: 'accepted', orderId: stage.result.orderId, receiptNumber: stage.result.receiptNumber, tokenNumber: stage.result.tokenNumber, totalSen: stage.result.totalSen, acceptedAtMs: stage.result.acceptedAtMs, summary: stage.summary, sharedToken: Boolean(stage.result.sharedToken), queueInherited: Boolean(stage.result.queueInherited), joinFellBack: stage.joinRequested && stage.result.sharedToken === false, extraOnly: stage.extraOnly }
     : stage.kind === 'local_accepted'
       ? { kind: 'local_accepted', clientOrderId: stage.clientOrderId, offlineReceiptNumber: stage.offlineReceiptNumber, tokenNumber: stage.tokenNumber, totalSen: stage.totalSen, summary: stage.summary }
       : null;
@@ -552,19 +640,23 @@ export function PosPage() {
           aria-label={cartServiceMode(cart) === 'mixed' ? tr('新加餐品的就餐方式', 'Service for new items') : tr('就餐方式', 'Service')}>
           {(['dine_in', 'takeaway'] as const).map((m) => (
             <button key={m} type="button" aria-pressed={cart.serviceMode === m} onClick={() => setCart(setServiceMode(cart, m))}
-              className={`flex h-14 items-center gap-2 rounded-xl px-3 text-lg font-bold xl:px-4 ${cart.serviceMode === m ? 'bg-card shadow' : 'text-ink-2'}`}>
+              className={`flex h-14 items-center gap-2 rounded-xl px-3 text-lg font-bold 2xl:px-4 ${cart.serviceMode === m ? 'bg-card shadow' : 'text-ink-2'}`}>
               <Icon name={m === 'dine_in' ? 'table' : 'bag'} size={28} />{m === 'dine_in' ? tr('堂食', 'Dine in') : tr('打包', 'Takeaway')}
             </button>
           ))}
         </div>
         <button type="button" onClick={() => setPickerOpen(true)} aria-haspopup="dialog"
-          className={`flex h-14 shrink-0 items-center gap-2.5 rounded-2xl border px-3 xl:gap-3 xl:px-4 ${joinTarget ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-card'}`}>
+          className={`flex h-14 shrink-0 items-center gap-2.5 rounded-2xl border px-3 2xl:gap-3 2xl:px-4 ${joinTarget ? 'border-brand bg-brand-soft text-brand' : 'border-line bg-card'}`}>
           {joinTarget
             ? <span className="text-sm font-semibold">{tr('同牌加单', 'Same token')}</span>
             : <span className="text-sm text-ink-2">{tr('餐牌', 'Token')}</span>}
           <b className="text-3xl tabular-nums">{orderToken ?? tr('满', 'Full')}</b>
           <span className="text-left text-[11px] leading-tight text-ink-2"><b className="block text-[13px] text-ink">{counts.available}</b>{tr('个可用', 'free')}</span>
           <Icon name="chevron-down" size={18} />
+        </button>
+        <button type="button" onClick={() => setExtraSheet({ orderId: null })} aria-haspopup="dialog"
+          className="flex h-14 shrink-0 items-center rounded-2xl border-2 border-brand bg-brand-soft px-2.5 font-bold whitespace-nowrap text-brand">
+          {tr('＋加料', '+ Extra')}
         </button>
         <button type="button" onClick={() => setPayListOpen(true)} aria-haspopup="dialog"
           className={`flex min-h-14 shrink-0 items-center gap-2 rounded-2xl px-3 text-left ${unpaid.orders.length ? 'bg-warn-bg text-warn' : 'border border-line bg-card text-ink-2'}`}>
@@ -722,10 +814,15 @@ export function PosPage() {
           onJoin={(n, id) => { setAddOnTarget(null); setJoinTarget({ tokenNumber: n, withOrderId: id }); setToken(null); }}
           joinDisabledReason={offlineMode ? joinOfflineReason : null} />
       )}
-      {payListOpen && <PendingPaymentsDrawer onClose={() => setPayListOpen(false)} nameOf={(c) => lineName(menu, c, lang)} onAddOn={startAddOnFromCard} />}
+      {payListOpen && <PendingPaymentsDrawer onClose={() => setPayListOpen(false)} nameOf={(c) => lineName(menu, c, lang)} onAddOn={startAddOnFromCard}
+        onExtra={(o) => { setPayListOpen(false); setExtraSheet({ orderId: o.id }); }} />}
+      {extraSheet && (
+        <ExtraSheet menu={menu} board={board} lastIssued={lastIssued} initialOrderId={extraSheet.orderId} blockedReason={extraBlocked}
+          onClose={() => setExtraSheet(null)} onSend={sendExtra} />
+      )}
       {resultProps && resultOpen && !receipt && (
         <OrderResultDialog {...resultProps} onClose={() => setResultOpen(false)}
-          onAddSameToken={stage.kind === 'accepted' ? () => {
+          onAddSameToken={stage.kind === 'accepted' && !(stage.extraOnly && (cart.lines.length > 0 || addOnTarget || joinTarget)) ? () => {
             // 本机餐牌可能还没收到刚下的单：先用牌上已有的同桌单作锚点，避免误判「牌已给了别人」。
             const n = stage.result.tokenNumber;
             const t = board[n];
@@ -736,6 +833,10 @@ export function PosPage() {
             setAddOnTarget(null);
             setJoinTarget({ tokenNumber: n, withOrderId: anchor });
             setToken(null);
+          } : undefined}
+          onExtra={stage.kind === 'accepted' && !stage.extraOnly ? () => {
+            setResultOpen(false);
+            setExtraSheet({ orderId: stage.result.orderId });
           } : undefined}
           extra={resultStage && resultPay && (resultPay.orders.length > 0 || resultPaid) && (
             <QuickPay key={resultStage.kind === 'accepted' ? resultStage.orderId : resultStage.clientOrderId}

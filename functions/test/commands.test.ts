@@ -2,15 +2,17 @@
  * Emulator 命令集成测试：真实 Auth 身份 → Callable（asia-southeast1）→ Functions 事务 → Firestore。
  * 覆盖：下单即送厨（无付款流水）→ 厨房确认 → 出餐自动释放餐牌 → 同牌新单 → 旧单补登记收款；
  * 以及幂等、并发、越权、篡改，收款独立登记、取消与成本、撤回不抢牌、跨日收款（DESIGN 2026-10-23 §11）；
- * 加单与同牌加单（一张牌挂多张单，逐张出餐 / 取消，全部摘完才释放；排队位置继承；一轮占用内并同桌账单）。
+ * 加单与同牌加单（一张牌挂多张单，逐张出餐 / 取消，全部摘完才释放；排队位置继承；一轮占用内并同桌账单）；
+ * 下单后加料（一张小单：同一桌账单、排在那碗的位置、服务器写给哪一碗）。
  */
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import {
-  admin, cleanupClients, countDocs, newClient, noodle, orderPayload, pay, payPayload, placeOrder, setupStore, StoreFixture, uuid,
+  admin, cleanupClients, countDocs, newClient, noodle, orderPayload, OrderOptions, pay, payPayload, placeOrder, setupStore, StoreFixture, uuid,
 } from './harness';
-import { arrangeKitchen, BOM_V1, defaultConfig, KitchenTicket, MENU_V1, normalizeConfig } from '../../src/domain';
+import { AddOnId, arrangeKitchen, BOM_V1, defaultConfig, KitchenTicket, MENU_V1, normalizeConfig } from '../../src/domain';
+import { extraConfig } from '../../src/domain/extras';
 
 after(cleanupClients);
 
@@ -484,7 +486,7 @@ test('同牌加单边界：原单已收款也并账、新单仍可自己收；�
   assert.deepEqual([j.sharedToken, j.addOnToOrderId], [false, i.orderId]);
   assert.equal((await s(`orders/${j.orderId}`).get()).data()!.sharedToken, false);
   const t9 = (await s('tokens/09').get()).data()!;
-  assert.deepEqual([t9.state, t9.orderId, t9.orderIds, t9.sessionOrderIds], ['held', j.orderId, [j.orderId], [j.orderId]]);
+  assert.deepEqual([t9.state, t9.orderId, t9.orderIds, t9.sessionOrderIds], ['held', j.orderId, [j.orderId], [i.orderId, j.orderId]]);
 
   // 显式加单的原单不在这张牌上（过期的加单目标）：拒绝，不把别桌的单并进来
   const k = (await placeOrder(f, { tokenNumber: 10 })).result;
@@ -792,4 +794,285 @@ test('不要番茄酱：在线下单时备注原样进订单和厨单，价钱�
   const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
   assert.equal((await s(`orders/${result.orderId}`).get()).data()!.items[0].note, '不要番茄酱');
   assert.equal((await s(`kitchenTickets/${result.orderId}`).get()).data()!.lines[0].note, '不要番茄酱');
+});
+
+// ---------- 下单后加料 ----------
+
+type Placed = Awaited<ReturnType<typeof placeOrder>>;
+const docOf = async (f: StoreFixture, p: string) => (await admin().doc(`stores/${f.storeId}/${p}`).get()).data()!;
+const bowlLine = (bowl: Placed) => bowl.payload.order.lines[0].lineId;
+/** 给这碗（单的第一行）加一份料：RM2。 */
+const extraFor = (bowl: Placed, addOn: AddOnId, tokenNumber: number, patch: OrderOptions = {}): OrderOptions => ({
+  tokenNumber, extraForOrderId: bowl.result.orderId, expectedTotalSen: 200,
+  lines: [{ config: extraConfig(addOn), quantity: 1, forLineId: bowlLine(bowl) }], ...patch,
+});
+
+test('下单后加料：还在做的那碗——挂在同一张牌、排在那碗的位置、并进账单；给哪一碗由服务器写；原单不变', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 5, lines: [{ config: noodle({ sauce: 'red', size: 'medium' }), quantity: 1 }], expectedTotalSen: 900 });
+  const a = bowl.result.orderId;
+  const later = (await placeOrder(f, { tokenNumber: 6 })).result.orderId;
+  const before = await docOf(f, `orders/${a}`);
+
+  const placed = await placeOrder(f, extraFor(bowl, 'char_siew', 5, {
+    lines: [{ config: { ...extraConfig('char_siew'), note: '客户端乱写的' }, quantity: 1, forLineId: bowlLine(bowl) }],
+  }));
+  const x = placed.result;
+  assert.deepEqual([x.sharedToken, x.addOnToOrderId, x.queueInherited, x.totalSen, x.paymentState], [true, a, true, 200, 'unpaid']);
+  assert.notEqual(x.receiptNumber, bowl.result.receiptNumber, '小单有自己的票号');
+
+  const token = await docOf(f, 'tokens/05');
+  assert.deepEqual([token.state, token.orderId, token.orderIds], ['held', a, [a, x.orderId]]);
+
+  const note = '给 红酱面 · 中 · 细面 · 辣';
+  const order = await docOf(f, `orders/${x.orderId}`);
+  assert.deepEqual([order.extraOnly, order.sharedToken, order.tokenNumber, order.portionCount, order.totalSen, order.paidSen], [true, true, 5, 0, 200, 0]);
+  assert.deepEqual(order.addOnTo, { orderId: a, tokenNumber: 5, receiptNumber: bowl.result.receiptNumber });
+  const item = order.items[0];
+  assert.deepEqual([item.productKind, item.size, item.addOns, item.note, item.nameZh, item.unitPriceSen, item.lineTotalSen, item.serviceMode], ['extra', 'one', ['char_siew'], note, '加叉烧', 200, 200, 'dine_in']);
+
+  const ticket = await docOf(f, `kitchenTickets/${x.orderId}`);
+  const aTicket = await docOf(f, `kitchenTickets/${a}`);
+  assert.deepEqual([ticket.extraOnly, ticket.sharedToken, ticket.tokenNumber, ticket.receiptNumber], [true, true, 5, x.receiptNumber]);
+  assert.deepEqual([ticket.queueAtMs, ticket.queueGroupId], [aTicket.acceptedAtEffectiveMs, a]);
+  assert.deepEqual(ticket.addOnTo, { tokenNumber: 5 });
+  const line = ticket.lines[0];
+  assert.deepEqual([line.productKind, line.sauce, line.nameZh, line.photoId, line.note, line.wantonCount], ['dry_wanton', null, '加叉烧', 'ingredient.char_siew', note, 0]);
+  assert.ok(!/Sen"|cost|price|payment|paid|refund|tendered|change/i.test(JSON.stringify(ticket)), '厨单没有金额');
+  assert.ok(ticket.acceptedAtEffectiveMs > (await docOf(f, `kitchenTickets/${later}`)).acceptedAtEffectiveMs, '接单时间不改');
+  const queue = arrangeKitchen([ticket, aTicket, await docOf(f, `kitchenTickets/${later}`)] as KitchenTicket[]);
+  assert.deepEqual(queue.map((g) => g.tickets.map((t) => t.orderId)), [[a, x.orderId], [later]], '排在后来的客人前面');
+
+  // 卖 RM2，成本记在账上：一份叉烧（1200 成本单位 = RM1.20）
+  const cost = await docOf(f, `orderCosts/${x.orderId}`);
+  assert.deepEqual([cost.ingredientCostUnits, cost.packagingCostUnits, cost.totalCostUnits], [BOM_V1.charSiewPortion, 0, BOM_V1.charSiewPortion]);
+  const event = await docOf(f, `costEvents/${placed.payload.operationId}-alloc`);
+  assert.deepEqual([event.orderId, event.kind, event.costUnits], [x.orderId, 'allocate', BOM_V1.charSiewPortion]);
+
+  const after = await docOf(f, `orders/${a}`);
+  assert.deepEqual([after.totalSen, after.version, after.items], [before.totalSen, before.version, before.items], '原单金额和内容不变');
+  assert.equal(after.extraOnly, undefined);
+});
+
+test('下单后加料：堂食 / 打包跟那一碗走，不计包装；加云吞算进厨单云吞数', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 5, lines: [{ config: noodle(), quantity: 1, serviceMode: 'takeaway' }] });
+  const x = (await placeOrder(f, extraFor(bowl, 'wanton_3', 5))).result;
+  const order = await docOf(f, `orders/${x.orderId}`);
+  assert.deepEqual([order.serviceMode, order.items[0].serviceMode, order.items[0].note], ['takeaway', 'takeaway', '给 黑酱面 · 小 · 细面 · 辣 · 打包']);
+  const cost = await docOf(f, `orderCosts/${x.orderId}`);
+  assert.deepEqual([cost.packagingCostUnits, cost.totalCostUnits], [0, 3 * BOM_V1.wanton]);
+  const ticket = await docOf(f, `kitchenTickets/${x.orderId}`);
+  assert.deepEqual([ticket.lines[0].serviceMode, ticket.lines[0].wantonCount, ticket.lines[0].nameZh], ['takeaway', 3, '加云吞3粒']);
+});
+
+test('下单后加料：那碗已出餐、牌空闲——把同一张牌再给客人，这碗留在这一轮，仍排在那碗的位置；撤回那碗还认这张牌', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 7 });
+  const a = bowl.result.orderId;
+  const later = (await placeOrder(f, { tokenNumber: 8 })).result.orderId;
+  await f.kitchen.call('serveOrder', lifecycle(f, a, 1));
+  assert.equal((await docOf(f, 'tokens/07')).state, 'available');
+
+  const x = (await placeOrder(f, extraFor(bowl, 'char_siew', 7))).result;
+  assert.deepEqual([x.sharedToken, x.addOnToOrderId, x.queueInherited], [false, a, true], '牌是重新发的：要提醒把牌给客人');
+  const token = await docOf(f, 'tokens/07');
+  assert.deepEqual([token.state, token.orderId, token.orderIds, token.sessionOrderIds, token.lastReleasedOrderId], ['held', x.orderId, [x.orderId], [a, x.orderId], null]);
+
+  const ticket = await docOf(f, `kitchenTickets/${x.orderId}`);
+  const aTicket = await docOf(f, `kitchenTickets/${a}`);
+  assert.deepEqual([ticket.queueAtMs, ticket.queueGroupId, ticket.sharedToken], [aTicket.acceptedAtEffectiveMs, a, false]);
+  const queue = arrangeKitchen([ticket, await docOf(f, `kitchenTickets/${later}`)] as KitchenTicket[]);
+  assert.deepEqual(queue.map((g) => g.tickets.map((t) => t.orderId)), [[x.orderId], [later]], '那碗出餐了也排在原位');
+
+  await f.kitchen.call('undoServe', lifecycle(f, a, 2));
+  assert.deepEqual((await docOf(f, 'tokens/07')).orderIds, [x.orderId, a]);
+});
+
+test('下单后加料：原来的号给了别的客人——同号被拒，换一张空闲的牌可以，账和位置还跟那碗', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 8 });
+  const a = bowl.result.orderId;
+  await f.kitchen.call('serveOrder', lifecycle(f, a, 1));
+  const other = (await placeOrder(f, { tokenNumber: 8 })).result.orderId;
+
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, extraFor(bowl, 'char_siew', 8))), 'TOKEN_OCCUPIED');
+  assert.deepEqual((await docOf(f, 'tokens/08')).orderIds, [other], '绝不挂到别人的牌上');
+  assert.equal(await countDocs(f.storeId, 'orders'), 2);
+
+  const x = (await placeOrder(f, extraFor(bowl, 'char_siew', 9))).result;
+  assert.deepEqual([x.sharedToken, x.addOnToOrderId, x.queueInherited], [false, a, true]);
+  const token = await docOf(f, 'tokens/09');
+  assert.deepEqual([token.state, token.orderIds, token.sessionOrderIds], ['held', [x.orderId], [a, x.orderId]]);
+  const order = await docOf(f, `orders/${x.orderId}`);
+  assert.deepEqual([order.tokenNumber, order.addOnTo.orderId, order.addOnTo.tokenNumber], [9, a, 8]);
+  const ticket = await docOf(f, `kitchenTickets/${x.orderId}`);
+  assert.deepEqual([ticket.tokenNumber, ticket.addOnTo.tokenNumber, ticket.queueGroupId], [9, 8, a]);
+  assert.deepEqual((await docOf(f, 'tokens/08')).orderIds, [other]);
+});
+
+test('下单后加料：第二份挂在同一张牌，同一个位置、同一张账单', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 10 });
+  const a = bowl.result.orderId;
+  await f.kitchen.call('serveOrder', lifecycle(f, a, 1));
+  const x1 = (await placeOrder(f, extraFor(bowl, 'char_siew', 10))).result;
+  const x2 = (await placeOrder(f, extraFor(bowl, 'wanton_3', 10))).result;
+  assert.deepEqual([x2.sharedToken, x2.addOnToOrderId, x2.queueInherited], [true, a, true]);
+  const token = await docOf(f, 'tokens/10');
+  assert.deepEqual([token.state, token.orderIds, token.sessionOrderIds], ['held', [x1.orderId, x2.orderId], [a, x1.orderId, x2.orderId]]);
+  const [t1, t2] = [await docOf(f, `kitchenTickets/${x1.orderId}`), await docOf(f, `kitchenTickets/${x2.orderId}`)];
+  assert.deepEqual([t2.queueAtMs, t2.queueGroupId], [t1.queueAtMs, t1.queueGroupId]);
+});
+
+test('下单后加料：原单已收款——并进它的账单，只收这张小单，原单不会再收一次', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 11, paid: true });
+  const a = bowl.result.orderId;
+  const x = (await placeOrder(f, extraFor(bowl, 'char_siew', 11))).result;
+  assert.equal(x.addOnToOrderId, a);
+  assert.equal((await docOf(f, `orders/${x.orderId}`)).addOnTo.orderId, a);
+
+  const group = (orders: { orderId: string; amountSen: number }[]) => ({ storeId: f.storeId, operationId: uuid(), ...f.claim, orders });
+  const rest = [{ orderId: x.orderId, amountSen: 200 }];
+  assert.equal(await f.cashier.code('recordGroupPayment', group([{ orderId: a, amountSen: 700 }, ...rest])), 'ALREADY_PAID');
+  const paid = await f.cashier.call<{ amountSen: number }>('recordGroupPayment', group(rest));
+  assert.equal(paid.amountSen, 200);
+  assert.equal((await docOf(f, `orders/${x.orderId}`)).paymentState, 'paid');
+  assert.equal(await countDocs(f.storeId, 'payments', 'orderId', a), 1, '原单只有一笔收款');
+  assert.equal(await countDocs(f.storeId, 'payments'), 2);
+  assert.deepEqual([(await docOf(f, `orders/${a}`)).paidSen, (await docOf(f, `orders/${a}`)).totalSen], [700, 700]);
+});
+
+test('下单后加料被拒：净面加肉、干捞云吞加叉烧、加料上再加料、认不出那一碗、混了普通餐品；什么都不写', async () => {
+  const f = await setupStore();
+  const reject = async (o: OrderOptions) => f.cashier.code('createOrder', orderPayload(f, o));
+
+  const kosong = await placeOrder(f, { tokenNumber: 1, lines: [{ config: noodle({ isKosong: true }), quantity: 1 }], expectedTotalSen: 350 });
+  assert.equal(await reject(extraFor(kosong, 'char_siew', 1)), 'EXTRA_NOT_ALLOWED');
+  assert.equal(await reject(extraFor(kosong, 'wanton_3', 1)), 'EXTRA_NOT_ALLOWED');
+
+  const dryWanton = await placeOrder(f, { tokenNumber: 2, lines: [{ config: normalizeConfig(MENU_V1, defaultConfig(MENU_V1, 'dry_wanton')), quantity: 1 }] });
+  assert.equal(await reject(extraFor(dryWanton, 'char_siew', 2)), 'EXTRA_NOT_ALLOWED');
+
+  const bowl = await placeOrder(f, { tokenNumber: 3 });
+  const x = await placeOrder(f, extraFor(bowl, 'char_siew', 3));
+  assert.equal(await reject(extraFor(x, 'char_siew', 3)), 'EXTRA_NOT_ALLOWED', '加料上不能再加料');
+
+  const line = (forLineId?: string) => ({ config: extraConfig('char_siew'), quantity: 1, ...(forLineId ? { forLineId } : {}) });
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 3, { lines: [line(uuid())] })), 'EXTRA_NOT_ALLOWED', '那张单没有这一行');
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 3, { lines: [line()] })), 'EXTRA_NOT_ALLOWED', '没说给哪一碗');
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 3, {
+    lines: [line(bowlLine(bowl)), { config: noodle(), quantity: 1, forLineId: bowlLine(bowl) }], expectedTotalSen: 900,
+  })), 'EXTRA_NOT_ALLOWED', '混了一碗面');
+
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 3, { extraForOrderId: uuid() })), 'NOT_FOUND');
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 3, { expectedTotalSen: 100 })), 'PRICE_MISMATCH');
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 3, { lines: [{ ...line(bowlLine(bowl)), quantity: 2 }] })), 'PRICE_MISMATCH', '两份是 RM4，服务器重算');
+
+  assert.equal(await countDocs(f.storeId, 'orders'), 4);
+  assert.deepEqual((await docOf(f, 'tokens/03')).orderIds, [bowl.result.orderId, x.result.orderId]);
+});
+
+test('下单后加料被拒：原单已取消、取消待确认、不是今天的单', async () => {
+  const f = await setupStore();
+  const pending = await placeOrder(f, { tokenNumber: 4 });
+  await f.cashier.call('requestCancel', lifecycle(f, pending.result.orderId, 1, { reason: '点错了' }));
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, extraFor(pending, 'char_siew', 4))), 'EXTRA_NOT_ALLOWED', '取消待确认');
+  await f.kitchen.call('confirmKitchenCancel', lifecycle(f, pending.result.orderId, 2, { consumed: false }));
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, extraFor(pending, 'char_siew', 4))), 'EXTRA_NOT_ALLOWED', '已取消');
+  assert.equal((await docOf(f, 'tokens/04')).state, 'available', '牌不被占');
+
+  const old = await placeOrder(f, { tokenNumber: 5 });
+  await admin().doc(`stores/${f.storeId}/orders/${old.result.orderId}`).update({ businessDate: '2000-01-01' });
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, extraFor(old, 'char_siew', 5))), 'EXTRA_NOT_ALLOWED', '昨天的单');
+  assert.equal(await countDocs(f.storeId, 'orders'), 2);
+});
+
+test('加料行只能走下单后加料：普通下单带加料行、带 forLineId、和加单 / 同牌加单同时指定都被拒', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 6 });
+  const a = bowl.result.orderId;
+  const reject = async (o: OrderOptions) => f.cashier.code('createOrder', orderPayload(f, o));
+  assert.equal(await reject({ tokenNumber: 7, lines: [{ config: extraConfig('char_siew'), quantity: 1 }], expectedTotalSen: 200 }), 'INVALID_MODIFIER');
+  assert.equal(await reject({ tokenNumber: 6, joinTokenOrderId: a, lines: [{ config: extraConfig('char_siew'), quantity: 1 }], expectedTotalSen: 200 }), 'INVALID_MODIFIER', '同牌加单也不收加料行');
+  assert.equal(await reject({ tokenNumber: 7, lines: [{ config: noodle(), quantity: 1, forLineId: bowlLine(bowl) }] }), 'INVALID_ARGUMENT');
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 6, { addOnToOrderId: a })), 'INVALID_ARGUMENT');
+  assert.equal(await reject(extraFor(bowl, 'char_siew', 6, { joinTokenOrderId: a })), 'INVALID_ARGUMENT');
+  assert.equal(await countDocs(f.storeId, 'orders'), 1);
+});
+
+test('下单后加料：响应丢失后重试，只有一张小单', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 12 });
+  const placed = await placeOrder(f, extraFor(bowl, 'char_siew', 12));
+  const again = await f.cashier.call<{ orderId: string; receiptNumber: string; replayed: boolean }>('createOrder', placed.payload);
+  assert.deepEqual([again.orderId, again.receiptNumber, again.replayed], [placed.result.orderId, placed.result.receiptNumber, true]);
+  assert.equal(await countDocs(f.storeId, 'orders'), 2);
+  assert.equal(await countDocs(f.storeId, 'kitchenTickets'), 2);
+  assert.equal(await countDocs(f.storeId, 'costEvents'), 2);
+  assert.deepEqual((await docOf(f, 'tokens/12')).orderIds, [bowl.result.orderId, placed.result.orderId]);
+});
+
+test('牌上只剩加料时再点一碗：新的一碗排队尾，不沾加料的位置；账仍并', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 13 });
+  const a = bowl.result.orderId;
+  await placeOrder(f, { tokenNumber: 14 });
+  await f.kitchen.call('serveOrder', lifecycle(f, a, 1));
+  const x = (await placeOrder(f, extraFor(bowl, 'char_siew', 13))).result;
+
+  const b = (await placeOrder(f, { tokenNumber: 13, joinTokenOrderId: a })).result;
+  assert.deepEqual([b.sharedToken, b.queueInherited, b.addOnToOrderId], [true, false, a]);
+  const ticket = await docOf(f, `kitchenTickets/${b.orderId}`);
+  assert.deepEqual([ticket.queueAtMs, ticket.queueGroupId, ticket.extraOnly], [undefined, undefined, undefined]);
+  assert.deepEqual((await docOf(f, 'tokens/13')).orderIds, [x.orderId, b.orderId]);
+
+  // 指着加料小单同牌加单：账单组长也不是小单
+  const c = (await placeOrder(f, { tokenNumber: 13, joinTokenOrderId: x.orderId })).result;
+  assert.equal(c.addOnToOrderId, a);
+  assert.equal((await docOf(f, `orders/${c.orderId}`)).extraOnly, undefined);
+});
+
+test('那碗和加料都出餐，牌才释放；一起收款', async () => {
+  const f = await setupStore();
+  const bowl = await placeOrder(f, { tokenNumber: 15 });
+  const a = bowl.result.orderId;
+  const x = (await placeOrder(f, extraFor(bowl, 'wanton_3', 15))).result;
+
+  await f.kitchen.call('serveOrder', lifecycle(f, a, 1));
+  const still = await docOf(f, 'tokens/15');
+  assert.deepEqual([still.state, still.orderIds], ['held', [x.orderId]], '只摘那碗，牌继续占用');
+  await f.kitchen.call('serveOrder', lifecycle(f, x.orderId, 1));
+  const freed = await docOf(f, 'tokens/15');
+  assert.deepEqual([freed.state, freed.orderId, freed.orderIds, freed.lastReleasedOrderId], ['available', null, [], x.orderId]);
+  assert.equal((await docOf(f, `orders/${x.orderId}`)).fulfillmentStatus, 'served');
+
+  const paid = await f.cashier.call<{ amountSen: number }>('recordGroupPayment', {
+    storeId: f.storeId, operationId: uuid(), ...f.claim, orders: [{ orderId: a, amountSen: 700 }, { orderId: x.orderId, amountSen: 200 }],
+  });
+  assert.equal(paid.amountSen, 900);
+});
+
+test('下单后加料：厨单记着给哪一张单，后厨才分得清同桌哪一碗出了', async () => {
+  const f = await setupStore();
+  const a = (await placeOrder(f, { tokenNumber: 30 })).result;
+  const lineId = (await admin().doc(`stores/${f.storeId}/orders/${a.orderId}`).get()).data()!.items[0].lineId as string;
+  const extra = (await placeOrder(f, {
+    tokenNumber: 30, extraForOrderId: a.orderId, expectedTotalSen: 200,
+    lines: [{ config: extraConfig('char_siew'), quantity: 1, forLineId: lineId }],
+  })).result;
+  const t = (await admin().doc(`stores/${f.storeId}/kitchenTickets/${extra.orderId}`).get()).data()!;
+  assert.deepEqual([t.extraOnly, t.extraForOrderId], [true, a.orderId]);
+});
+
+test('下单后加料换过号：这张牌上再同牌加单，仍并进这桌的账单', async () => {
+  const f = await setupStore();
+  const a = (await placeOrder(f, { tokenNumber: 31 })).result;
+  const lineId = (await admin().doc(`stores/${f.storeId}/orders/${a.orderId}`).get()).data()!.items[0].lineId as string;
+  await f.kitchen.call('serveOrder', lifecycle(f, a.orderId, 1));
+  await placeOrder(f, { tokenNumber: 31 }); // 31 号给了别的客人
+  const x = (await placeOrder(f, { tokenNumber: 32, extraForOrderId: a.orderId, expectedTotalSen: 200, lines: [{ config: extraConfig('wanton_3'), quantity: 1, forLineId: lineId }] })).result;
+  const c = (await placeOrder(f, { tokenNumber: 32, joinTokenOrderId: x.orderId })).result;
+  assert.deepEqual([c.sharedToken, c.addOnToOrderId], [true, a.orderId]);
 });

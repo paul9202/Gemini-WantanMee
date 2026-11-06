@@ -68,6 +68,11 @@ function lineRows(menu: MenuVersion, r: ReceiptSource): ReceiptRow[] {
   for (const l of r.lines) {
     const mode: ServiceMode = l.serviceMode ?? (r.serviceMode === 'mixed' ? 'dine_in' : r.serviceMode);
     rows.push({ left: `${l.quantity} × ${lineNameZh(menu, l.config)}`, right: formatRM(l.unitPriceSen * l.quantity) });
+    // 加料只写给哪一碗，名字已经说明是什么料。
+    if (l.config.productKind === 'extra') {
+      if (l.config.note) rows.push({ left: `  ${l.config.note}`, small: true });
+      continue;
+    }
     const detail = [
       r.serviceMode === 'mixed' ? SERVICE_MODE_NAMES[mode].zh : null,
       l.config.noodleType ? NOODLE_TYPE_NAMES[l.config.noodleType].zh : null,

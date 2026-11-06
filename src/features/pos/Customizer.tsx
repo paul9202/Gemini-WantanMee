@@ -4,7 +4,7 @@
  */
 import { ReactNode, useState } from 'react';
 import { allowsNoTomato, hasNoTomato, LineConfig, linePhotoId, normalizeConfig, NOTE_NO_TOMATO, unitPriceSen } from '../../domain/lineItem';
-import { AddOnId, Level, MenuVersion, NOODLE_TYPE_NAMES, Sauce, SAUCE_NAMES, SizeDef, Spice } from '../../domain/menu';
+import { AddOnId, Level, MenuVersion, NOODLE_TYPE_NAMES, productOf, Sauce, SAUCE_NAMES, SizeDef, Spice } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
 import { PictogramId, PICTOGRAMS } from '../../domain/pictograms';
 import { Icon, PictoArt, Photo } from '../../ui/visual';
@@ -26,7 +26,7 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
 }) {
   const tr = useT();
   const lang = useLang();
-  const product = menu.products[config.productKind];
+  const product = productOf(menu, config.productKind);
   const set = (patch: Partial<LineConfig>) => onChange(normalizeConfig(menu, { ...config, ...patch }));
   const deep = config.scallion === 'extra' || config.lard === 'extra' || config.isKosong;
   const [showMore, setShowMore] = useState(false);
