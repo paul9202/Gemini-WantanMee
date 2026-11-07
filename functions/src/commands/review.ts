@@ -4,7 +4,9 @@
  *   金额不符时按实际收到的钱入账并记录差额（不追收）；QR 无核实依据时须老板确认银行已到账；
  *   落在已关账营业日时计入「关账后待调整」，原关账版本不变，需另做更正版本。
  * - 收款确认事件：原订单已入账且仍待收款时，按订单 ID 补登记一次全额收款；计入处理当天的营业日
- *   （原营业日已关账时不改写其冻结报表），关联原订单。已登记过的不重复入账。
+ *   （原营业日已关账时不改写其冻结报表），关联原订单。已登记过的不重复入账；
+ *   出餐时已自动记了同一笔的，升级为前台确认（不新增收款）。
+ * - 人工出餐：「出餐即记收款」打开时补入出餐同时自动记收款，记在今天（今天已关账则不记）。
  * - dismiss：不入账，保留原记录与原因。
  */
 import { Firestore } from 'firebase-admin/firestore';
@@ -16,7 +18,8 @@ import { effectiveTimeMs, OfflineEvent, OfflineReviewReason } from '../../../src
 import { runCommand } from '../core/command';
 import { CommandError } from '../core/errors';
 import { bad, obj, str, storeId, uuid } from '../core/input';
-import { receiptNumberFor, writeAcceptedOrder, writePaymentRegistration } from '../core/orderWrites';
+import { peekTicket, receiptNumberFor, writeAcceptedOrder, writePaymentRegistration } from '../core/orderWrites';
+import { applyAutoPay, canUpgradeAutoPayment, planAutoPay, upgradeAutoPayment } from '../core/autoPay';
 import { registerPayment } from '../../../src/domain/orderLifecycle';
 import { paymentSeqOf, paymentStateOf } from './payment';
 import { loadStoreConfig } from '../core/store';
@@ -126,6 +129,17 @@ export async function resolveOfflineReview(db: Firestore, uid: string | undefine
       if (e.type === 'sequence_void') throw new CommandError('REVIEW_NOT_ALLOWED', '作废序号记录只能核对后不入账');
       if (e.type === 'offline_payment_recorded') {
         if (!order) throw new CommandError('REVIEW_NOT_ALLOWED', '请先处理所属订单');
+        // 出餐时已自动记了同一笔：不重复入账，升级为前台确认（与离线补同步同一规则）。
+        if (canUpgradeAutoPayment(order, e.payload.amountSen)) {
+          const payDay = typeof order.paymentBusinessDate === 'string' ? (await tx.get(store.businessDay(order.paymentBusinessDate))).data() : undefined;
+          const up = upgradeAutoPayment(tx, store, orderId, order, { actorUid: actor.uid, nowMs, cashierAtMs: effectiveTimeMs(e), paymentDayOpen: !payDay || payDay.state === 'open' });
+          resolved('imported', { result: { ...(inbox.result as object), status: 'accepted', orderId }, upgradedAutoPayment: true });
+          return {
+            result: { eventId: input.eventId, resolution: 'imported' as const, orderId, businessDate: order.paymentBusinessDate as string },
+            audit: { entityId: orderId, after: { resolution: 'imported', type: e.type, reason: input.reason, upgradedAutoPayment: true, alsoCollectedBeforeServe: up.alsoCollectedBeforeServe } },
+          };
+        }
+        const ticket = await peekTicket(tx, store, orderId);
         const r = registerPayment(paymentStateOf(order), { amountSen: e.payload.amountSen, orderTotalSen: order.totalSen as number });
         if (!r.ok) throw new CommandError('REVIEW_NOT_ALLOWED', r.error === 'ALREADY_PAID' ? '这张单已登记收款，不重复入账' : '订单状态或金额不允许登记');
         const today = businessDateOf(nowMs, config.businessDay);
@@ -134,7 +148,7 @@ export async function resolveOfflineReview(db: Firestore, uid: string | undefine
         writePaymentRegistration(tx, store, {
           orderId, seq: paymentSeqOf(order) + 1, amountSen: e.payload.amountSen, businessDate: today, orderBusinessDate: order.businessDate as string,
           occurredAtMs: effectiveTimeMs(e), recordedAtMs: nowMs, confirmedBy: actor.uid, source: 'offline', registerId: e.registerId,
-          operationId: input.operationId, offlineEventId: e.eventId,
+          operationId: input.operationId, offlineEventId: e.eventId, ticket,
         });
         tx.set(store.businessDay(today), { state: 'open', lastActivityAtMs: nowMs }, { merge: true });
         resolved('imported', { result: { ...(inbox.result as object), status: 'accepted', orderId } });
@@ -148,8 +162,13 @@ export async function resolveOfflineReview(db: Firestore, uid: string | undefine
         if (order.kitchenRouting !== 'manual') throw new CommandError('REVIEW_NOT_ALLOWED', '已转电子厨单，出餐以后厨屏为准');
         if (order.fulfillmentStatus !== 'served') {
           const version = (order.version as number) + 1;
+          // 出餐即记收款：老板现在补入，记在今天（今天关账中 / 已关账就不记，订单留在待收款）。读在写入之前。
+          const autoPlan = await planAutoPay(tx, store, { config, order, orderId, bookingDate: businessDateOf(nowMs, config.businessDay) });
+          const pay = autoPlan
+            ? applyAutoPay(tx, store, autoPlan, { nowMs, occurredAtMs: at, actorUid: actor.uid, source: 'review', operationId: input.operationId, offlineEventId: e.eventId }).orderPatch
+            : {};
           // 补核对的人工单一律 history_only：不占牌，也就不释放任何牌。
-          tx.update(store.order(orderId), { fulfillmentStatus: 'served', servedAtMs: at, servedBy: actor.uid, servedManually: true, preServe: null, version, updatedAtMs: nowMs });
+          tx.update(store.order(orderId), { fulfillmentStatus: 'served', servedAtMs: at, servedBy: actor.uid, servedManually: true, preServe: null, version, updatedAtMs: nowMs, ...pay });
           tx.update(store.ticket(orderId), { fulfillmentStatus: 'served', servedAtMs: at, version });
         }
       } else if (e.type === 'token_returned') {

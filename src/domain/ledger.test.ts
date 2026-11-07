@@ -1,7 +1,7 @@
 /** 账本 → 日结与报表（04 §5 固定样本、F04、F06、作废支出、产品结构、CSV）。 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BOM_V1, closeFigures, closeFiguresV2, isCloseFiguresV2, csvClose, csvExpenses, csvOrders, DEFAULT_FIXED_COST, describeDiff, dishRanking, LedgerDocs, OrderReportRow, productMix, receiptsTrend, wastageCostUnits } from './index';
+import { BOM_V1, closeFigures, closeFiguresV2, isCloseFiguresV2, csvClose, csvExpenses, csvOrders, DEFAULT_FIXED_COST, describeDiff, dishRanking, LedgerDocs, OrderReportRow, productMix, receiptsTrend, registeredBreakdown, wastageCostUnits } from './index';
 
 const D = '2026-10-22';
 const docs = (): LedgerDocs => ({
@@ -137,4 +137,54 @@ test('§11-11/13 新版日结：只汇总统一收款（不拆现金/QR、不算
   assert.ok(!/钱箱|现金|QR/.test(csv), csv);
   assert.ok(csv.includes('人工登记'));
   assert.ok(isCloseFiguresV2(f) && !isCloseFiguresV2(closeFigures(docs(), { businessDate: D, countedCashSen: 0, qrBankConfirmedSen: 0 }, DEFAULT_FIXED_COST)));
+});
+
+test('出餐即记收款：日结把前台确认和出餐自动记分开；撤回出餐成对抵消；客人没付就走了单列；合计不变', () => {
+  const P = (id: string, amountSen: number, extra: Partial<LedgerDocs['payments'][number]> = {}): LedgerDocs['payments'][number] =>
+    ({ id, orderId: id.split('-')[0], businessDate: D, orderBusinessDate: D, method: 'unspecified', amountSen, occurredAtMs: 1, ...extra });
+  const d: LedgerDocs = {
+    payments: [
+      P('m1-p1', 1000), // 前台确认
+      P('m2-p1', 600, { confirmationMode: 'manual' }),
+      P('u1-p1', 800, { confirmationMode: 'manual' }), // 自动收款后被前台同额确认（已改成 manual）
+      P('a1-p1', 2200, { confirmationMode: 'auto_on_serve' }),
+      P('a2-p1', 900, { confirmationMode: 'auto_on_serve' }),
+      // 30 秒内撤回出餐：成对抵消
+      P('a3-p1', 700, { confirmationMode: 'auto_on_serve' }),
+      P('a3-p1-rev', -700, { kind: 'reversal', reversesPaymentId: 'a3-p1', cause: 'undo_serve' }),
+      // 客人没付就走了
+      P('a2-p1-rev', -900, { kind: 'reversal', reversesPaymentId: 'a2-p1', cause: 'not_paid' }),
+      // 误登记更正（旧记录没有 cause）
+      P('m2-p1-rev', -600, { kind: 'reversal', reversesPaymentId: 'm2-p1' }),
+    ],
+    refunds: [], costEvents: [], wastage: [], expenses: [], cashMovements: [],
+  };
+  const f = closeFiguresV2(d, [], [], D, DEFAULT_FIXED_COST);
+  assert.deepEqual([f.registeredManualCount, f.registeredManualSen], [3, 2400], '没写方式的旧收款算前台确认；被确认过的自动收款也算前台');
+  assert.deepEqual([f.registeredAutoCount, f.registeredAutoSen], [2, 3100], '撤回出餐那笔不算自动收款');
+  assert.deepEqual([f.undoServeCount, f.undoServeSen], [1, 700]);
+  assert.deepEqual([f.notPaidCount, f.notPaidSen], [1, 900]);
+  assert.equal(f.paymentCorrectionsSen, -600, '只有误登记更正，不含撤回出餐和没付就走');
+  assert.equal(f.registeredSen, 4000);
+  assert.equal(f.registeredManualSen! + f.registeredAutoSen! + f.paymentCorrectionsSen - f.notPaidSen!, f.registeredSen, '各项加起来等于今天登记收款');
+  const csv = csvClose(f, 1, '');
+  assert.ok(csv.includes('出餐自动记收款') && csv.includes('钱箱现金加 QR'), csv);
+
+  // 找不到被冲的那笔（跨营业日）：当普通更正，合计仍然对得上。
+  const lone = registeredBreakdown([P('a9-p1-rev', -500, { kind: 'reversal', reversesPaymentId: 'a9-p1', cause: 'undo_serve' })]);
+  assert.deepEqual([lone.undoServeCount, lone.correctionsSen], [0, -500]);
+});
+
+test('出餐即记收款：没有新字段的旧数据，日结口径完全不变', () => {
+  const d: LedgerDocs = {
+    payments: [
+      { id: 'n1-p1', orderId: 'n1', businessDate: D, method: 'unspecified', amountSen: 900, occurredAtMs: 1 },
+      { id: 'n1-p1-rev', orderId: 'n1', businessDate: D, method: 'unspecified', amountSen: -900, occurredAtMs: 2, kind: 'reversal', reversesPaymentId: 'n1-p1' },
+    ],
+    refunds: [], costEvents: [], wastage: [], expenses: [], cashMovements: [],
+  };
+  const f = closeFiguresV2(d, [], [], D, DEFAULT_FIXED_COST);
+  assert.equal(f.paymentCorrectionsSen, f.summary.receipts.correctionsSen);
+  assert.deepEqual([f.registeredAutoCount, f.undoServeCount, f.notPaidCount], [0, 0, 0]);
+  assert.ok(csvClose(f, 1, '').includes('收款为人工登记，未与钱包/银行自动核对'));
 });

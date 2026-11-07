@@ -21,6 +21,17 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-08-pay-on-serve', date: '2026-11-08', roles: ALL,
+    title: { zh: '出餐即记收款，后厨显示每单金额', en: 'Payment recorded at serve; kitchen cards show each order’s amount' },
+    items: [
+      { zh: '老板在「设置」打开「出餐即记收款」后才生效：后厨按「完成出餐」，没收款的单自动记为已收款；30 秒内撤回出餐，收款也一起撤回。开关默认关着。', en: 'Takes effect only after the owner turns on “Record payment at serve” in Settings: when the kitchen taps Serve, an unpaid order is recorded as paid; undoing a serve within 30 seconds also undoes the payment. It is off by default.' },
+      { zh: '后厨卡片在牌号旁写这张单要收多少钱，同一桌的框上写「合计」；客人先付了的写「已付 · 不用收」。', en: 'Kitchen cards show the amount to collect next to the token number, and a same-table frame shows the total. Orders already paid at the counter say “Paid · don’t collect”.' },
+      { zh: '客人当场付钱，收银一定要点「确认已收款」；订单页分开显示「出餐已记收款」和「前台已确认收款」。', en: 'If the customer pays on the spot, the cashier must still tap Confirm received. The Orders page shows “Recorded at serve” and “Confirmed at counter” separately.' },
+      { zh: '客人没付就走了：老板在订单页按一下，就把这笔收款撤回并记为放弃追收。', en: 'Customer left without paying: the owner taps one button on the Orders page to reverse the payment and write it off.' },
+      { zh: '日结把前台确认和出餐自动记的收款分开显示，请和钱箱现金加 QR 到账对一下。', en: 'The daily close lists counter-confirmed and serve-recorded payments separately — check them against the cash drawer and QR receipts.' },
+    ],
+  },
+  {
     id: '2026-11-06-extras', date: '2026-11-06', roles: ALL,
     title: { zh: '下单后也能加叉烧、加云吞', en: 'Add char siew or wantan after ordering' },
     items: [

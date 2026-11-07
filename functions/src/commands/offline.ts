@@ -10,6 +10,8 @@
  * - 新格式离线单可未付款（payment=null）；收款确认是独立事件 offline_payment_recorded，
  *   依赖原订单已入账，按订单 ID 登记一次全额收款；重复或与在线登记撞车进入待核对，不重复入账。
  * - 人工出餐同时释放仍属于本单的餐牌；牌已属于新单时不动。旧格式 token_returned 仍可接纳（幂等）。
+ * - 「出餐即记收款」打开时，人工出餐也自动记收款（记在出餐那天；那天已关账则不记）。之后同金额的离线收款确认
+ *   不重复入账，只把那笔升级为前台确认；收银时间早于出餐的标 alsoCollectedBeforeServe 供老板核对。
  */
 import { Firestore, Transaction } from 'firebase-admin/firestore';
 import { businessDateOf } from '../../../src/domain/businessDay';
@@ -28,7 +30,8 @@ import { runCommand, storeRefs, StoreRefs } from '../core/command';
 import { CommandError } from '../core/errors';
 import { bad, int, obj, optOneOf, str, storeId, uuid } from '../core/input';
 import { loadStoreConfig, StoreConfig } from '../core/store';
-import { receiptNumberFor, writeAcceptedOrder, writePaymentRegistration } from '../core/orderWrites';
+import { peekTicket, receiptNumberFor, writeAcceptedOrder, writePaymentRegistration } from '../core/orderWrites';
+import { applyAutoPay, canUpgradeAutoPayment, planAutoPay, upgradeAutoPayment } from '../core/autoPay';
 import { paymentSeqOf, paymentStateOf } from './payment';
 
 export const MAX_EVENTS_PER_BATCH = 25;
@@ -133,6 +136,11 @@ async function decide(
   const businessDate = businessDateOf(at, config.businessDay);
   const daySnap = e.type === 'offline_order_created' || e.type === 'offline_payment_recorded' ? await tx.get(store.businessDay(businessDate)) : null;
   const ticketRef = store.ticket(orderId);
+  // 收款确认：出餐前登记的要在厨单上标「已付 · 不用收」，先读厨单。
+  const ticketPeek = e.type === 'offline_payment_recorded' && order ? await peekTicket(tx, store, orderId) : null;
+  // 可能要把出餐自动记的那笔升级为前台确认：先读那笔所属的营业日（所有读要在写之前）。
+  const autoPayDaySnap = e.type === 'offline_payment_recorded' && order && canUpgradeAutoPayment(order, e.payload.amountSen) && typeof order.paymentBusinessDate === 'string'
+    ? await tx.get(store.businessDay(order.paymentBusinessDate)) : null;
 
   // ---- 主收银机资格与序号 ----
   if (!reg || reg.activeDeviceId !== e.deviceId || reg.epoch !== e.registerEpoch || config.activeRegisterId !== e.registerId) {
@@ -219,6 +227,16 @@ async function decide(
     if (at > nowMs + TIME_SKEW_LIMIT_MS) return review('TIME_ANOMALY', orderId);
     const day = daySnap?.data();
     if (day && day.state !== 'open') return review('DAY_CLOSED_LATE', orderId);
+    // 出餐时已自动记了同一笔（同金额）：不重复入账，升级为前台确认；收银时间早于出餐的标出来让老板核对。
+    if (canUpgradeAutoPayment(order, e.payload.amountSen)) {
+      return {
+        status: 'accepted', orderId, advance: true,
+        writes: (w) => {
+          const payDay = autoPayDaySnap?.data();
+          upgradeAutoPayment(w, store, orderId, order, { actorUid, nowMs, cashierAtMs: at, paymentDayOpen: !payDay || payDay.state === 'open' });
+        },
+      };
+    }
     const r = registerPayment(paymentStateOf(order), { amountSen: e.payload.amountSen, orderTotalSen: order.totalSen as number });
     if (!r.ok) return review(r.error === 'ALREADY_PAID' ? 'ALREADY_PAID' : r.error === 'AMOUNT_MISMATCH' ? 'AMOUNT_MISMATCH' : 'ORDER_STATE', orderId);
     const seq = paymentSeqOf(order) + 1;
@@ -228,7 +246,7 @@ async function decide(
         writePaymentRegistration(w, store, {
           orderId, seq, amountSen: e.payload.amountSen, businessDate, orderBusinessDate: order.businessDate as string,
           occurredAtMs: at, recordedAtMs: nowMs, confirmedBy: actorUid, source: 'offline', registerId: e.registerId,
-          operationId: null, offlineEventId: e.eventId,
+          operationId: null, offlineEventId: e.eventId, ticket: ticketPeek,
         });
         w.set(store.businessDay(businessDate), { state: 'open', lastActivityAtMs: nowMs }, { merge: true });
       },
@@ -255,13 +273,19 @@ async function decide(
       if (r?.ok) tokenWrite = (w) => w.set(store.token(order.tokenNumber), { ...r.token, updatedAtMs: nowMs });
     }
     const version = (order.version as number) + 1;
+    // 出餐即记收款：记在出餐那天（设备估计时间所属营业日）；那天已关账就不记，订单留在待收款。
+    const autoPlan = await planAutoPay(tx, store, { config, order, orderId, bookingDate: businessDate });
     return {
       status: 'accepted', orderId, advance: true,
       writes: (w) => {
+        // 自动收款的订单字段并进下面这一次订单更新（同一事务只写一次订单）。
+        const pay = autoPlan
+          ? applyAutoPay(w, store, autoPlan, { nowMs, occurredAtMs: at, actorUid, source: 'offline', operationId: null, offlineEventId: e.eventId }).orderPatch
+          : {};
         // 人工出餐：真实出餐时间为设备估计时间；不可撤回（preServe=null），不进入电子队列。
         w.update(store.order(orderId), {
           fulfillmentStatus: 'served', servedAtMs: at, servedBy: actorUid, servedManually: true, preServe: null, version, updatedAtMs: nowMs,
-          tokenReleasedAtMs: at, tokenReleaseSource: 'served',
+          tokenReleasedAtMs: at, tokenReleaseSource: 'served', ...pay,
         });
         w.update(ticketRef, { fulfillmentStatus: 'served', servedAtMs: at, version });
         tokenWrite?.(w);
@@ -370,7 +394,11 @@ export async function routeManualOrderToKitchen(db: Firestore, uid: string | und
       // 与新单一致：转入后厨即自动制作中（自动来源，不是实际开工时间）。
       const auto = { fulfillmentStatus: 'preparing', startedAtMs: nowMs, startedSource: 'auto' };
       tx.update(store.order(input.orderId), { kitchenRouting: 'digital', routedFromManual: true, routeNote: input.note, routedAtMs: nowMs, ...auto, version, updatedAtMs: nowMs });
-      tx.update(store.ticket(input.orderId), { kitchenRouting: 'digital', routedFromManual: true, ...auto, version });
+      // 转入后厨也带上售价合计与是否已付（旧人工厨单没有这两个字段），后厨卡片照常显示要收多少钱。
+      tx.update(store.ticket(input.orderId), {
+        kitchenRouting: 'digital', routedFromManual: true, ...auto, version,
+        totalSen: order.totalSen as number, paidBeforeServe: order.paymentState === 'paid',
+      });
       return { result: { orderId: input.orderId, version }, audit: { entityId: input.orderId, before: { kitchenRouting: 'manual' }, after: { kitchenRouting: 'digital' } } };
     },
   });

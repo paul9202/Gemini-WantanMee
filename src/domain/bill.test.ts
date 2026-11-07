@@ -3,11 +3,11 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { billIdOf, BillOrder, BillSummary, summarizeBill } from './index';
+import { billIdOf, BillOrder, BillSummary, paidAtServeConflict, summarizeBill } from './index';
 
 const FULFILLMENTS = ['queued', 'preparing', 'served', 'cancelled'] as const;
 const OPEN_FULFILLMENTS = ['queued', 'preparing', 'served'] as const;
-const ZERO: BillSummary = { payable: [], dueSen: 0, paidSen: 0, refundDueSen: 0, writtenOffSen: 0, cancelPendingSen: 0 };
+const ZERO: BillSummary = { payable: [], dueSen: 0, paidSen: 0, autoPaidSen: 0, refundDueSen: 0, writtenOffSen: 0, cancelPendingSen: 0 };
 
 const order = (id: string, patch: Partial<BillOrder> = {}): BillOrder => ({
   id, totalSen: 700, paymentState: 'unpaid', fulfillmentStatus: 'preparing', ...patch,
@@ -91,7 +91,7 @@ test('一桌混合状态：组长已收也不再收，各项分开算，要收�
   ], new Set(['local']));
   assert.deepEqual(s, {
     payable: [{ orderId: 'b', amountSen: 1400 }, { orderId: 'c', amountSen: 800 }],
-    dueSen: 2200, paidSen: 1600, refundDueSen: 300, writtenOffSen: 200, cancelPendingSen: 1100,
+    dueSen: 2200, paidSen: 1600, autoPaidSen: 0, refundDueSen: 300, writtenOffSen: 200, cancelPendingSen: 1100,
   });
 });
 
@@ -104,4 +104,25 @@ test('billIdOf：组长单的 ID；没有关联就是订单自己', () => {
   assert.equal(billIdOf({ id: 'a' }), 'a');
   assert.equal(billIdOf({ id: 'a', addOnTo: null }), 'a');
   assert.equal(billIdOf({ id: 'b', addOnTo: { orderId: 'a' } }), 'a');
+});
+
+test('出餐即记收款：已收里分出出餐自动记的部分；旧单没有记录方式算前台确认', () => {
+  const s = summarizeBill([
+    order('a', { paymentState: 'paid', paidSen: 900, fulfillmentStatus: 'served', paymentConfirmationMode: 'auto_on_serve' }),
+    order('b', { paymentState: 'paid', paidSen: 200, fulfillmentStatus: 'served', paymentConfirmationMode: 'manual' }),
+    order('c', { paymentState: 'paid', paidSen: 700, fulfillmentStatus: 'served' }),
+    order('d', { totalSen: 900 }),
+  ]);
+  assert.equal(s.paidSen, 1800);
+  assert.equal(s.autoPaidSen, 900, '只算 auto_on_serve');
+  assert.equal(s.dueSen, 900, '自动记过的不会再进要收');
+  assert.equal(summarizeBill([order('x', { paymentState: 'unpaid', paymentConfirmationMode: null })]).autoPaidSen, 0);
+});
+
+test('ALREADY_PAID 详情：只有出餐自动记的才算「刚被后厨记了」，旧服务器没给详情照旧', () => {
+  assert.deepEqual(paidAtServeConflict({ orderId: 'o1', tokenNumber: 9, confirmationMode: 'auto_on_serve', paidSen: 900 }), { orderId: 'o1', tokenNumber: 9, paidSen: 900 });
+  assert.equal(paidAtServeConflict({ orderId: 'o1', tokenNumber: 9, confirmationMode: 'manual', paidSen: 900 }), null);
+  assert.equal(paidAtServeConflict({ reasonCode: 'ALREADY_PAID' }), null, '旧服务器');
+  assert.equal(paidAtServeConflict(undefined), null);
+  assert.deepEqual(paidAtServeConflict({ orderId: 'o2', confirmationMode: 'auto_on_serve' }), { orderId: 'o2', tokenNumber: null, paidSen: 0 }, '缺字段不报错');
 });

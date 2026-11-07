@@ -1,12 +1,12 @@
 /**
- * 老板命令：成员管理、指定主收银机；以及结果查询。
+ * 老板命令：成员管理、指定主收银机、「出餐即记收款」开关；以及结果查询。
  * 第一个 owner 只能由管理员脚本初始化（见 src/admin/bootstrap.ts），没有公开的「注册成为老板」接口。
  */
 import { Firestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 import { runCommand, storeRefs } from '../core/command';
 import { CommandError } from '../core/errors';
-import { bool, obj, oneOf, str, storeId, uuid } from '../core/input';
+import { bool, obj, oneOf, optStr, str, storeId, uuid } from '../core/input';
 
 /**
  * 邀请成员：老板填写员工邮箱与岗位。账号不存在时由服务端创建（不设密码），
@@ -94,6 +94,28 @@ export async function assignRegister(db: Firestore, uid: string | undefined, raw
       return {
         result: { registerId: input.registerId, deviceId: input.deviceId, epoch, lastAppliedSequence: 0 },
         audit: { entityId: `register-${input.registerId}`, before: before ?? null, after: { deviceId: input.deviceId, epoch } },
+      };
+    },
+  });
+}
+
+/**
+ * 「出餐即记收款」开关（老板）：打开后后厨按「完成出餐」时，仍待收款的单自动记为已收款；关掉回到人手确认。
+ * 写在 config/public（各端已在读），缺省关。上线先关着，等所有平板更新后再开。
+ */
+export async function setPayOnServe(db: Firestore, uid: string | undefined, raw: unknown) {
+  const o = obj(raw, ['storeId', 'operationId', 'enabled', 'reason']);
+  const input = { storeId: storeId(o), operationId: uuid(o, 'operationId'), enabled: bool(o, 'enabled'), reason: optStr(o, 'reason', 200) };
+  return runCommand(db, {
+    type: 'setPayOnServe', storeId: input.storeId, operationId: input.operationId, uid, roles: ['owner'], payload: input,
+    run: async ({ tx, store, nowMs, actor }) => {
+      const snap = await tx.get(store.configPublic);
+      if (!snap.exists) throw new CommandError('STORE_NOT_CONFIGURED');
+      const before = snap.data()?.payOnServe === true;
+      tx.set(store.configPublic, { payOnServe: input.enabled, payOnServeUpdatedAtMs: nowMs, payOnServeUpdatedBy: actor.uid }, { merge: true });
+      return {
+        result: { enabled: input.enabled },
+        audit: { entityId: 'config/public', before: { payOnServe: before }, after: { payOnServe: input.enabled, reason: input.reason } },
       };
     },
   });

@@ -1,5 +1,8 @@
 /**
- * 订单页：制作状态与收款状态分开显示（取消 ≠ 已退款；出餐 ≠ 已收款；未收款绝不显示为已收）。
+ * 订单页：制作状态与收款状态分开显示（取消 ≠ 已退款；未收款绝不显示为已收）。
+ * 出餐和收款：门店没开「出餐即记收款」时出餐 ≠ 已收款；开了以后后厨出餐时没收款的单自动记收款。
+ * 已收款分两种显示：「出餐已记收款」（蓝，系统按出餐记的，不是前台收到钱）和「前台已确认收款」（绿，旧单没写方式也算这种）。
+ * 老板可「客人没付就走了」：一步撤回这笔收款并记为放弃追收（原来要先更正再放弃追收两步）。
  * 2026-10-23 运营改版：下单即送厨，收款由前台另行确认。
  * - 前台（收银 / 老板）对未收款的有效订单点「确认已收款 RM金额」直接登记整单（不选渠道、不弹二次确认），防连点。
  * - 老板可「更正误登记收款」（有原因、有审计，追加反向调整，不是退款），也可登记退款（不强制选择渠道）。
@@ -16,7 +19,7 @@ import { businessDateOf } from '../../domain/businessDay';
 import { LineKind, OrderServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import { PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
-import type { PaymentMethod } from '../../domain/payment';
+import type { ConfirmationMode, PaymentMethod } from '../../domain/payment';
 import { isAwaitingPayment, PaymentState } from '../../domain/orderLifecycle';
 import { tokenFromDoc, tokenHolders, tokenSession } from '../../domain/tokens';
 import { db, storePath } from '../../data/firebase/client';
@@ -69,6 +72,10 @@ interface OrderRow {
   cancelRejection?: { reason: string | null; atMs: number } | null;
   /** 老板放弃追收的记录（恢复后为 null）。 */
   writeOff?: { reason: string; amountSen: number; atMs: number } | null;
+  /** 这笔收款怎么来的：出餐自动记 / 前台确认；旧单没有 = 前台确认，冲正后为 null。 */
+  paymentConfirmationMode?: ConfirmationMode | null;
+  /** 出餐自动记了收款，前台又按同额登记，且前台的时间在出餐之前：可能收了两次，要核对。 */
+  alsoCollectedBeforeServe?: boolean;
   businessDate: string;
   version: number;
   /** items 带下单时的完整配置；这里只用到辣度（汤品为 null）和加料的备注。 */
@@ -87,11 +94,14 @@ const fulfillLabel = (tr: Tr, s: OrderRow['fulfillmentStatus']) => ({
   queued: tr('待做', 'Queued'), preparing: tr('制作中', 'Preparing'), served: tr('已出餐', 'Served'), cancelled: tr('已取消', 'Cancelled'),
 })[s];
 
-/** 收款状态文案。未收款永远单独标出，不和制作状态混在一起。 */
-function payLabel(tr: Tr, s: PaymentState): string {
+/**
+ * 收款状态文案。未收款永远单独标出，不和制作状态混在一起。
+ * 已收款按来源分开说：出餐自动记的不能说成前台收到了钱。
+ */
+function payLabel(tr: Tr, s: PaymentState, mode?: ConfirmationMode | null): string {
   switch (s) {
     case 'unpaid': return tr('未收款', 'Unpaid');
-    case 'paid': return tr('已收款', 'Paid');
+    case 'paid': return mode === 'auto_on_serve' ? tr('出餐已记收款', 'Recorded at serve') : tr('前台已确认收款', 'Confirmed at counter');
     case 'refund_due': return tr('应退款', 'Refund due');
     case 'refunded': return tr('已退款', 'Refunded');
     case 'not_due': return tr('已取消 · 无需收款', 'Cancelled · nothing due');
@@ -113,28 +123,39 @@ function channelLabel(tr: Tr, m: PaymentMethod | null | undefined): string | nul
  */
 function billLine(tr: Tr, count: number, s: BillSummary, complete: boolean): string {
   if (!complete) return tr(`这桌还要收 ${formatRM(s.dueSen)}`, `Table still due ${formatRM(s.dueSen)}`);
-  const parts = [
-    tr(`这桌 ${count} 张`, `Table: ${count} orders`),
-    tr(`已收 ${formatRM(s.paidSen)}`, `Paid ${formatRM(s.paidSen)}`),
-    tr(`还要收 ${formatRM(s.dueSen)}`, `Due ${formatRM(s.dueSen)}`),
-  ];
+  // 有出餐自动记的收款：写「这桌共 RM X（出餐已记收款 RM Y）」，不说成客人在前台付了。
+  const counter = s.paidSen - s.autoPaidSen;
+  const parts = s.autoPaidSen > 0
+    ? [
+      tr(`这桌 ${count} 张共 ${formatRM(s.paidSen + s.dueSen)}（出餐已记收款 ${formatRM(s.autoPaidSen)}${counter > 0 ? `，前台已确认 ${formatRM(counter)}` : ''}）`,
+        `Table: ${count} orders, ${formatRM(s.paidSen + s.dueSen)} (recorded at serve ${formatRM(s.autoPaidSen)}${counter > 0 ? `, confirmed at counter ${formatRM(counter)}` : ''})`),
+      ...(s.dueSen ? [tr(`还要收 ${formatRM(s.dueSen)}`, `Due ${formatRM(s.dueSen)}`)] : []),
+    ]
+    : [
+      tr(`这桌 ${count} 张`, `Table: ${count} orders`),
+      tr(`已收 ${formatRM(s.paidSen)}`, `Paid ${formatRM(s.paidSen)}`),
+      tr(`还要收 ${formatRM(s.dueSen)}`, `Due ${formatRM(s.dueSen)}`),
+    ];
   if (s.refundDueSen) parts.push(tr(`应退 ${formatRM(s.refundDueSen)}`, `Refund due ${formatRM(s.refundDueSen)}`));
   if (s.writtenOffSen) parts.push(tr(`已放弃追收 ${formatRM(s.writtenOffSen)}`, `Written off ${formatRM(s.writtenOffSen)}`));
   return parts.join(' · ');
 }
 
-const payTone = (s: PaymentState) =>
-  s === 'unpaid' ? 'bg-danger-bg text-danger' : s === 'paid' ? 'bg-ok-bg text-ok' : s === 'refund_due' ? 'bg-warn-bg text-warn' : 'bg-subtle text-ink-2';
+/** 出餐自动记的收款用蓝色，和前台确认的绿色分开。 */
+const AUTO_TONE = 'bg-[#e2eaf7] text-[#2f4f86]';
+const payTone = (s: PaymentState, mode?: ConfirmationMode | null) =>
+  s === 'unpaid' ? 'bg-danger-bg text-danger' : s === 'paid' ? (mode === 'auto_on_serve' ? AUTO_TONE : 'bg-ok-bg text-ok') : s === 'refund_due' ? 'bg-warn-bg text-warn' : 'bg-subtle text-ink-2';
 
-type Dialog = { kind: 'cancel' | 'refund' | 'reverse' | 'writeOff' | 'reinstate'; order: OrderRow };
-type RunName = 'requestCancel' | 'confirmFullRefund' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff';
+type Dialog = { kind: 'cancel' | 'refund' | 'reverse' | 'writeOff' | 'reinstate' | 'notPaid'; order: OrderRow };
+type RunName = 'requestCancel' | 'confirmFullRefund' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff' | 'markNotPaid';
 /** 付款类更正不改制作版本号，不带 expectedVersion。 */
-const PAYMENT_ONLY: RunName[] = ['reversePayment', 'writeOffPayment', 'reinstateWrittenOff'];
+const PAYMENT_ONLY: RunName[] = ['reversePayment', 'writeOffPayment', 'reinstateWrittenOff', 'markNotPaid'];
 type Feedback = { ok: boolean; text: string };
 
 export function OrdersPage() {
   const tr = useT();
   const { config, member } = useSession();
+  const payOnServe = config?.payOnServe === true;
   const now = useNow(60_000);
   const reg = useRegister();
   const rt = useOfflineRuntime();
@@ -200,8 +221,12 @@ export function OrdersPage() {
     const rm = formatRM(payable.reduce((s, p) => s + p.amountSen, 0));
     try {
       const r = await recordPayments(payable);
+      // 刚被后厨出餐自动记了收款：整次都没登记。提示里不写金额——后厨可能紧接着把同桌其余几碗也出了，
+      // 按点击时算出的「还要收」会过时；还要收多少只看按钮（按实时账单重算），由员工核对后再点，不自动替他收。
       const fb: Feedback = !r.ok
-        ? { ok: false, text: r.message }
+        ? { ok: false, text: r.paidAtServe
+          ? `${r.message}${tr('还要收多少以刷新后的「确认已收款」按钮为准；按钮不见了就是这桌不用再收。', ' What is still owed is on the refreshed "Confirm paid" button; if the button is gone, nothing more is owed.')}`
+          : r.message }
         : {
           ok: true,
           text: r.alreadyRecorded
@@ -233,6 +258,7 @@ export function OrdersPage() {
       await submit(name, { operationId: newOperationId(), orderId: o.id, ...(PAYMENT_ONLY.includes(name) ? {} : { expectedVersion: o.version }), ...extra });
       if (name === 'reversePayment') setFeedback((f) => ({ ...f, [o.id]: { ok: true, text: tr('已更正：原收款保留，订单回到未收款', 'Corrected: original payment kept, order is unpaid again') } }));
       if (name === 'writeOffPayment') setFeedback((f) => ({ ...f, [o.id]: { ok: true, text: tr(`已放弃追收 ${formatRM(o.totalSen)}：不计实收，已移出待收款`, `Written off ${formatRM(o.totalSen)}: not counted as received`) } }));
+      if (name === 'markNotPaid') setFeedback((f) => ({ ...f, [o.id]: { ok: true, text: tr(`已撤回收款 ${formatRM(o.paidSen)} 并记为放弃追收：不计实收`, `Payment ${formatRM(o.paidSen)} reversed and written off: not counted as received`) } }));
       if (name === 'reinstateWrittenOff') setFeedback((f) => ({ ...f, [o.id]: { ok: true, text: tr('已恢复待收款：请在主点单平板确认已收款', 'Back to unpaid: record the payment on the main register') } }));
       setDialog(null);
     } catch (e) {
@@ -286,6 +312,8 @@ export function OrdersPage() {
     const canRefund = isOwner && (o.paymentState === 'paid' || o.paymentState === 'refund_due') && (o.fulfillmentStatus === 'served' || o.fulfillmentStatus === 'cancelled');
     const canWriteOff = isOwner && isAwaitingPayment(o) && !o.kitchenCancelRequested && !pendingLocal;
     const canReinstate = isOwner && o.paymentState === 'written_off';
+    // 客人没付就走了：老板一步撤回收款并放弃追收。只对已出餐、已收款、没退过款的单。
+    const canMarkNotPaid = isOwner && o.paymentState === 'paid' && o.fulfillmentStatus === 'served' && !o.refundedSen;
     return (
       <div key={o.id} className={`grid grid-cols-[5rem_1fr] items-center gap-x-4 gap-y-2 border-b border-line px-5 py-4 last:border-0 ${cols}`}>
         <div>
@@ -318,11 +346,14 @@ export function OrdersPage() {
         <div className="col-start-2 lg:col-start-auto">
           <b className="tabular-nums">{formatRM(o.totalSen)}</b>
           <div className="mt-1">
-            <span className={`inline-block rounded-lg px-2 py-0.5 text-sm font-bold ${pendingLocal ? 'bg-warn-bg text-warn' : payTone(o.paymentState)}`}>
-              {pendingLocal ? tr('本机已登记 · 待同步', 'Recorded here · syncing') : payLabel(tr, o.paymentState)}
+            <span className={`inline-block rounded-lg px-2 py-0.5 text-sm font-bold ${pendingLocal ? 'bg-warn-bg text-warn' : payTone(o.paymentState, o.paymentConfirmationMode)}`}>
+              {pendingLocal ? tr('本机已登记 · 待同步', 'Recorded here · syncing') : payLabel(tr, o.paymentState, o.paymentConfirmationMode)}
             </span>
             {channel && o.paymentState !== 'unpaid' && o.paymentState !== 'not_due' && <span className="ml-1 text-xs text-ink-2">{tr('旧记录', 'legacy')} · {channel}</span>}
           </div>
+          {o.alsoCollectedBeforeServe && o.paymentState === 'paid' && (
+            <div role="status" className="mt-1 inline-block rounded-lg bg-warn-bg px-2 py-0.5 text-xs font-bold text-warn">{tr('前台和出餐都记过收款，核对是否收了两次', 'Recorded at both counter and serve — check it was not collected twice')}</div>
+          )}
           {bill.orders.length >= 2 && <div className="mt-1 text-xs font-semibold text-ink">{billLine(tr, bill.orders.length, bill.summary, bill.complete)}</div>}
           {isAwaitingPayment(o) && o.kitchenCancelRequested && !pendingLocal && <div className="mt-1 text-xs font-semibold text-warn">{tr('取消待后厨确认，不计', 'Cancel awaiting kitchen, not counted')}</div>}
           {fb && <div role={fb.ok ? 'status' : 'alert'} className={`mt-1 text-xs font-semibold ${fb.ok ? 'text-ok' : 'text-danger'}`}>{fb.text}</div>}
@@ -353,6 +384,9 @@ export function OrdersPage() {
           {canRefund && (
             <button type="button" onClick={() => setDialog({ kind: 'refund', order: o })} className="h-14 rounded-xl border border-danger/50 bg-card px-4 font-semibold text-danger">{tr('登记退款', 'Record refund')}</button>
           )}
+          {canMarkNotPaid && (
+            <button type="button" onClick={() => setDialog({ kind: 'notPaid', order: o })} className="h-14 rounded-xl border border-line bg-card px-4 font-semibold">{tr('客人没付就走了', 'Left without paying')}</button>
+          )}
           {canWriteOff && (
             <button type="button" onClick={() => setDialog({ kind: 'writeOff', order: o })} className="h-14 rounded-xl border border-line bg-card px-4 font-semibold">{tr('放弃追收', 'Write off')}</button>
           )}
@@ -381,7 +415,8 @@ export function OrdersPage() {
     const zh: Tr = (z) => z;
     const body = shown.map((o) => [
       o.tokenNumber, o.receiptNumber, o.businessDate, new Date(o.acceptedAtEffectiveMs).toLocaleString('zh-CN', { hour12: false, timeZone: config.timeZone }), SERVICE_MODE_NAMES[o.serviceMode].zh,
-      fulfillLabel(zh, o.fulfillmentStatus), payLabel(zh, o.paymentState), channelLabel(zh, o.paymentMethod) ?? (o.paymentMethod === 'unspecified' ? '人工确认（不分渠道）' : ''),
+      fulfillLabel(zh, o.fulfillmentStatus), payLabel(zh, o.paymentState, o.paymentConfirmationMode),
+      channelLabel(zh, o.paymentMethod) ?? (o.paymentMethod === 'unspecified' ? (o.paymentConfirmationMode === 'auto_on_serve' ? '出餐自动记（不分渠道）' : '人工确认（不分渠道）') : ''),
       o.totalSen, o.items.map((i) => `${itemName(i)}×${i.quantity}`).join(' / '),
     ]);
     download(`订单_${date}.csv`, toCsv([head, ...body]));
@@ -429,8 +464,11 @@ export function OrdersPage() {
       </div>
       <p className="mt-4 flex items-start gap-2 rounded-2xl border border-warn/30 bg-warn-bg px-4 py-3 text-sm text-warn">
         <Icon name="help" size={18} />
-        {tr('下单、出餐、收款是三个独立状态：出餐后餐牌自动释放（同牌还有单在做时继续占用）；收到整单货款后点「确认已收款」。显示或扫描收款码都不算收款，系统也不会自动核对钱包或银行到账。',
-          'Ordering, serving and payment are separate: serving frees the token automatically (unless another order on it is still cooking); tap "Confirm paid" once the full amount is received. Showing or scanning the QR does not count as payment, and nothing is verified with the wallet or bank.')}
+        {payOnServe
+          ? tr('已开「出餐即记收款」：后厨按「完成出餐」时，没收款的单自动记为「出餐已记收款」，送餐时按卡片上的金额收钱；客人先付的，在前台点「确认已收款」。出餐后餐牌自动释放（同牌还有单在做时继续占用）。显示或扫描收款码都不算收款，系统也不会自动核对钱包或银行到账。',
+            'Pay-on-serve is on: when the kitchen taps "Serve", an unpaid order is recorded as paid at serve — collect the amount on the card when serving; if the customer pays first, tap "Confirm paid" at the counter. Serving frees the token (unless another order on it is still cooking). Showing or scanning the QR does not count as payment, and nothing is verified with the wallet or bank.')
+          : tr('下单、出餐、收款是三个独立状态：出餐后餐牌自动释放（同牌还有单在做时继续占用）；收到整单货款后点「确认已收款」。显示或扫描收款码都不算收款，系统也不会自动核对钱包或银行到账。',
+            'Ordering, serving and payment are separate: serving frees the token automatically (unless another order on it is still cooking); tap "Confirm paid" once the full amount is received. Showing or scanning the QR does not count as payment, and nothing is verified with the wallet or bank.')}
       </p>
       {receiptId && config && (
         <ReceiptDialog receiptKey={receiptId} load={() => receiptFromOrder(receiptId, config.name)} menuVersion={config.activeMenuVersion} timeZone={config.timeZone} onClose={() => setReceiptId(null)} />
@@ -529,6 +567,20 @@ function ActionDialog({ dialog, hasOpenExtra, busy, onClose, onRun }: {
             </label>
           </>
         )}
+        {dialog.kind === 'notPaid' && (
+          <>
+            <h2 className="text-xl font-bold">{tr('客人没付就走了', 'Customer left without paying')} · {ident} {formatRM(o.paidSen)}</h2>
+            <p className="mt-1 text-sm text-ink-2">
+              {tr(`把这笔 ${formatRM(o.paidSen)} 收款撤回，并记为「放弃追收」：不算已收、不计实收，日结单独列出。原收款记录保留，追加一笔冲正。之后客人回来付钱，可以在这里「又收到钱 · 恢复待收款」再登记。`,
+                `Reverses this ${formatRM(o.paidSen)} payment and writes it off: not counted as received, listed separately at close. The original record stays and a reversal is added. If the customer comes back to pay, reinstate it here and record the payment.`)}
+            </p>
+            {reasonInput(tr('原因（必填，例如：吃完没付就走了）', 'Reason (required, e.g. left after eating without paying)'))}
+            <label className="mt-3 flex items-center gap-2 font-semibold">
+              <input type="checkbox" className="h-6 w-6" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+              {tr('我已核对，这笔钱确实没收到', 'I checked: this money was not received')}
+            </label>
+          </>
+        )}
         {dialog.kind === 'reinstate' && (
           <>
             <h2 className="text-xl font-bold">{tr('恢复待收款', 'Reinstate as unpaid')} · {ident} {formatRM(o.totalSen)}</h2>
@@ -550,9 +602,11 @@ function ActionDialog({ dialog, hasOpenExtra, busy, onClose, onRun }: {
                 ? onRun('confirmFullRefund', o, { amountSen: o.paidSen - o.refundedSen, reason })
                 : dialog.kind === 'writeOff'
                   ? onRun('writeOffPayment', o, { reason })
-                  : dialog.kind === 'reinstate'
-                    ? onRun('reinstateWrittenOff', o, { reason })
-                    : onRun('reversePayment', o, { reason })}
+                  : dialog.kind === 'notPaid'
+                    ? onRun('markNotPaid', o, { reason })
+                    : dialog.kind === 'reinstate'
+                      ? onRun('reinstateWrittenOff', o, { reason })
+                      : onRun('reversePayment', o, { reason })}
             className="h-14 flex-1 rounded-xl bg-brand font-bold text-white disabled:bg-control">{busy ? tr('处理中…', 'Working…') : tr('确认', 'Confirm')}</button>
         </div>
       </div>

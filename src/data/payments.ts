@@ -7,15 +7,33 @@
  * 二维码显示 / 扫描 / 关闭都不调用这里；只有员工点「确认已收款」才登记。
  */
 import { useCallback } from 'react';
+import { PaidAtServeConflict, paidAtServeConflict } from '../domain/bill';
+import { formatRM } from '../domain/money';
+import { currentLang } from '../app/i18n';
 import { CommandFailure, newOperationId, submit } from './firebase/commands';
 import { useOnline } from './firebase/live';
 import { reasonText } from './firebase/reasons';
 import { appendManualEvent, syncNow, unsyncedEvents, useOfflineRuntime } from './offline/runtime';
 import { useRegister } from './register';
 
+/**
+ * paidAtServe：前台点收款的同时后厨刚好出餐，服务器已按「出餐即记收款」记了这张单（送餐的人可能已经收过钱）。
+ * 这时不是「之前已登记」那么简单：页面要拦下来明说不要再收这一碗，剩下的按刷新后的账单再让员工确认，绝不自动替他收。
+ */
 export type RecordPaymentOutcome =
   | { ok: true; offline: boolean; alreadyRecorded: boolean }
-  | { ok: false; code: string; message: string; uncertain: boolean };
+  | { ok: false; code: string; message: string; uncertain: boolean; paidAtServe?: PaidAtServeConflict };
+
+/** 「9 号刚出餐，已经自动记收款」：牌号缺失时不写号。 */
+export function paidAtServeTitle(c: PaidAtServeConflict): string {
+  if (currentLang() === 'en') return c.tokenNumber !== null ? `Token ${c.tokenNumber} was just served and recorded as paid automatically` : 'Just served and recorded as paid automatically';
+  return c.tokenNumber !== null ? `${c.tokenNumber} 号刚出餐，已经自动记收款` : '这张单刚出餐，已经自动记收款';
+}
+
+function paidAtServeMessage(c: PaidAtServeConflict): string {
+  if (currentLang() === 'en') return `${paidAtServeTitle(c)}. The server may already have collected ${formatRM(c.paidSen)} — do not collect this bowl again.`;
+  return `${paidAtServeTitle(c)}。送餐的人可能已经收过 ${formatRM(c.paidSen)}，不要再收这一碗。`;
+}
 
 /** orderId → 本页尚未得到确定结果的 operationId（超时重试复用，防止重复登记）。 */
 const inflight = new Map<string, { id: string; atMs: number }>();
@@ -70,6 +88,9 @@ export function useRecordPayments() {
       const f = e instanceof CommandFailure ? e : new CommandFailure('unknown', 'UNKNOWN_RESULT', String(e));
       if (f.kind === 'unknown') return { ok: false, code: f.reasonCode, message: `${reasonText(f.reasonCode)}，请勿重复收钱，稍后再点核对`, uncertain: true };
       inflight.delete(key);
+      // 刚被后厨出餐自动记了收款（单张或一组里的某张）：整组都没写。明确拦下，不当作「已登记」悄悄带过。
+      const atServe = f.reasonCode === 'ALREADY_PAID' ? paidAtServeConflict(f.details) : null;
+      if (atServe) return { ok: false, code: 'PAID_AT_SERVE', message: paidAtServeMessage(atServe), uncertain: false, paidAtServe: atServe };
       // 单张：已被另一台设备 / 先前一次请求登记，对员工来说就是「已登记」。
       // 一组里有一张已登记：整组都没写，列表刷新后只剩未登记的单，再确认一次即可。
       if (f.reasonCode === 'ALREADY_PAID' && todo.length === 1) return { ok: true, offline: false, alreadyRecorded: true };

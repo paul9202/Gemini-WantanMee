@@ -22,6 +22,7 @@ const REASONS_EN: Record<string, string> = {
   UNDO_WINDOW_EXPIRED: 'More than 30 seconds — cannot undo',
   TOKEN_REASSIGNED: 'Token already given to a new order — cannot undo; ask the front counter',
   ALREADY_PAID: 'Payment already recorded for this order — do not collect again',
+  PAID_AT_SERVE: 'Just served and recorded as paid automatically — do not collect this bowl again',
   ORDER_CANCELLED: 'Order cancelled — nothing to collect',
   CANCEL_PENDING: 'Cancellation waiting for the kitchen — record payment later',
   AMOUNT_MISMATCH: 'Amount differs from the order total — refresh and check',
@@ -76,6 +77,8 @@ const REASONS: Record<string, string> = {
   UNDO_WINDOW_EXPIRED: '已超过 30 秒，不能撤回',
   TOKEN_REASSIGNED: '餐牌已给了新单，不能撤回；请前台处理',
   ALREADY_PAID: '这张单已经登记收款，请勿重复收钱',
+  // 前端自己的代码：服务器回 ALREADY_PAID 且是出餐时自动记的（送餐的人可能已经收过钱）。
+  PAID_AT_SERVE: '这张单刚出餐，已经自动记收款，不要再收这一碗',
   ORDER_CANCELLED: '订单已取消，无需收款',
   CANCEL_PENDING: '取消申请待后厨确认，暂不能登记收款',
   AMOUNT_MISMATCH: '金额与订单不一致，请刷新后核对',

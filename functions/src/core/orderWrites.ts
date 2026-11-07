@@ -2,6 +2,7 @@
  * 接单的统一写入：订单（无 BOM）、私有成本、厨房投影；收款登记另行写入（writePaymentRegistration）。
  * 在线 createOrder 与离线补同步共用，保证两种来源的字段一致；餐牌、序号、票号由调用方负责。
  * 新订单默认待收款、不产生付款流水；只有旧格式离线日志（下单即收款）才按原渠道写付款。
+ * 厨房投影带售价合计 totalSen 与 paidBeforeServe（不论「出餐即记收款」开关是否打开都写），后厨据此显示要收多少钱。
  * schemaVersion 3：paymentState 可为 unpaid / not_due；旧读取方不得把未付款新单当已付。
  */
 import { Timestamp, Transaction } from 'firebase-admin/firestore';
@@ -11,7 +12,7 @@ import { buildKitchenTicket, KitchenRouting, TimeQuality } from '../../../src/do
 import { lineNameZh, linePhotoId, linePortions } from '../../../src/domain/lineItem';
 import { MenuVersion, orderServiceMode, ServiceMode } from '../../../src/domain/menu';
 import { newAcceptedState } from '../../../src/domain/orderLifecycle';
-import { LegacyPaymentMethod, paymentIdFor } from '../../../src/domain/payment';
+import { ConfirmationMode, LegacyPaymentMethod, paymentIdFor, ReversalCause } from '../../../src/domain/payment';
 import { linePictograms } from '../../../src/domain/pictograms';
 import type { StoreRefs } from './command';
 
@@ -118,7 +119,11 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
       businessDate: a.businessDate, version: life.version, lines: a.lines,
     }),
     kitchenAckAtMs: null,
-    // 厨房只需知道是谁的加单（原餐牌），不含金额。
+    // 后厨卡片写这张单要收多少钱（售价合计，送餐时照着收）；不含成本、单价与付款明细。
+    // paidBeforeServe：出餐前已在收银确认收款 → 卡片显示「已付 · 不用收」。旧格式离线单下单即已收。
+    totalSen: a.totals.totalSen,
+    paidBeforeServe: Boolean(legacy),
+    // 厨房只需知道是谁的加单（原餐牌）。
     addOnTo: a.addOnTo ? { tokenNumber: a.addOnTo.tokenNumber } : null,
     // 同牌加单：后厨据此提示「N 号再加的，和前面 N 号的一起送」。
     sharedToken: a.sharedToken ?? false,
@@ -128,6 +133,23 @@ export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: Accepte
     offlineReceiptNumber: a.offlineReceiptNumber,
   });
   return { paymentId, life };
+}
+
+/** 调用方在写入前读到的厨单：只用来判断要不要在厨单上标「已付 · 不用收」。 */
+export interface TicketPeek {
+  exists: boolean;
+  fulfillmentStatus: string | null;
+}
+
+/** 在事务读取阶段读厨单（写入前调用）。 */
+export async function peekTicket(tx: Transaction, store: StoreRefs, orderId: string): Promise<TicketPeek> {
+  const snap = await tx.get(store.ticket(orderId));
+  return { exists: snap.exists, fulfillmentStatus: (snap.data()?.fulfillmentStatus as string | undefined) ?? null };
+}
+
+/** 厨单还没出餐（排队 / 制作中）：收款或冲正要同步改厨单上的 paidBeforeServe。 */
+export function ticketUnserved(t: TicketPeek | null | undefined): t is TicketPeek {
+  return Boolean(t?.exists) && (t!.fulfillmentStatus === 'queued' || t!.fulfillmentStatus === 'preparing');
 }
 
 export interface PaymentRegistration {
@@ -141,29 +163,92 @@ export interface PaymentRegistration {
   occurredAtMs: number;
   recordedAtMs: number;
   confirmedBy: string;
-  source: 'online' | 'offline';
+  /** serve：后厨出餐自动记的；review：老板核对离线记录时补的。 */
+  source: 'online' | 'offline' | 'serve' | 'review';
+  /** 出餐自动记收款不经收银机，为 null。 */
   registerId: string | null;
   operationId: string | null;
   offlineEventId: string | null;
+  /** 缺省 manual（员工确认收到）；auto_on_serve 只由出餐自动记收款使用。 */
+  confirmationMode?: ConfirmationMode;
+  /** 写入前读到的厨单；出餐前人工确认收款时在厨单上标「已付 · 不用收」。 */
+  ticket?: TicketPeek | null;
 }
 
 /**
- * 收款登记：不分渠道的人工全额确认。确定性 ID（orderId-p{seq}）+ tx.create 保证并发确认只生成一笔。
- * 只改订单的付款字段，不碰制作版本、厨房投影、餐牌与成本。
+ * 收款登记的写入（收款流水 + 厨单标记），返回订单要改的付款字段，由调用方并进它自己那一次订单更新。
+ * 出餐命令自己也要改订单（制作字段），同一事务里只写一次订单，避免后写的覆盖先写的付款字段。
  */
-export function writePaymentRegistration(tx: Transaction, store: StoreRefs, r: PaymentRegistration) {
+export function paymentRegistrationWrites(tx: Transaction, store: StoreRefs, r: PaymentRegistration) {
   const id = paymentIdFor(r.orderId, r.seq);
+  const mode: ConfirmationMode = r.confirmationMode ?? 'manual';
   tx.create(store.payment(id), {
-    id, orderId: r.orderId, kind: 'payment', method: 'unspecified', confirmationMode: 'manual', amountSen: r.amountSen,
+    id, orderId: r.orderId, kind: 'payment', method: 'unspecified', confirmationMode: mode, amountSen: r.amountSen,
     tenderedSen: null, changeSen: null, confirmedBy: r.confirmedBy, businessDate: r.businessDate, orderBusinessDate: r.orderBusinessDate,
     occurredAtMs: r.occurredAtMs, recordedAtMs: r.recordedAtMs, source: r.source, registerId: r.registerId,
     operationId: r.operationId, offlineEventId: r.offlineEventId,
   });
-  tx.update(store.order(r.orderId), {
+  // 出餐前人工确认收款：后厨卡片改显示「已付 · 不用收」，送餐的人不会再收一次。
+  // 自动记收款发生在出餐那一刻，厨单已出餐，不标。
+  if (mode === 'manual' && ticketUnserved(r.ticket)) tx.update(store.ticket(r.orderId), { paidBeforeServe: true });
+  const orderPatch: Record<string, unknown> = {
     paymentState: 'paid', paidSen: r.amountSen, paymentMethod: 'unspecified', paymentSeq: r.seq, paymentId: id,
-    paidAtMs: r.occurredAtMs, paymentBusinessDate: r.businessDate, paymentConfirmedBy: r.confirmedBy, updatedAtMs: r.recordedAtMs,
-  });
+    paidAtMs: r.occurredAtMs, paymentBusinessDate: r.businessDate, paymentConfirmedBy: r.confirmedBy,
+    paymentConfirmationMode: mode,
+    // 只有出餐自动记的收款才记 servePaymentId：撤回出餐时据此判断要不要一起撤回这笔收款。
+    servePaymentId: mode === 'auto_on_serve' ? id : null,
+    updatedAtMs: r.recordedAtMs,
+  };
+  return { id, orderPatch };
+}
+
+/**
+ * 收款登记：不分渠道的全额确认（人工，或开关打开时出餐自动记）。确定性 ID（orderId-p{seq}）+ tx.create 保证并发只生成一笔。
+ * 只改订单的付款字段与厨单的 paidBeforeServe，不碰制作版本、餐牌与成本。
+ */
+export function writePaymentRegistration(tx: Transaction, store: StoreRefs, r: PaymentRegistration) {
+  const { id, orderPatch } = paymentRegistrationWrites(tx, store, r);
+  tx.update(store.order(r.orderId), orderPatch);
   return id;
+}
+
+export interface PaymentReversal {
+  orderId: string;
+  order: Record<string, unknown>;
+  /** 已用过的收款序号（paymentSeqOf）。 */
+  seq: number;
+  cause: ReversalCause;
+  reason: string;
+  actorUid: string;
+  /** 冲正计入的营业日（今天）。 */
+  businessDate: string;
+  nowMs: number;
+  operationId: string;
+  /** 写入前读到的厨单；还没出餐时把「已付 · 不用收」改回要收。 */
+  ticket?: TicketPeek | null;
+}
+
+/**
+ * 收款冲正（误登记更正 / 撤回出餐 / 客人没付就走了）：保留原收款，追加 `{收款ID}-rev` 负数记录（cause 写原因类别），
+ * 返回订单要改的付款字段（paymentState 由调用方决定）。三种冲正写法完全一样，日结按 cause 区分。
+ */
+export function paymentReversalWrites(tx: Transaction, store: StoreRefs, r: PaymentReversal) {
+  const o = r.order;
+  const original = (o.paymentId as string | null | undefined) ?? paymentIdFor(r.orderId, Math.max(r.seq, 1));
+  const reversalId = `${original}-rev`;
+  tx.create(store.payment(reversalId), {
+    id: reversalId, orderId: r.orderId, kind: 'reversal', reversesPaymentId: original, method: o.paymentMethod ?? 'unspecified',
+    amountSen: -(o.paidSen as number), reason: r.reason, cause: r.cause, confirmedBy: r.actorUid, businessDate: r.businessDate,
+    orderBusinessDate: o.businessDate, occurredAtMs: r.nowMs, recordedAtMs: r.nowMs, source: 'online', operationId: r.operationId,
+  });
+  if (ticketUnserved(r.ticket)) tx.update(store.ticket(r.orderId), { paidBeforeServe: false });
+  const orderPatch: Record<string, unknown> = {
+    paidSen: 0, paymentId: null, paymentSeq: Math.max(r.seq, 1), paidAtMs: null, paymentBusinessDate: null,
+    paymentConfirmationMode: null, servePaymentId: null,
+    lastPaymentReversal: { reversalId, reversesPaymentId: original, reason: r.reason, cause: r.cause, by: r.actorUid, atMs: r.nowMs },
+    updatedAtMs: r.nowMs,
+  };
+  return { reversalId, original, orderPatch };
 }
 
 export function receiptNumberFor(businessDate: string, seq: number): string {

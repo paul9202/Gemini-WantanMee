@@ -12,6 +12,7 @@ import { hasNoTomato, LineConfig, lineName } from '../../domain/lineItem';
 import { AddOnId, MenuVersion, NOODLE_TYPE_NAMES, OrderServiceMode, ServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import { formatRM, Sen } from '../../domain/money';
 import type { Fulfillment, PaymentState } from '../../domain/orderLifecycle';
+import type { ConfirmationMode } from '../../domain/payment';
 import { PICTOGRAMS } from '../../domain/pictograms';
 import { TokenBoard, tokenForExtra, tokenSession } from '../../domain/tokens';
 import { db, storePath } from '../../data/firebase/client';
@@ -38,6 +39,9 @@ interface OrderRow {
   serviceMode: OrderServiceMode;
   fulfillmentStatus: Fulfillment;
   paymentState: PaymentState;
+  /** 收款是出餐时自动记的还是前台确认的；旧单没有 = 前台确认。 */
+  paymentConfirmationMode?: ConfirmationMode | null;
+  totalSen: number;
   kitchenCancelRequested?: boolean;
   extraOnly?: boolean;
   businessDate: string;
@@ -209,7 +213,9 @@ export function ExtraSheet({ menu, board, lastIssued, initialOrderId, blockedRea
                       </span>
                     </span>
                     {o.items.map((i) => <span key={i.lineId} className="mt-0.5 block text-sm">{lineName(menu, i, lang)} ×{i.quantity}</span>)}
-                    <span className={`mt-1 block text-sm font-semibold ${o.paymentState === 'paid' ? 'text-ok' : 'text-danger'}`}>{o.paymentState === 'paid' ? tr('已收款', 'Paid') : tr('未收款', 'Unpaid')}</span>
+                    <span className={`mt-1 block text-sm font-semibold ${o.paymentState === 'paid' ? (o.paymentConfirmationMode === 'auto_on_serve' ? 'text-[#2f4f86]' : 'text-ok') : 'text-danger'}`}>
+                      {o.paymentState === 'paid' ? (o.paymentConfirmationMode === 'auto_on_serve' ? tr('出餐已记收款', 'Recorded at serve') : tr('已收款', 'Paid')) : tr('未收款', 'Unpaid')}
+                    </span>
                   </button>
                 </li>
               );
@@ -278,7 +284,10 @@ export function ExtraSheet({ menu, board, lastIssued, initialOrderId, blockedRea
               <div className="flex flex-wrap items-center gap-3">
                 {selected && (
                   <span className="min-w-0 flex-1 text-sm">{selected.paymentState === 'paid'
-                    ? tr('这张单已收款，这份另收', 'This order is already paid — this is charged separately')
+                    // 出餐自动记的不是客人在前台付了：写明是出餐时记的，这份另收多少。
+                    ? (selected.paymentConfirmationMode === 'auto_on_serve'
+                      ? tr(`原单 ${formatRM(selected.totalSen)} 出餐已记收款 · 这份另收${totalSen > 0 ? ` ${formatRM(totalSen)}` : ''}`, `Original ${formatRM(selected.totalSen)} recorded at serve · this is charged separately${totalSen > 0 ? `: ${formatRM(totalSen)}` : ''}`)
+                      : tr('这张单已收款，这份另收', 'This order is already paid — this is charged separately'))
                     : tr('这桌还没收款，这份和原单一起算', 'This table has not paid yet — this is billed together with the order')}</span>
                 )}
                 <button type="button" onClick={() => void send()} disabled={!canSend}

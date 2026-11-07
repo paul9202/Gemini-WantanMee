@@ -14,6 +14,8 @@ export interface StoreConfig {
   activeBomVersion: string;
   activeRegisterId: string | null;
   qrConfigured: boolean;
+  /** 出餐即记收款（老板开关）：缺省关，后厨出餐不碰收款。 */
+  payOnServe: boolean;
 }
 
 export async function loadStoreConfig(tx: Transaction, store: StoreRefs): Promise<StoreConfig> {
@@ -27,6 +29,7 @@ export async function loadStoreConfig(tx: Transaction, store: StoreRefs): Promis
     activeBomVersion: c.activeBomVersion,
     activeRegisterId: c.activeRegisterId ?? null,
     qrConfigured: Boolean(c.qrPayee),
+    payOnServe: c.payOnServe === true,
   };
 }
 

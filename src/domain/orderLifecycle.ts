@@ -1,7 +1,9 @@
 /**
  * 订单制作与收款状态机。制作（fulfillment）、付款（payment）、餐牌、同步分别建模：
  * 下单即送厨（电子单自动进入制作中），收款由前台另行确认；取消制作 ≠ 已退款；
- * 已消耗食材的成本不因退款或取消消失。三件事（下单、出餐、收款）可以任意先后发生，彼此不推断。
+ * 已消耗食材的成本不因退款或取消消失。三件事（下单、出餐、收款）可以任意先后发生；这里的状态机彼此不推断。
+ * 唯一的联动由门店开关决定：老板打开「出餐即记收款」后，命令层在出餐的同一事务里对仍待收款的单调用 registerPayment
+ * 自动记收款（auto_on_serve），30 秒内撤回出餐时一起冲正；开关关着（缺省）时出餐不标已付款。
  * 纯函数只给出新状态与「副作用意图」，由命令层在同一事务里落实。
  */
 
@@ -134,7 +136,7 @@ export function applyLifecycle(s: OrderLifecycleState, cmd: LifecycleCommand, ct
       if (ctx.actorRole !== 'owner' && ctx.actorUid !== s.servedBy) return { ok: false, error: 'FORBIDDEN' };
       if (ctx.nowMs - s.servedAtMs >= UNDO_SERVE_WINDOW_MS) return { ok: false, error: 'UNDO_WINDOW_EXPIRED' };
       if (ctx.dayClosed) return { ok: false, error: 'DAY_CLOSED' };
-      // 原牌已分配给新单：不抢牌，由前台处理。撤回不影响已登记的收款。
+      // 原牌已分配给新单：不抢牌，由前台处理。撤回不影响人工登记的收款（出餐自动记的那笔由命令层一起冲正）。
       if (!ctx.tokenReclaimable) return { ok: false, error: 'TOKEN_REASSIGNED' };
       return next(
         { fulfillmentStatus: s.preServe.status, startedAtMs: s.preServe.startedAtMs, servedAtMs: null, servedBy: null, preServe: null },

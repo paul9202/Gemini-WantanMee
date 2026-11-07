@@ -25,6 +25,11 @@ export interface StoreConfig {
   activeBomVersion: string;
   activeRegisterId: string | null;
   qrPayee: string | null;
+  /**
+   * 出餐即记收款（老板开关）：开了以后后厨按「完成出餐」，没收款的单自动记为已收款。
+   * 旧配置没有这个字段 = 关；前台文案按它切换（关着时照旧要人手确认）。
+   */
+  payOnServe?: boolean;
 }
 
 interface Session {

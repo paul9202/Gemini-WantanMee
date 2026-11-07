@@ -20,6 +20,12 @@ const lifecycle = (f: { storeId: string }, orderId: string, expectedVersion: num
   storeId: f.storeId, operationId: uuid(), orderId, expectedVersion, ...extra,
 });
 
+/** 厨单上只允许 totalSen（售价合计）与 paidBeforeServe 两个金额相关字段；去掉它们后序列化，再查其余字段。 */
+function ticketWithoutSaleTotal(t: Record<string, unknown>): string {
+  const { totalSen: _t, paidBeforeServe: _p, ...rest } = t;
+  return JSON.stringify(rest);
+}
+
 test('§11-1/2/3/4 闭环：下单无付款记录 → 直接制作中 → 后厨回执 → 出餐自动释放牌 → 同牌新单 → 旧单按订单 ID 补登记', async () => {
   const f = await setupStore();
   const lines = [
@@ -52,9 +58,10 @@ test('§11-1/2/3/4 闭环：下单无付款记录 → 直接制作中 → 后厨
   assert.equal((await s('tokens/18').get()).data()!.state, 'held');
   assert.equal((await s('registers/front-01').get()).data()!.lastAppliedSequence, 1);
 
-  // 后厨读取真实网络响应：厨房投影无金额/成本/付款
+  // 后厨读取真实网络响应：厨房投影只有售价合计与「已付不用收」，无单价/成本/付款明细
   const ticketSnap = await getDoc(doc(f.kitchen.db, `stores/${f.storeId}/kitchenTickets/${orderId}`));
-  const raw = JSON.stringify(ticketSnap.data());
+  assert.deepEqual([ticketSnap.data()!.totalSen, ticketSnap.data()!.paidBeforeServe], [2800, false]);
+  const raw = ticketWithoutSaleTotal(ticketSnap.data()!);
   assert.ok(!/Sen"|cost|price|payment|paid|refund|tendered|change/i.test(raw), raw);
   assert.equal(ticketSnap.data()!.fulfillmentStatus, 'preparing');
   assert.equal(ticketSnap.data()!.startedSource, 'auto');
@@ -405,9 +412,14 @@ test('加单：已送厨（已出餐）的单，客人吃完再加打包；新�
   // 同 operationId 重试返回原结果；再登记一次被拒，不会重复收
   assert.equal((await f.cashier.call<{ amountSen: number }>('recordGroupPayment', group(all, op))).amountSen, 2800);
   assert.equal(await f.cashier.code('recordGroupPayment', group(all)), 'ALREADY_PAID');
-  // 原单已收款：不能再挂加单
-  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 8, addOnToOrderId: root.orderId })), 'ADD_ON_NOT_ALLOWED');
-  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 8, addOnToOrderId: uuid() })), 'NOT_FOUND');
+  // 原单已收款：仍可再挂加单（出餐即记收款后，原单多半已记收款）；新单自己待收款，原单不会再收一次
+  const late = (await placeOrder(f, { tokenNumber: 8, addOnToOrderId: root.orderId })).result;
+  assert.deepEqual([late.addOnToOrderId, late.paymentState], [root.orderId, 'unpaid']);
+  assert.equal((await s(`orders/${late.orderId}`).get()).data()!.addOnTo.orderId, root.orderId);
+  assert.equal(await f.cashier.code('recordGroupPayment', group([all[0], { orderId: late.orderId, amountSen: 700 }])), 'ALREADY_PAID', '整组不写，原单不再收');
+  assert.equal((await s(`orders/${late.orderId}`).get()).data()!.paymentState, 'unpaid');
+  await pay(f, late.orderId, 700);
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 9, addOnToOrderId: uuid() })), 'NOT_FOUND');
 });
 
 test('同牌加单：拿着 5 号牌再点一碗挂到同一张牌；各自厨单与票号；逐张出餐、全部出餐才释放；撤回可挂回；与原单一次结账', async () => {
@@ -458,9 +470,11 @@ test('同牌加单边界：原单已收款也并账、新单仍可自己收；�
   assert.deepEqual([d.sharedToken, d.addOnToOrderId], [true, c.orderId]);
   assert.equal((await s(`orders/${d.orderId}`).get()).data()!.addOnTo.orderId, c.orderId);
   assert.deepEqual((await s('tokens/06').get()).data()!.orderIds, [c.orderId, d.orderId]);
-  // 显式指定已收款的原单仍被拒：只有同牌自动并账才能以已收款的单为组长
-  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 6, joinTokenOrderId: c.orderId, addOnToOrderId: c.orderId })), 'ADD_ON_NOT_ALLOWED');
+  // 显式指定已收款的原单也可以（出餐即记收款后原单多半已记收款）：新单自己待收款，原单不会再收
+  const explicit = (await placeOrder(f, { tokenNumber: 6, joinTokenOrderId: c.orderId, addOnToOrderId: c.orderId })).result;
+  assert.deepEqual([explicit.sharedToken, explicit.addOnToOrderId, explicit.paymentState], [true, c.orderId, 'unpaid']);
   await pay(f, d.orderId, 700);
+  await pay(f, explicit.orderId, 700);
   assert.equal(await countDocs(f.storeId, 'payments', 'orderId', c.orderId), 1, '原单不会再收一次');
 
   // 取消其中一张：牌继续由另一张占着
@@ -838,7 +852,8 @@ test('下单后加料：还在做的那碗——挂在同一张牌、排在那�
   assert.deepEqual(ticket.addOnTo, { tokenNumber: 5 });
   const line = ticket.lines[0];
   assert.deepEqual([line.productKind, line.sauce, line.nameZh, line.photoId, line.note, line.wantonCount], ['dry_wanton', null, '加叉烧', 'ingredient.char_siew', note, 0]);
-  assert.ok(!/Sen"|cost|price|payment|paid|refund|tendered|change/i.test(JSON.stringify(ticket)), '厨单没有金额');
+  assert.deepEqual([ticket.totalSen, ticket.paidBeforeServe], [200, false], '厨单只写这张小单的售价合计');
+  assert.ok(!/Sen"|cost|price|payment|paid|refund|tendered|change/i.test(ticketWithoutSaleTotal(ticket)), '厨单没有单价、成本、付款明细');
   assert.ok(ticket.acceptedAtEffectiveMs > (await docOf(f, `kitchenTickets/${later}`)).acceptedAtEffectiveMs, '接单时间不改');
   const queue = arrangeKitchen([ticket, aTicket, await docOf(f, `kitchenTickets/${later}`)] as KitchenTicket[]);
   assert.deepEqual(queue.map((g) => g.tickets.map((t) => t.orderId)), [[a, x.orderId], [later]], '排在后来的客人前面');

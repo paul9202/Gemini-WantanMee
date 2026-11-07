@@ -7,19 +7,21 @@
  *   （事务内检查 paymentState + 确定性收款 ID）。
  * - recordGroupPayment：原单与它的加单（客人吃完再加打包）一次结账。同一事务逐单检查并逐单写收款，
  *   任何一单不能登记就整组都不登记；每单仍有自己的收款记录，更正 / 报表照旧按订单。
- * - reversePayment：老板更正误登记。保留原收款，追加负数调整，订单回到待收款；不是退款，不重新送厨。
+ * - reversePayment：老板更正误登记。保留原收款，追加负数调整（cause=correction），订单回到待收款；不是退款，不重新送厨。
+ * - markNotPaid：客人没付就走了（多为出餐自动记的收款）。冲正（cause=not_paid）+ 放弃追收，一次完成。
  * - writeOffPayment / reinstateWrittenOff：老板放弃追收 / 之后又收到钱时恢复待收款。
+ * 出餐前人工确认收款时，同一事务在厨单标 paidBeforeServe（后厨显示「已付 · 不用收」）；出餐前冲正则改回。
+ * 已收款被拒（ALREADY_PAID）时带上这笔是前台确认还是出餐自动记的，前台据此提醒不要再收。
  */
 import { Firestore } from 'firebase-admin/firestore';
 import { businessDateOf } from '../../../src/domain/businessDay';
 import {
   OrderLifecycleState, PaymentError, registerPayment, reinstateWrittenOff as reinstateRule, reversePayment as reverseRule, writeOffUnpaid as writeOffRule,
 } from '../../../src/domain/orderLifecycle';
-import { paymentIdFor } from '../../../src/domain/payment';
 import { runCommand } from '../core/command';
 import { CommandError, ReasonCode } from '../core/errors';
 import { bad, int, obj, str, storeId, uuid } from '../core/input';
-import { writePaymentRegistration } from '../core/orderWrites';
+import { paymentReversalWrites, peekTicket, writePaymentRegistration } from '../core/orderWrites';
 import { loadStoreConfig, markDayActivity, parseRegisterClaim, REGISTER_CLAIM_FIELDS, requireActiveRegister, requireDayOpen } from '../core/store';
 
 const PAYMENT_ERROR: Record<PaymentError, ReasonCode> = {
@@ -36,6 +38,17 @@ export function paymentStateOf(order: Record<string, unknown>): OrderLifecycleSt
     servedBy: (order.servedBy as string | null) ?? null, preServe: (order.preServe as OrderLifecycleState['preServe']) ?? null,
     costAllocated: order.costAllocated !== false, version: order.version as number,
   } as OrderLifecycleState;
+}
+
+/**
+ * ALREADY_PAID 的补充说明：这笔是前台确认的还是出餐自动记的（旧单没有字段 = manual），
+ * 前台据此提示「刚出餐，已经自动记收款，不要再收这一碗」。
+ */
+function alreadyPaidDetails(orderId: string, order: Record<string, unknown>) {
+  return {
+    orderId, tokenNumber: (order.tokenNumber as number | undefined) ?? null,
+    confirmationMode: (order.paymentConfirmationMode as string | null | undefined) ?? 'manual', paidSen: (order.paidSen as number | undefined) ?? 0,
+  };
 }
 
 /** 已用过的收款序号。旧订单（schemaVersion ≤ 2）没有 paymentSeq，但下单时已写过 p1。 */
@@ -71,12 +84,14 @@ export async function recordPayment(db: Firestore, uid: string | undefined, raw:
       if (!orderSnap.exists || !order) throw new CommandError('NOT_FOUND', '订单不存在');
       const businessDate = businessDateOf(nowMs, config.businessDay);
       const day = await requireDayOpen(tx, store, businessDate);
+      const ticket = await peekTicket(tx, store, input.orderId);
 
       // ---- 校验 ----
       const r = registerPayment(paymentStateOf(order), { amountSen: input.amountSen, orderTotalSen: order.totalSen as number });
       if (!r.ok) {
         throw new CommandError(PAYMENT_ERROR[r.error], r.error, {
           paymentState: order.paymentState, paidAtMs: order.paidAtMs ?? null, totalSen: order.totalSen,
+          ...(r.error === 'ALREADY_PAID' ? alreadyPaidDetails(input.orderId, order) : {}),
         });
       }
 
@@ -85,7 +100,7 @@ export async function recordPayment(db: Firestore, uid: string | undefined, raw:
       const paymentId = writePaymentRegistration(tx, store, {
         orderId: input.orderId, seq, amountSen: input.amountSen, businessDate, orderBusinessDate: order.businessDate as string,
         occurredAtMs: nowMs, recordedAtMs: nowMs, confirmedBy: actor.uid, source: 'online', registerId: input.claim.registerId,
-        operationId: input.operationId, offlineEventId: null,
+        operationId: input.operationId, offlineEventId: null, ticket,
       });
       markDayActivity(tx, store, businessDate, day, nowMs);
       const result: RecordPaymentResult = {
@@ -137,27 +152,30 @@ export async function recordGroupPayment(db: Firestore, uid: string | undefined,
       }
       const businessDate = businessDateOf(nowMs, config.businessDay);
       const day = await requireDayOpen(tx, store, businessDate);
+      const tickets = await Promise.all(input.orders.map((x) => peekTicket(tx, store, x.orderId)));
 
       // ---- 校验（全部通过才写） ----
       // 只能是同一组：原单与挂在它上面的加单。
       const roots = new Set(docs.map((d) => (d.order.addOnTo as { orderId: string } | null | undefined)?.orderId ?? d.orderId));
       if (roots.size !== 1) throw bad('只能合并结账同一张原单与它的加单');
-      for (const d of docs) {
-        const r = registerPayment(paymentStateOf(d.order), { amountSen: d.amountSen, orderTotalSen: d.order.totalSen as number });
-        if (!r.ok) {
-          throw new CommandError(PAYMENT_ERROR[r.error], r.error, {
-            orderId: d.orderId, paymentState: d.order.paymentState, paidAtMs: d.order.paidAtMs ?? null, totalSen: d.order.totalSen,
-          });
-        }
+      const checks = docs.map((d) => ({ d, r: registerPayment(paymentStateOf(d.order), { amountSen: d.amountSen, orderTotalSen: d.order.totalSen as number }) }));
+      // 已收款优先报：多半是后厨刚出餐自动记了收款，前台要据此提醒「不要再收这一碗」。
+      const failed = checks.find((c) => !c.r.ok && c.r.error === 'ALREADY_PAID') ?? checks.find((c) => !c.r.ok);
+      if (failed && !failed.r.ok) {
+        const { d, r } = failed;
+        throw new CommandError(PAYMENT_ERROR[r.error], r.error, {
+          orderId: d.orderId, paymentState: d.order.paymentState, paidAtMs: d.order.paidAtMs ?? null, totalSen: d.order.totalSen,
+          ...(r.error === 'ALREADY_PAID' ? alreadyPaidDetails(d.orderId, d.order) : {}),
+        });
       }
 
       // ---- 写入 ----
-      const paid = docs.map((d) => ({
+      const paid = docs.map((d, i) => ({
         orderId: d.orderId, amountSen: d.amountSen,
         paymentId: writePaymentRegistration(tx, store, {
           orderId: d.orderId, seq: paymentSeqOf(d.order) + 1, amountSen: d.amountSen, businessDate, orderBusinessDate: d.order.businessDate as string,
           occurredAtMs: nowMs, recordedAtMs: nowMs, confirmedBy: actor.uid, source: 'online', registerId: input.claim.registerId,
-          operationId: input.operationId, offlineEventId: null,
+          operationId: input.operationId, offlineEventId: null, ticket: tickets[i],
         }),
       }));
       markDayActivity(tx, store, businessDate, day, nowMs);
@@ -181,24 +199,78 @@ export async function reversePayment(db: Firestore, uid: string | undefined, raw
       if (!order) throw new CommandError('NOT_FOUND', '订单不存在');
       const businessDate = businessDateOf(nowMs, config.businessDay);
       const day = await requireDayOpen(tx, store, businessDate);
+      const ticket = await peekTicket(tx, store, input.orderId);
       const r = reverseRule(paymentStateOf(order));
       if (!r.ok) throw new CommandError(PAYMENT_ERROR[r.error], r.error);
-      const seq = paymentSeqOf(order);
-      const original = (order.paymentId as string | null | undefined) ?? paymentIdFor(input.orderId, Math.max(seq, 1));
-      const reversalId = `${original}-rev`;
-      tx.create(store.payment(reversalId), {
-        id: reversalId, orderId: input.orderId, kind: 'reversal', reversesPaymentId: original, method: order.paymentMethod ?? 'unspecified',
-        amountSen: -(order.paidSen as number), reason: input.reason, confirmedBy: actor.uid, businessDate,
-        orderBusinessDate: order.businessDate, occurredAtMs: nowMs, recordedAtMs: nowMs, source: 'online', operationId: input.operationId,
+      // 误登记更正（cause=correction）：出餐前更正的，后厨卡片改回要收钱。
+      const { reversalId, orderPatch } = paymentReversalWrites(tx, store, {
+        orderId: input.orderId, order, seq: paymentSeqOf(order), cause: 'correction', reason: input.reason, actorUid: actor.uid,
+        businessDate, nowMs, operationId: input.operationId, ticket,
       });
-      tx.update(store.order(input.orderId), {
-        paymentState: r.state.paymentState, paidSen: 0, paymentId: null, paymentSeq: Math.max(seq, 1), paidAtMs: null, paymentBusinessDate: null,
-        lastPaymentReversal: { reversalId, reversesPaymentId: original, reason: input.reason, by: actor.uid, atMs: nowMs }, updatedAtMs: nowMs,
-      });
+      tx.update(store.order(input.orderId), { ...orderPatch, paymentState: r.state.paymentState });
       markDayActivity(tx, store, businessDate, day, nowMs);
       return {
         result: { orderId: input.orderId, reversalId, paymentState: r.state.paymentState },
         audit: { entityId: input.orderId, before: { paymentState: order.paymentState, paidSen: order.paidSen }, after: { paymentState: r.state.paymentState, reason: input.reason } },
+      };
+    },
+  });
+}
+
+/**
+ * 客人没付就走了（老板）：已记收款的单（多为出餐自动记的）其实没收到钱。一次操作、同一事务里
+ * 先冲正这笔收款（`-rev`，cause=not_paid），再按放弃追收记一条 write_off，订单最后是 written_off。
+ * 与先「更正收款」再「放弃追收」两步的结果相同；只有一条 operation / 审计。已退款、已取消的单不行。
+ */
+export async function markNotPaid(db: Firestore, uid: string | undefined, raw: unknown) {
+  const o = obj(raw, ['storeId', 'operationId', 'orderId', 'reason']);
+  const input = { storeId: storeId(o), operationId: uuid(o, 'operationId'), orderId: uuid(o, 'orderId'), reason: str(o, 'reason', 200, 2) };
+  return runCommand(db, {
+    type: 'markNotPaid', storeId: input.storeId, operationId: input.operationId, uid, roles: ['owner'], payload: input,
+    run: async ({ tx, store, nowMs, actor }) => {
+      // ---- 读取 ----
+      const config = await loadStoreConfig(tx, store);
+      const order = (await tx.get(store.order(input.orderId))).data();
+      if (!order) throw new CommandError('NOT_FOUND', '订单不存在');
+      const businessDate = businessDateOf(nowMs, config.businessDay);
+      const day = await requireDayOpen(tx, store, businessDate);
+      const ticket = await peekTicket(tx, store, input.orderId);
+
+      // ---- 校验：只限已付款、没退过款、没取消的单 ----
+      const state = paymentStateOf(order);
+      if (state.fulfillmentStatus === 'cancelled') throw new CommandError('ORDER_CANCELLED');
+      if (state.paymentState !== 'paid') throw new CommandError('NOT_PAID');
+      if (state.refundedSen > 0) throw new CommandError('ALREADY_REFUNDED');
+      const rev = reverseRule(state);
+      if (!rev.ok) throw new CommandError(PAYMENT_ERROR[rev.error], rev.error);
+      const wo = writeOffRule(rev.state);
+      if (!wo.ok) throw new CommandError(PAYMENT_ERROR[wo.error], wo.error);
+
+      // ---- 写入 ----
+      const { reversalId, original, orderPatch } = paymentReversalWrites(tx, store, {
+        orderId: input.orderId, order, seq: paymentSeqOf(order), cause: 'not_paid', reason: input.reason, actorUid: actor.uid,
+        businessDate, nowMs, operationId: input.operationId, ticket,
+      });
+      // 放弃追收记录与 writeOffPayment 完全一样（金额 = 整单金额），日结照旧列入「未收回金额」。
+      const n = ((order.writeOffSeq as number | undefined) ?? 0) + 1;
+      const writeOffId = `${input.orderId}-w${n}`;
+      tx.create(store.writeOff(writeOffId), {
+        id: writeOffId, orderId: input.orderId, kind: 'write_off', amountSen: order.totalSen, reason: input.reason, recordedBy: actor.uid,
+        businessDate, orderBusinessDate: order.businessDate, occurredAtMs: nowMs, operationId: input.operationId,
+      });
+      tx.update(store.order(input.orderId), {
+        ...orderPatch,
+        paymentState: 'written_off', writeOffSeq: n,
+        writeOff: { id: writeOffId, amountSen: order.totalSen, reason: input.reason, by: actor.uid, atMs: nowMs, businessDate },
+      });
+      markDayActivity(tx, store, businessDate, day, nowMs);
+      return {
+        result: { orderId: input.orderId, paymentState: 'written_off' as const, reversalId, writeOffId, amountSen: order.totalSen as number, businessDate },
+        audit: {
+          entityId: input.orderId,
+          before: { paymentState: order.paymentState, paidSen: order.paidSen, paymentConfirmationMode: order.paymentConfirmationMode ?? 'manual', paymentId: original },
+          after: { paymentState: 'written_off', reversalId, writeOffId, reason: input.reason },
+        },
       };
     },
   });

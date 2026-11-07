@@ -1,5 +1,5 @@
 /**
- * 老板设置：成员（邀请 / 改岗位 / 停用）、菜单价格与售罄、单位成本（BOM）。
+ * 老板设置：成员（邀请 / 改岗位 / 停用）、「出餐即记收款」开关、菜单价格与售罄、单位成本（BOM）。
  * 价格与成本每次保存都发布一个新的不可变版本；旧版本保留给历史订单与离线单核对。
  */
 import { useEffect, useState } from 'react';
@@ -41,6 +41,7 @@ export function SettingsPage() {
       <h1 className="text-2xl font-bold">设置</h1>
       {msg && <p role={msg.ok ? 'status' : 'alert'} className={`rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>{msg.text}</p>}
       <Members setMsg={setMsg} />
+      <PayOnServeSwitch setMsg={setMsg} />
       <MenuEditor setMsg={setMsg} />
       <BomEditor setMsg={setMsg} />
       <GoLiveReset setMsg={setMsg} />
@@ -118,6 +119,56 @@ function Members({ setMsg }: { setMsg: (m: Msg) => void }) {
           <p className="mt-1 text-ink-2">停用成员会立即让该账号失去权限。</p>
         </div>
       )}
+    </Section>
+  );
+}
+
+// ---------- 出餐即记收款 ----------
+
+/**
+ * 门店开关（config/public.payOnServe，缺省 = 关）：开了以后后厨按「完成出餐」，没收款的单自动记为已收款。
+ * 打开前要所有平板都已更新（旧版后厨不会显示金额），所以打开多问一句；关掉随时可以，不用确认。
+ * 状态读会话里实时订阅的门店配置，别的设备改了这里也跟着变。
+ */
+function PayOnServeSwitch({ setMsg }: { setMsg: (m: Msg) => void }) {
+  const { config } = useSession();
+  const on = config?.payOnServe === true;
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function set(enabled: boolean) {
+    setBusy(true);
+    const r = await run<{ enabled: boolean }>('setPayOnServe', { enabled, reason: enabled ? '老板打开出餐即记收款' : '老板关闭出餐即记收款' }, setMsg);
+    setBusy(false);
+    setAsking(false);
+    if (r) setMsg({ ok: true, text: r.enabled ? '已打开「出餐即记收款」：之后后厨出餐时，没收款的单自动记为已收款。' : '已关闭「出餐即记收款」：回到以前，收到钱要人手确认。' });
+  }
+
+  return (
+    <Section title="收款方式" hint="出餐即记收款">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3">
+        <div className="min-w-[220px] flex-1">
+          <b>出餐即记收款</b>
+          <span className="block text-sm text-ink-2">后厨按「完成出餐」时，没收款的单自动记为已收款。关掉就回到以前：要人手确认。</span>
+        </div>
+        <span className={`rounded-lg px-2 py-1 text-sm font-semibold ${on ? 'bg-ok-bg text-ok' : 'bg-subtle text-ink-2'}`}>{config ? (on ? '已打开' : '已关闭') : '载入中…'}</span>
+        <button type="button" role="switch" aria-checked={on} aria-label="出餐即记收款" disabled={busy || !config}
+          onClick={() => (on ? void set(false) : setAsking(true))}
+          className={`relative h-10 w-[68px] shrink-0 rounded-full transition-colors disabled:opacity-50 ${on ? 'bg-ok' : 'bg-control'}`}>
+          <span className={`absolute top-1 h-8 w-8 rounded-full bg-white shadow transition-all ${on ? 'right-1' : 'left-1'}`} />
+        </button>
+      </div>
+      {asking && !on && (
+        <div role="alert" className="mt-2 rounded-xl border-2 border-warn bg-warn-bg p-3 text-sm text-warn">
+          <b>所有平板（收银、后厨）都已经更新到最新版了吗？</b>
+          <p className="mt-1">打开后，后厨按「完成出餐」就会自动记收款；客人先付的，收银一定要点「确认已收款」，否则后厨会显示要收钱。</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button type="button" disabled={busy} onClick={() => void set(true)} className="h-11 rounded-lg bg-brand px-4 font-bold text-white disabled:bg-control">{busy ? '正在保存…' : '都更新了，打开'}</button>
+            <button type="button" disabled={busy} onClick={() => setAsking(false)} className="h-11 rounded-lg border border-control bg-card px-4 font-semibold text-ink">先不打开</button>
+          </div>
+        </div>
+      )}
+      <p className="mt-2 text-xs text-ink-2">上线时先保持关着，等所有平板都更新好再打开；以后有需要也能随时关掉。更新前已经出餐、还挂着未收款的旧单不会自动改，留在「待登记收款」里确认一次就清掉。</p>
     </Section>
   );
 }

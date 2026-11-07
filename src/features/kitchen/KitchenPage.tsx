@@ -9,13 +9,20 @@
  * 同牌加单：同一张餐牌可挂多单。加单排在同桌原位，同桌的单放进一个粗框，可逐张或「全部出餐」（30 秒内可全部撤回）；
  * 顶部横幅提醒还没点「知道了」的加单，提示音最多响 3 次；旧单没有排队字段，不进框，卡片上标出同牌还有几单。出餐 / 撤回提示带票号区分。
  * 下单后加料（extraOnly）：一张小卡，只写加什么、给哪一碗，不按面种排版；排在那碗的位置，同组就进同一个框。卡上的送法横幅按同组还有没有没出的碗实时算，不存状态。提醒和提示音同加单。
- * 不显示售价、付款金额或付款状态（厨房投影本身不含这些字段）；厨房按钮只负责出餐，不确认收款。
+ * 金额（出餐即记收款 2026-11-07）：卡片在牌号旁大字写这张单要收多少（送餐时照着收）；出餐前已在前台付了的写「已付 · 不用收」；
+ * 更新前就在排队的旧单没有金额，写「RM —」照旧问收银。同牌框上只写一个「合计」（不写「共收」），卡里改小字，避免两边相加；
+ * 加料有自己的卡和金额，碗卡不重复写（框上的合计已含加料）。金额只从厨单 totalSen / paidBeforeServe 计算，没有单价、成本、付款方式。
+ * 老板开了「出餐即记收款」时，按「完成出餐」由服务器顺带记收款；底部提示条写服务器实际记下的金额（autoPaidSen），30 秒内撤回出餐，收款一起撤回。
+ * 开关关着时服务器不记收款、返回 0，提示条只说已出餐。后厨没有单独的「确认收款」按钮。
  * 后厨路由没有 Shell：在本页提供更新入口；打开期间保持屏幕常亮。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, disableNetwork, enableNetwork, query, where } from 'firebase/firestore';
 import { businessDateOf } from '../../domain/businessDay';
-import { arrangeKitchen, formatNoodleBalls, KitchenLine, kitchenLineMode, KitchenTicket, sortFifo, summarizeKitchen } from '../../domain/kitchen';
+import {
+  arrangeKitchen, formatNoodleBalls, kitchenAmount, kitchenFrameTotal, KitchenLine, kitchenLineMode, kitchenRM, kitchenSenPlain, KitchenTicket,
+  sortFifo, summarizeKitchen,
+} from '../../domain/kitchen';
 import { formatClock, kitchenUrgency } from '../../domain/timing';
 import { UNDO_SERVE_WINDOW_MS } from '../../domain/orderLifecycle';
 import { db, storePath } from '../../data/firebase/client';
@@ -39,7 +46,13 @@ type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cance
 // 不再提供 startOrder：新单接单即制作中，旧 queued 单也直接出餐。撤回走 undoServed。
 type Action = 'serveOrder' | 'confirmKitchenCancel' | 'rejectKitchenCancel';
 type ActExtra = { consumed?: boolean; reason?: string };
-type UndoItem = { orderId: string; token: number; receipt: string | null; version: number };
+/** autoPaidSen：服务器出餐时实际记下的收款（开关关着、已付或当天已结账时为 0）。 */
+type UndoItem = { orderId: string; token: number; receipt: string | null; version: number; autoPaidSen: number };
+/** 出餐 / 撤回的返回：旧版服务器没有金额字段，按 0 处理。 */
+type ServeResult = { version: number; autoPaidSen?: number };
+type UndoResult = { version: number; autoPaymentReversedSen?: number };
+const senOf = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : 0);
+const sumAutoPaid = (items: UndoItem[]) => items.reduce((s, i) => s + i.autoPaidSen, 0);
 /** 拒绝取消的可选简短原因。 */
 const REJECT_REASONS: [string, string][] = [['已送餐，顾客仍要', 'Already served, customer keeps it'], ['顾客改主意，仍要', 'Customer changed mind, keeps it']];
 type TicketRef = { id: string; version: number; tokenNumber: number; receiptNumber?: string | null };
@@ -59,6 +72,13 @@ export function KitchenPage() {
   );
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // 不是错误的提示（例如「已撤回出餐和收款」），几秒后自动收起。
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [notice]);
   // 全部出餐一次可撤回多张；servedAt 取最早一张的时间，倒计时不会超过任何一张的撤回时限。
   const [undo, setUndo] = useState<{ items: UndoItem[]; servedAt: number } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
@@ -119,9 +139,12 @@ export function KitchenPage() {
     if (name === 'confirmKitchenCancel' && typeof extra.consumed !== 'boolean') return; // 服务器要求明确 consumed
     setBusyId(t.id);
     setMessage(null);
+    setNotice(null);
     try {
-      const r = await submit<{ version: number }>(name, { operationId: newOperationId(), orderId: t.id, expectedVersion: t.version, ...extra });
-      if (name === 'serveOrder') setUndo({ items: [{ orderId: t.id, token: t.tokenNumber, receipt: t.receiptNumber ?? null, version: r.version }], servedAt: Date.now() });
+      const r = await submit<ServeResult>(name, { operationId: newOperationId(), orderId: t.id, expectedVersion: t.version, ...extra });
+      if (name === 'serveOrder') {
+        setUndo({ items: [{ orderId: t.id, token: t.tokenNumber, receipt: t.receiptNumber ?? null, version: r.version, autoPaidSen: senOf(r.autoPaidSen) }], servedAt: Date.now() });
+      }
     } catch (e) {
       setMessage(failureText(e));
     } finally {
@@ -135,16 +158,21 @@ export function KitchenPage() {
     const served: UndoItem[] = [];
     let servedAt = 0;
     setMessage(null);
+    setNotice(null);
     try {
       for (const t of group.filter((x) => !x.kitchenCancelRequested)) {
         setBusyId(t.id);
-        const r = await submit<{ version: number }>('serveOrder', { operationId: newOperationId(), orderId: t.id, expectedVersion: t.version });
+        const r = await submit<ServeResult>('serveOrder', { operationId: newOperationId(), orderId: t.id, expectedVersion: t.version });
         servedAt ||= Date.now();
-        served.push({ orderId: t.id, token: t.tokenNumber, receipt: t.receiptNumber ?? null, version: r.version });
+        served.push({ orderId: t.id, token: t.tokenNumber, receipt: t.receiptNumber ?? null, version: r.version, autoPaidSen: senOf(r.autoPaidSen) });
       }
     } catch (e) {
       const reason = failureText(e);
-      setMessage(served.length ? tr(`已出餐 ${served.length} 张，其余没有出餐：${reason}`, `${served.length} served, the rest were not: ${reason}`) : reason);
+      // 只写服务器真正记下的金额：送餐的人据此知道已出的几张记了多少，没出的照卡片另收。
+      const paid = sumAutoPaid(served);
+      const paidZh = paid > 0 ? `（已记收款 ${kitchenRM(paid)}）` : '';
+      const paidEn = paid > 0 ? ` (${kitchenRM(paid)} recorded as paid)` : '';
+      setMessage(served.length ? tr(`已出餐 ${served.length} 张${paidZh}，其余没有出餐：${reason}`, `${served.length} served${paidEn}, the rest were not: ${reason}`) : reason);
     } finally {
       if (served.length) setUndo({ items: served, servedAt });
       setBusyId(null);
@@ -155,18 +183,25 @@ export function KitchenPage() {
   async function undoServed() {
     if (busyId || !undo) return;
     let done = 0;
+    let reversed = 0;
     setMessage(null);
+    setNotice(null);
     try {
       for (const item of undo.items) {
         setBusyId(item.orderId);
-        await submit<{ version: number }>('undoServe', { operationId: newOperationId(), orderId: item.orderId, expectedVersion: item.version });
+        const r = await submit<UndoResult>('undoServe', { operationId: newOperationId(), orderId: item.orderId, expectedVersion: item.version });
+        reversed += senOf(r.autoPaymentReversedSen);
         done++;
       }
       setUndo(null);
+      // 收款跟着撤回时明确说一声：单回到「未收款」，送餐时照卡片收。
+      if (reversed > 0) setNotice(tr(`已撤回出餐和收款 · ${kitchenRM(reversed)}`, `Serve and payment undone · ${kitchenRM(reversed)}`));
     } catch (e) {
       // 撤回失败（含 TOKEN_REASSIGNED：餐牌已给新单）只显示原因，不尝试换牌；换牌只能由前台/老板明确执行。
       const reason = failureText(e);
-      setMessage(done ? tr(`已撤回 ${done} 张，其余没有撤回：${reason}`, `${done} undone, the rest were not: ${reason}`) : reason);
+      const revZh = reversed > 0 ? `（收款也已撤回 ${kitchenRM(reversed)}）` : '';
+      const revEn = reversed > 0 ? ` (payment ${kitchenRM(reversed)} undone too)` : '';
+      setMessage(done ? tr(`已撤回 ${done} 张${revZh}，其余没有撤回：${reason}`, `${done} undone${revEn}, the rest were not: ${reason}`) : reason);
       setUndo(undo.items.length > 1 ? { ...undo, items: undo.items.slice(done) } : null);
     } finally {
       setBusyId(null);
@@ -292,30 +327,37 @@ export function KitchenPage() {
       </section>
 
       {message && <div role="alert" className="mx-4 mt-4 rounded-xl bg-kds-danger-bg px-4 py-3 text-lg text-kds-danger sm:mx-7">{message}</div>}
+      {notice && <div role="status" className="mx-4 mt-4 rounded-xl bg-kds-soft px-4 py-3 text-lg font-bold sm:mx-7">{notice}</div>}
 
       <section className="min-w-0 flex-1 px-4 py-5 sm:px-7" aria-label={tr('制作中 / 待出餐', 'Cooking / to serve')}>
         <SectionHead title={tr('制作中 / 待出餐', 'Cooking / to serve')} count={working.length} hint={tr('先来的桌在前 · 做好点完成出餐', 'Earliest table first · tap Served when done')} />
         {q.loading && <p className="text-kds-muted">{tr('正在载入厨单…', 'Loading tickets…')}</p>}
         {!q.loading && working.length === 0 && <Empty text={tr('暂无要做的单', 'Nothing to cook')} />}
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {/* min-w-0：卡片内容再长也只在卡内换行，不撑破网格（1280 宽三栏、960 宽两栏）。 */}
+        <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3 [&>*]:min-w-0">
           {groups.map((g) => {
             const cardProps = { now, today: date, disabled: stale || busyId !== null, onAct: act, openIds: queuedIds };
+            // 碗卡不再补「＋加料」：加料有自己的卡、自己的金额（还没出的碗和它的加料总在同一个框，框上合计已含）。
+            // 两处都写同一笔，送餐的人会收两次；出餐时也只各记各的。
+            const extrasOf = (_t: Ticket): Extras => NO_EXTRAS;
             if (g.tickets.length === 1) {
               const t = g.tickets[0];
-              return <TicketCard key={t.id} anchorId={`kds-group-${g.key}`} t={t} sameToken={tokenCounts.get(t.tokenNumber) ?? 1} busy={busyId === t.id} {...cardProps} />;
+              return <TicketCard key={t.id} anchorId={`kds-group-${g.key}`} t={t} sameToken={tokenCounts.get(t.tokenNumber) ?? 1} busy={busyId === t.id} extras={extrasOf(t)} {...cardProps} />;
             }
             const servable = g.tickets.filter((t) => !t.kitchenCancelRequested).length;
             return (
               <section key={g.key} id={`kds-group-${g.key}`} className="flex scroll-mt-28 flex-col gap-3 rounded-3xl border-4 border-kds-action p-2 sm:p-3" aria-label={tr(`${g.tickets[0].tokenNumber}号同牌`, `No. ${g.tickets[0].tokenNumber} together`)}>
+                {/* 标题单独一行，合计和「全部出餐」在下一行：窄栏里也不会挤爆。 */}
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-1">
-                  <b className="min-w-0 flex-1 text-xl">{tr(`${g.tickets[0].tokenNumber} 号 · 同牌 ${g.tickets.length} 张 · 一起送`, `No. ${g.tickets[0].tokenNumber} · ${g.tickets.length} tickets · serve together`)}</b>
+                  <b className="w-full min-w-0 text-xl leading-tight">{tr(`${g.tickets[0].tokenNumber} 号 · 同牌 ${g.tickets.length} 张 · 一起送`, `No. ${g.tickets[0].tokenNumber} · ${g.tickets.length} tickets · serve together`)}</b>
+                  <FrameTotal tickets={g.tickets} />
                   <button type="button" disabled={stale || busyId !== null || servable === 0} onClick={() => void serveAll(g.tickets)}
-                    className="h-14 rounded-xl bg-kds-serve px-4 text-lg font-bold text-kds-action-ink disabled:opacity-45">
+                    className="ml-auto h-14 shrink-0 rounded-xl bg-kds-serve px-3 text-lg font-bold text-kds-action-ink disabled:opacity-45">
                     {g.tickets.some((t) => t.id === busyId) ? tr('处理中…', 'Working…') : tr(`全部出餐（${servable} 张）`, `Serve all (${servable})`)}
                   </button>
                 </div>
-                {/* 框里已写明同牌，卡片不再重复「同牌 k 单」。 */}
-                {g.tickets.map((t) => <TicketCard key={t.id} t={t} sameToken={1} busy={busyId === t.id} {...cardProps} />)}
+                {/* 框里已写明同牌，卡片不再重复「同牌 k 单」；金额改小字，送餐的人只看框上的合计。 */}
+                {g.tickets.map((t) => <TicketCard key={t.id} t={t} sameToken={1} framed busy={busyId === t.id} extras={extrasOf(t)} {...cardProps} />)}
               </section>
             );
           })}
@@ -329,10 +371,16 @@ export function KitchenPage() {
           {' · '}{tr(`人工单待核对 ${manualQ.data.length} 单（补同步订单不会自动重做）`, `${manualQ.data.length} paper ticket(s) to check (synced orders are not re-cooked)`)}
         </span>
         {undo && undoLeft > 0 && (
-          <div role="status" className="ml-auto flex items-center gap-3 rounded-xl bg-kds-soft px-3 py-1.5">
+          <div role="status" className="ml-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-kds-soft px-3 py-1.5">
             <PictoArt id="action:serve" size={32} />
             {/* 带票号：同牌多单时只是这一单出餐，不代表整张牌的单都完成。全部出餐时报张数。 */}
             <span className="text-lg"><b className="text-2xl">{undo.items[0].token}</b> {undo.items.length > 1 ? tr(`号 ${undo.items.length} 张已出餐`, `served (${undo.items.length} tickets)`) : undo.items[0].receipt ? tr(`号（票号 ${undo.items[0].receipt}）已出餐`, `served (receipt ${undo.items[0].receipt})`) : tr('号已出餐', 'served')}</span>
+            {/* 写服务器真正记下的金额（不是卡片上的数）；没记收款就不提钱。 */}
+            {sumAutoPaid(undo.items) > 0 && (
+              <span className="text-lg">
+                · {tr('已记收款', 'recorded as paid')} <b className="whitespace-nowrap text-xl font-black tabular-nums text-kds-warning">{kitchenRM(sumAutoPaid(undo.items))}</b>
+              </span>
+            )}
             <button type="button" disabled={stale || busyId !== null} onClick={() => void undoServed()}
               className="h-14 rounded-xl border-2 border-kds-action px-5 font-bold text-kds-action disabled:opacity-50">
               ↶ {undo.items.length > 1 ? tr(`全部撤回（${Math.ceil(undoLeft / 1000)}秒）`, `Undo all (${Math.ceil(undoLeft / 1000)} s)`) : tr(`撤回（${Math.ceil(undoLeft / 1000)}秒）`, `Undo (${Math.ceil(undoLeft / 1000)} s)`)}
@@ -410,9 +458,61 @@ const URGENCY = {
   overdue: { bar: 'bg-kds-danger-bg', text: 'text-kds-danger', label: '已超时 · 请优先处理', en: 'Overdue · do first', border: 'border-[#e0735c]' },
 };
 
-function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId, openIds }: {
+/** 同牌框合计：只写一个「合计」（不写「共收」），已付的不加；有旧单没金额就写「＋?」。全都付了写「已付 · 不用收」。 */
+function FrameTotal({ tickets }: { tickets: Ticket[] }) {
+  const tr = useT();
+  const f = kitchenFrameTotal(tickets);
+  if (f.collect === 0 && f.unknown === 0) return <PaidPill />;
+  const amount = f.collect === 0 ? 'RM —' : `${kitchenRM(f.sen)}${f.unknown > 0 ? '＋?' : ''}`;
+  return (
+    // 22px：1280 宽三栏时框内约 350px，「合计 RM 18.00」和「全部出餐（3 张）」还能排在同一行。
+    <span className={`whitespace-nowrap text-[22px] font-black leading-none tabular-nums ${f.collect === 0 ? 'text-kds-muted' : 'text-kds-warning'}`}>
+      {tr('合计', 'Total')} {amount}
+    </span>
+  );
+}
+
+function PaidPill({ short = false, small = false }: { short?: boolean; small?: boolean }) {
+  const tr = useT();
+  return (
+    <span className={`whitespace-nowrap rounded-lg border border-kds-live/50 bg-kds-live/20 px-2.5 py-1 font-black text-kds-live ${small ? 'text-base' : 'text-lg'}`}>
+      {short ? tr('已付', 'Paid') : tr('已付 · 不用收', 'Paid · no charge')}
+    </span>
+  );
+}
+
+/**
+ * 牌号旁的金额：单张卡大字琥珀色；框里小一号（送餐的人看框上的合计）。
+ * 碗还挂着没出的加料时补「＋加料 2.00」；碗已付但加料没付，写「已付」再补加料，避免误以为整桌都不用收。
+ */
+function AmountTag({ t, framed, extras }: { t: Ticket; framed: boolean; extras: Extras }) {
+  const tr = useT();
+  const a = kitchenAmount(t);
+  const extraText = extras.count > 0
+    ? `＋${tr('加料', 'extra')} ${kitchenSenPlain(extras.sen)}${extras.unknown > 0 ? '＋?' : ''}`
+    : extras.unknown > 0 ? `＋${tr('加料', 'extra')} ?` : null;
+  const extra = extraText && <small className="ml-1 text-[15px] font-bold text-kds-warning">{extraText}</small>;
+  if (a.kind === 'paid') {
+    return extra ? <span className="inline-flex items-center gap-1 whitespace-nowrap"><PaidPill short small={framed} />{extra}</span> : <PaidPill small={framed} />;
+  }
+  if (a.kind === 'unknown') {
+    return <span className={`whitespace-nowrap font-black text-kds-muted ${framed ? 'text-xl' : 'text-[28px] leading-none'}`}>RM —{extra}</span>;
+  }
+  return (
+    <span className={`whitespace-nowrap font-black tabular-nums text-kds-warning ${framed ? 'text-xl opacity-90' : 'text-[28px] leading-none'}`}>
+      {kitchenRM(a.sen)}{extra}
+    </span>
+  );
+}
+
+type Extras = { sen: number; count: number; unknown: number };
+const NO_EXTRAS: Extras = { sen: 0, count: 0, unknown: 0 };
+
+function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId, openIds, framed = false, extras }: {
   /** sameToken：要在卡片上标出的同牌单数（含本单）；在框里的卡片传 1，不重复标。anchorId：提醒横幅滚动的目标。openIds：队列里还没出餐的单（加料卡据此判断那碗出了没有）。 */
   t: Ticket; sameToken: number; now: number; today: string; disabled: boolean; busy: boolean; anchorId?: string; openIds: ReadonlySet<string>;
+  /** framed：在同牌框里，金额改小字。extras：这碗还挂着没出的加料金额。 */
+  framed?: boolean; extras: Extras;
   onAct: (name: Action, t: TicketRef, extra?: ActExtra) => void;
 }) {
   const tr = useT();
@@ -430,15 +530,15 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId,
   const wantons = t.lines.reduce((s, l) => s + l.wantonCount * l.quantity, 0);
   const charSiew = t.extraOnly ? t.lines.filter((l) => l.addOns.includes('char_siew')).reduce((s, l) => s + l.quantity, 0) : 0;
   const ref: TicketRef = { id: t.id, version: t.version, tokenNumber: t.tokenNumber, receiptNumber: t.receiptNumber };
-  // 只有人工开工（旧流程 startOrder）才显示具体开工时刻；自动或旧 queued 单一律标为自动。
-  const startLabel = t.startedSource === 'manual' && t.startedAtMs != null
-    ? tr(`人工开工 ${clock(t.startedAtMs)}`, `Started by cook ${clock(t.startedAtMs)}`)
-    : tr('自动（接单即制作）', 'Auto (cooking from order)');
+  // 只有人工开工（旧流程 startOrder）才显示具体开工时刻。自动开工每张都一样，不再占一行（让位给金额，1280×800 一屏多看几张）。
+  const manualStart = t.startedSource === 'manual' && t.startedAtMs != null ? t.startedAtMs : null;
   return (
     <article id={anchorId} className={`flex scroll-mt-28 flex-col overflow-hidden rounded-2xl border bg-kds-card ${frozen ? 'border-[#e0735c]' : u.border}`} aria-label={tr(`${t.tokenNumber}号`, `No. ${t.tokenNumber}`)}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-kds-line px-5 pt-2.5 pb-2">
         <span className="text-[42px] font-black leading-none tabular-nums">{t.tokenNumber}</span>
         {t.extraOnly && <span className="rounded-lg bg-kds-action px-2.5 py-1 text-lg font-black text-kds-action-ink">{tr('加料', 'Extra')}</span>}
+        {/* 金额紧跟牌号（加料卡在「加料」之后）：送餐的人一眼看到要收多少。 */}
+        <AmountTag t={t} framed={framed} extras={extras} />
         {pokBowls > 0 && <span className="rounded-lg bg-kds-pok px-2.5 py-1 text-lg font-black text-kds-pok-ink">{tr('面薄', 'Mee pok')} ×{pokBowls}</span>}
         {pokBowls > 0 && thinBowls > 0 && <span className="rounded-lg border border-kds-line px-2 py-1 font-bold">{tr('细面', 'Thin')} ×{thinBowls}</span>}
         {sameToken > 1 && <span className="rounded-lg bg-kds-action px-2 py-1 text-sm font-bold text-kds-action-ink">{tr(`同牌 ${sameToken} 单`, `${sameToken} on this token`)}</span>}
@@ -456,7 +556,7 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId,
         <span className={`ml-auto text-sm font-semibold ${frozen ? 'text-kds-danger' : u.text}`}>
           {frozen ? tr('取消待确认 · 已冻结', 'Cancel requested · frozen') : tr(u.label, u.en)}
         </span>
-        <span className="w-full text-xs text-kds-muted">{tr('开始：', 'Start: ')}{startLabel}</span>
+        {manualStart != null && <span className="w-full text-xs text-kds-muted">{tr(`开始：人工开工 ${clock(manualStart)}`, `Start: by cook ${clock(manualStart)}`)}</span>}
       </div>
       {today && t.businessDate < today && (
         <Banner tone="warn">{tr(`跨营业日 · ${t.businessDate.slice(5)} 的单（仍需完成）`, `From ${t.businessDate.slice(5)} · still to finish`)}</Banner>

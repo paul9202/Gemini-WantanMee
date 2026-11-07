@@ -6,6 +6,7 @@ import { ReactNode } from 'react';
 import { Cart, OrderTotals } from '../../domain/cart';
 import { LineConfig, lineName, linePhotoId } from '../../domain/lineItem';
 import { useLang, useT } from '../../app/i18n';
+import { useSession } from '../../app/session';
 import { MenuVersion, NOODLE_TYPE_NAMES, SAUCE_NAMES, ServiceMode, SERVICE_MODE_NAMES, productOf } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
 import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
@@ -49,6 +50,8 @@ export function CartPanel({ menu, cart, totals, tokenNumber, tokenShared, editin
   children?: ReactNode;
 }) {
   const tr = useT();
+  // 出餐即记收款开着时，底部提示改成「先付才点确认，吃完再付的出餐时自动记」。
+  const payOnServe = useSession().config?.payOnServe === true;
   const text = useLineText(menu);
   const modeName = (m: ServiceMode) => tr(SERVICE_MODE_NAMES[m].zh, SERVICE_MODE_NAMES[m].en);
   const takeaway = totals.takeawayPortionCount;
@@ -128,7 +131,9 @@ export function CartPanel({ menu, cart, totals, tokenNumber, tokenShared, editin
         </button>
         {payDisabledReason
           ? <p className="mt-2 text-sm text-warn">{payDisabledReason}</p>
-          : <p className="mt-2 text-center text-xs text-ink-2">{tr('下单即送厨，不需先收款；收到钱后在「待登记收款」确认。', 'Goes straight to the kitchen; record the payment under “To record” once collected.')}</p>}
+          : <p className="mt-2 text-center text-xs text-ink-2">{payOnServe
+            ? tr('下单即送厨；客人先付就点「确认已收款」，吃完再付的出餐时自动记收款。', 'Goes straight to the kitchen. If the customer pays first, tap “Confirm received”; if they pay after eating, it is recorded automatically at serve.')
+            : tr('下单即送厨，不需先收款；收到钱后在「待登记收款」确认。', 'Goes straight to the kitchen; record the payment under “To record” once collected.')}</p>}
         {children}
       </div>
     </div>

@@ -7,7 +7,7 @@ import { ENTRY_TILES, OrderServiceMode, SERVICE_MODE_NAMES } from './menu';
 import { CsvCell, toCsv } from './csv';
 import { expectedCashDrawer, ExpenseCategory, FixedCostPolicy, LedgerEvent, PeriodSummary, summarizePeriod } from './finance';
 import { costUnitsToSen, CostUnits, formatRM, Sen } from './money';
-import type { PaymentMethod } from './payment';
+import type { ConfirmationMode, PaymentMethod, ReversalCause } from './payment';
 import type { Fulfillment, PaymentState } from './orderLifecycle';
 import { ServiceSampleSource, serviceStats, ServiceStats } from './timing';
 import type { BomVersion } from './bom';
@@ -15,11 +15,62 @@ import { ExpenseLinkDoc, opexAccrualSen } from './costing';
 
 /**
  * 收款流水。businessDate = 登记（确认收到）所属营业日；orderBusinessDate = 原订单营业日（旧记录没有，即同日）。
- * kind='reversal' 是老板对误登记的反向调整（负数），关联原收款，不是退款。
+ * kind='reversal' 是反向调整（负数），关联原收款，不是退款；cause 说明为什么冲正（旧记录没有 = 误登记更正）。
+ * confirmationMode：manual 前台确认收到钱；auto_on_serve 出餐时自动记的（旧记录没有 = manual）。
  */
 export interface PaymentDoc {
   id: string; orderId: string; businessDate: string; method: PaymentMethod; amountSen: Sen; occurredAtMs: number;
   orderBusinessDate?: string; kind?: 'payment' | 'reversal'; reversesPaymentId?: string | null;
+  confirmationMode?: ConfirmationMode; cause?: ReversalCause;
+}
+
+/**
+ * 一段时间里登记的收款按来源拆开：前台确认 / 出餐自动记 / 冲正。
+ * - 30 秒内撤回出餐（cause=undo_serve）和它冲掉的那笔自动收款成对抵消：两边都不计，只数单数。
+ *   找不到被冲的那笔（例如跨了营业日）就当普通更正，保证各项加起来等于登记净额。
+ * - 客人没付就走了（cause=not_paid）单独列出金额（正数，表示从收款里扣掉的）。
+ * - 自动收款后来被前台同额确认的，收款文档已改成 manual，算前台确认。
+ * 恒等式：manualSen + autoSen + correctionsSen − notPaidSen = 这些流水的金额合计。
+ */
+export interface RegisteredBreakdown {
+  manualSen: Sen; manualCount: number;
+  autoSen: Sen; autoCount: number;
+  undoServeSen: Sen; undoServeCount: number;
+  notPaidSen: Sen; notPaidCount: number;
+  /** 误登记更正（负数），含找不到原收款的撤回出餐。 */
+  correctionsSen: Sen;
+}
+
+export function registeredBreakdown(payments: PaymentDoc[]): RegisteredBreakdown {
+  const out: RegisteredBreakdown = { manualSen: 0, manualCount: 0, autoSen: 0, autoCount: 0, undoServeSen: 0, undoServeCount: 0, notPaidSen: 0, notPaidCount: 0, correctionsSen: 0 };
+  const byId = new Map(payments.filter((p) => p.kind !== 'reversal').map((p) => [p.id, p]));
+  const paired = new Set<string>();
+  for (const r of payments) {
+    if (r.kind !== 'reversal') continue;
+    const cause = r.cause ?? 'correction';
+    const original = r.reversesPaymentId ? byId.get(r.reversesPaymentId) : undefined;
+    if (cause === 'undo_serve' && original && !paired.has(original.id) && original.amountSen === -r.amountSen) {
+      paired.add(original.id);
+      out.undoServeCount++;
+      out.undoServeSen += original.amountSen;
+    } else if (cause === 'not_paid') {
+      out.notPaidCount++;
+      out.notPaidSen += -r.amountSen;
+    } else {
+      out.correctionsSen += r.amountSen;
+    }
+  }
+  for (const p of byId.values()) {
+    if (paired.has(p.id)) continue;
+    if (p.confirmationMode === 'auto_on_serve') {
+      out.autoCount++;
+      out.autoSen += p.amountSen;
+    } else {
+      out.manualCount++;
+      out.manualSen += p.amountSen;
+    }
+  }
+  return out;
 }
 /**
  * 放弃追收记录（老板）。kind='reinstate' 为之后又收到钱、恢复待收款的反向记录（金额为负）。
@@ -144,7 +195,22 @@ export interface CloseFiguresV2 {
   registeredSen: Sen;
   /** 已登记收款中，属于之前营业日订单的部分（跨日补登记）。 */
   registeredForEarlierDaysSen: Sen;
+  /** 误登记更正（负数）。不含撤回出餐（成对抵消）和客人没付就走了（下面单列）；旧数据两者都没有，口径不变。 */
   paymentCorrectionsSen: Sen;
+  /**
+   * 出餐即记收款（2026-11-08 起）：已登记收款按来源拆开，见 registeredBreakdown。
+   * 旧快照没有这些字段，页面按旧样式显示。
+   */
+  registeredManualSen?: Sen;
+  registeredManualCount?: number;
+  registeredAutoSen?: Sen;
+  registeredAutoCount?: number;
+  /** 30 秒内撤回出餐：那笔自动收款和撤回抵消，不计入，只数单数。 */
+  undoServeCount?: number;
+  undoServeSen?: Sen;
+  /** 客人没付就走了：从收款里扣掉的金额（正数）与单数。 */
+  notPaidSen?: Sen;
+  notPaidCount?: number;
   refundsSen: Sen;
   netRegisteredSen: Sen;
   /** 本营业日订单中仍未登记的金额。 */
@@ -165,6 +231,7 @@ export function closeFiguresV2(
   const unpaid = unpaidOrders
     .filter((o) => o.paymentState === 'unpaid' && o.fulfillmentStatus !== 'cancelled' && o.businessDate <= businessDate)
     .sort((a, b) => a.businessDate.localeCompare(b.businessDate) || (a.acceptedAtEffectiveMs ?? 0) - (b.acceptedAtEffectiveMs ?? 0));
+  const split = registeredBreakdown(inDay);
   return {
     schemaVersion: 2,
     summary,
@@ -174,7 +241,15 @@ export function closeFiguresV2(
     servedPortions: dayOrders.filter((o) => o.fulfillmentStatus === 'served').reduce((s, o) => s + (o.portionCount ?? 0), 0),
     registeredSen: summary.receipts.totalSen,
     registeredForEarlierDaysSen: inDay.filter((p) => (p.orderBusinessDate ?? p.businessDate) < businessDate).reduce((s, p) => s + p.amountSen, 0),
-    paymentCorrectionsSen: summary.receipts.correctionsSen,
+    paymentCorrectionsSen: split.correctionsSen,
+    registeredManualSen: split.manualSen,
+    registeredManualCount: split.manualCount,
+    registeredAutoSen: split.autoSen,
+    registeredAutoCount: split.autoCount,
+    undoServeCount: split.undoServeCount,
+    undoServeSen: split.undoServeSen,
+    notPaidSen: split.notPaidSen,
+    notPaidCount: split.notPaidCount,
     refundsSen: summary.refunds.totalSen,
     netRegisteredSen: summary.netReceiptsSen,
     sameDayUnpaidSen: unpaid.filter((o) => o.businessDate === businessDate).reduce((s, o) => s + o.totalSen, 0),
@@ -326,7 +401,8 @@ export function csvSummary(s: PeriodSummary): string {
     : [];
   const rows: CsvCell[][] = [
     ['项目', '金额_sen'],
-    ['已登记收款（人工确认）', s.receipts.totalSen], ['其中误登记更正', s.receipts.correctionsSen], ['已登记退款', s.refunds.totalSen],
+    // 开了「出餐即记收款」后这里也含出餐自动记的，不能再写「人工确认」；冲正含更正、撤回出餐、客人没付就走了。
+    ['已登记收款（前台确认 + 出餐自动记）', s.receipts.totalSen], ['其中收款冲正（更正 / 撤回出餐 / 没付就走）', s.receipts.correctionsSen], ['已登记退款', s.refunds.totalSen],
     ...legacy,
     ['净登记收款', s.netReceiptsSen],
     ['已分配理论成本（四舍五入）', costUnitsToSen(s.allocatedCostUnits)], ['未重复计算的损耗（四舍五入）', costUnitsToSen(s.wastageCostUnits)],
@@ -348,10 +424,14 @@ export function csvOrders(orders: OrderReportRow[], timeZone: string): string {
   ]);
 }
 
+const REVERSAL_ZH: Record<ReversalCause, string> = { correction: '收款更正', undo_serve: '撤回出餐（收款一起撤回）', not_paid: '客人没付就走了' };
+const paymentKindZh = (p: PaymentDoc) => (p.kind === 'reversal' ? REVERSAL_ZH[p.cause ?? 'correction'] ?? '收款更正'
+  : p.confirmationMode === 'auto_on_serve' ? '收款（出餐自动记）' : '收款');
+
 export function csvPayments(payments: PaymentDoc[], refunds: RefundDoc[], timeZone: string): string {
   return toCsv([
     ['类型', '营业日（登记）', '订单营业日', '订单', '方式', '金额_sen', '时间', '原因'],
-    ...payments.map((p) => [p.kind === 'reversal' ? '收款更正' : '收款', p.businessDate, p.orderBusinessDate ?? p.businessDate, p.orderId, p.method ?? 'unspecified', p.amountSen, iso(p.occurredAtMs, timeZone), '']),
+    ...payments.map((p) => [paymentKindZh(p), p.businessDate, p.orderBusinessDate ?? p.businessDate, p.orderId, p.method ?? 'unspecified', p.amountSen, iso(p.occurredAtMs, timeZone), '']),
     ...refunds.map((r) => ['退款', r.businessDate, '', r.orderId, r.method ?? 'unspecified', -r.amountSen, iso(r.occurredAtMs, timeZone), r.reason]),
   ]);
 }
@@ -372,10 +452,19 @@ export function csvWastage(wastage: WastageDoc[], timeZone: string): string {
 
 export function csvClose(f: CloseFigures | CloseFiguresV2, version: number, note: string): string {
   if (isCloseFiguresV2(f)) {
+    // 新快照才有按来源拆开的数字；旧快照照旧导出。
+    const split: CsvCell[][] = f.registeredManualCount === undefined ? [] : [
+      ['其中前台确认收款_单数', f.registeredManualCount], ['其中前台确认收款_sen', f.registeredManualSen ?? 0],
+      ['其中出餐自动记收款_单数', f.registeredAutoCount ?? 0], ['其中出餐自动记收款_sen', f.registeredAutoSen ?? 0],
+      ['撤回出餐（30 秒内，不计入）_单数', f.undoServeCount ?? 0],
+      ['客人没付就走了_单数', f.notPaidCount ?? 0], ['客人没付就走了（放弃追收）_sen', f.notPaidSen ?? 0],
+    ];
+    const auto = (f.registeredAutoCount ?? 0) > 0;
     return toCsv([
-      ['日结版本', version], ['营业日', f.summary.range.start], ['口径', '收款为人工登记，未与钱包/银行自动核对'],
+      ['日结版本', version], ['营业日', f.summary.range.start],
+      ['口径', auto ? '收款为人工登记或出餐时自动记，未与钱包/银行自动核对；请和钱箱现金加 QR 到账对一下' : '收款为人工登记，未与钱包/银行自动核对'],
       ['有效订单数', f.validOrderCount], ['有效订单金额_sen', f.validOrderSen], ['取消订单数', f.cancelledOrderCount], ['出餐份数', f.servedPortions],
-      ['已登记收款_sen', f.registeredSen], ['其中跨日补登记_sen', f.registeredForEarlierDaysSen], ['其中误登记更正_sen', f.paymentCorrectionsSen],
+      ['已登记收款_sen', f.registeredSen], ...split, ['其中跨日补登记_sen', f.registeredForEarlierDaysSen], ['其中误登记更正_sen', f.paymentCorrectionsSen],
       ['已登记退款_sen', f.refundsSen], ['净登记收款_sen', f.netRegisteredSen],
       ['本日订单未登记_sen', f.sameDayUnpaidSen], ['未收回金额（放弃追收）_sen', f.writtenOffSen ?? 0], ['结转未登记订单数', f.unpaid.count], ['结转未登记金额_sen', f.unpaid.totalSen],
       ...f.unpaid.orders.map((o) => ['未登记', `${o.businessDate} ${o.receiptNumber} 牌${o.tokenNumber}`, o.totalSen]),

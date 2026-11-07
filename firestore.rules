@@ -45,7 +45,8 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // 厨房投影：无售价、付款、成本字段。
+      // 厨房投影：带这张单的售价合计 totalSen 与 paidBeforeServe（后厨卡片写要收多少钱 / 已付不用收）；
+      // 仍无单价、成本、付款流水与退款明细。
       match /kitchenTickets/{orderId} {
         allow read: if isAnyMember(storeId);
         allow write: if false;

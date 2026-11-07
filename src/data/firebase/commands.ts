@@ -17,7 +17,8 @@ export type CommandName =
   | 'recordPayment' | 'recordGroupPayment' | 'reversePayment' | 'writeOffPayment' | 'reinstateWrittenOff' | 'rejectKitchenCancel'
   | 'addIngredient' | 'recordExistingBatch' | 'recordIngredientPurchase' | 'startBatch' | 'finishBatch' | 'setBatchCost' | 'voidBatch' | 'setExpensePlan' | 'recordRecurringPayment' | 'recordPlanExpense' | 'settleExpense' | 'seedStartupCosts' | 'addStartupCost' | 'correctStartupCost' | 'setStartupPayment' | 'splitStartupRent' | 'setSalesTarget' | 'createNextGoal'
   | 'linkExpense' | 'unlinkExpense' | 'setCostCoverage' | 'completeGoal' | 'archiveGoal'
-  | 'createCostDraft' | 'commitCostDraft' | 'completePurchaseUsage' | 'setAiCostEnabled';
+  | 'createCostDraft' | 'commitCostDraft' | 'completePurchaseUsage' | 'setAiCostEnabled'
+  | 'setPayOnServe' | 'markNotPaid';
 
 export class CommandFailure extends Error {
   constructor(

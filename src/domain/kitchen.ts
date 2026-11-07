@@ -1,8 +1,10 @@
 /**
- * 厨房投影与合计。厨房文档不含售价、付款、成本字段（Firestore 读取是文档级，
+ * 厨房投影与合计。厨房文档只带这张单的售价合计 totalSen 和「出餐前已付」标记 paidBeforeServe
+ * （送餐时照着收钱，客人先付的不要再收）；不含单价、成本、付款方式、退款等字段（Firestore 读取是文档级，
  * 只能靠独立文档隔离）。合计只从投影纯计算，不每秒写库。
  */
 import { hasNoTomato, LineConfig, lineNameZh, linePhotoId, linePortions } from './lineItem';
+import { formatRM } from './money';
 import type { OrderLineInput } from './cart';
 import { MenuVersion, OrderServiceMode, orderServiceMode, ServiceMode } from './menu';
 import { linePictograms, PictogramId } from './pictograms';
@@ -63,6 +65,10 @@ export interface KitchenTicket {
   extraOnly?: boolean;
   /** 加料是给哪一张单的：那张厨单还在队列里就是那碗还没出。 */
   extraForOrderId?: string | null;
+  /** 这张单的售价合计（sen），接单时从订单抄过来，之后不变。更新前就在排队的旧厨单没有，显示「RM —」。 */
+  totalSen?: number;
+  /** 出餐前已经在前台确认收款：卡片写「已付 · 不用收」，免得送餐的人再收一次。冲正后改回 false。旧厨单缺省。 */
+  paidBeforeServe?: boolean;
 }
 
 export interface KitchenTicketSource {
@@ -88,7 +94,7 @@ export function kitchenLineMode(t: Pick<KitchenTicket, 'serviceMode'>, l: Pick<K
   return l.serviceMode ?? (t.serviceMode === 'mixed' ? 'dine_in' : t.serviceMode);
 }
 
-/** 从订单构造厨房投影：显式白名单字段，杜绝金额/成本泄漏。 */
+/** 从订单构造厨房投影：显式白名单字段，杜绝单价/成本泄漏。totalSen、paidBeforeServe 由服务端写厨单时另外补上。 */
 export function buildKitchenTicket(menu: MenuVersion, src: KitchenTicketSource): KitchenTicket {
   const lines = src.lines.map((l) => ({ ...l, serviceMode: l.serviceMode ?? src.serviceMode }));
   return {
@@ -218,6 +224,87 @@ export function summarizeKitchen(tickets: KitchenTicket[]): KitchenSummary {
     addTicket(active, t);
   }
   return { active, cancelPending, manualPending };
+}
+
+// ---- 后厨金额：送餐的人照卡片收钱 ----
+
+/** 一张卡写什么：要收多少 / 已付不用收 / 旧单没有金额。 */
+export type KitchenAmount = { kind: 'collect'; sen: number } | { kind: 'paid' } | { kind: 'unknown' };
+
+type AmountTicket = Pick<KitchenTicket, 'totalSen' | 'paidBeforeServe'>;
+
+function knownSen(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+}
+
+/** 先看「已付」：客人先付了就不写金额，哪怕金额字段缺失，也不能让送餐的人再收一次。 */
+export function kitchenAmount(t: AmountTicket): KitchenAmount {
+  if (t.paidBeforeServe === true) return { kind: 'paid' };
+  if (knownSen(t.totalSen)) return { kind: 'collect', sen: t.totalSen };
+  return { kind: 'unknown' };
+}
+
+type QueueAmountTicket = AmountTicket & Pick<KitchenTicket, 'kitchenCancelRequested'>;
+
+export interface KitchenFrameTotal {
+  /** 已知金额的未付单加总。 */
+  sen: number;
+  /** 计入 sen 的单数。 */
+  collect: number;
+  /** 未付但没有金额的旧单数：有就在合计后面写「＋?」，照旧问收银。 */
+  unknown: number;
+}
+
+/**
+ * 同牌框的合计：只加还没付的单，已付的不加；取消待确认的单也不加（多半要取消，
+ * 后厨拒绝取消后它回到正常状态，合计自动算回来）。框上只写一个「合计」，卡里的金额不再另外相加。
+ */
+export function kitchenFrameTotal(tickets: QueueAmountTicket[]): KitchenFrameTotal {
+  const total: KitchenFrameTotal = { sen: 0, collect: 0, unknown: 0 };
+  for (const t of tickets) {
+    if (t.kitchenCancelRequested) continue;
+    const a = kitchenAmount(t);
+    if (a.kind === 'collect') {
+      total.sen += a.sen;
+      total.collect++;
+    } else if (a.kind === 'unknown') {
+      total.unknown++;
+    }
+  }
+  return total;
+}
+
+type ExtraQueueTicket = QueueAmountTicket & Pick<KitchenTicket, 'orderId' | 'fulfillmentStatus' | 'extraOnly' | 'extraForOrderId'>;
+
+/**
+ * 这碗还挂着的加料要收多少：队列里给这碗的、未付、无取消申请的加料小单。
+ * 碗卡上写「＋加料 2.00」，料放进碗里一起送时不会少收。unknown 是没有金额的旧加料单数。
+ */
+export function openExtrasAmount(bowl: Pick<KitchenTicket, 'orderId' | 'extraOnly'>, queue: ExtraQueueTicket[]): { sen: number; count: number; unknown: number } {
+  const out = { sen: 0, count: 0, unknown: 0 };
+  if (bowl.extraOnly) return out;
+  for (const t of queue) {
+    if (!t.extraOnly || t.extraForOrderId !== bowl.orderId || t.orderId === bowl.orderId) continue;
+    if (t.kitchenCancelRequested || (t.fulfillmentStatus !== 'queued' && t.fulfillmentStatus !== 'preparing')) continue;
+    const a = kitchenAmount(t);
+    if (a.kind === 'collect') {
+      out.sen += a.sen;
+      out.count++;
+    } else if (a.kind === 'unknown') {
+      out.unknown++;
+    }
+  }
+  return out;
+}
+
+/** 后厨大字金额，例如 2200 → "RM 22.00"（RM 和数字之间留空格，远处好认）。 */
+export function kitchenRM(sen: number): string {
+  return formatRM(sen).replace('RM', 'RM ');
+}
+
+/** 不带 RM 的金额，例如 200 → "2.00"，用在「＋加料 2.00」。 */
+export function kitchenSenPlain(sen: number): string {
+  return formatRM(sen).replace('RM', '');
 }
 
 /** 半球单位 → 显示文字，例如 3 → "1.5"。 */

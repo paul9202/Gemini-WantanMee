@@ -1,7 +1,8 @@
 /**
  * 日结（01 §10、02 §7；2026-10-23 运营改版 §8）：逐步核对 → 老板关账 → 冻结版本 → 导出；关账后只能用更正版本追加。
  * 新版日结（figures.schemaVersion=2）不分收款渠道：不录钱箱实点 / QR 银行核对，不推算钱箱应有。
- * 收款数字是员工人工登记，不是钱包或银行自动核对的结果。
+ * 收款数字是员工人工登记，不是钱包或银行自动核对的结果。开了「出餐即记收款」后，前台确认和出餐自动记分两行显示，
+ * 30 秒内撤回出餐的不计入，客人没付就走了单列；提醒老板和钱箱现金加 QR 到账对一下。
  * 未登记收款是明确的例外：老板写明原因后结转，不算已收，也不丢弃。
  * 旧版已冻结报表（钱箱 / QR 字段）保持原样只读查看，标为旧版。
  * 页面上的预览与服务器关账用同一个领域函数计算；最终以服务器写入的快照为准。
@@ -34,6 +35,9 @@ interface Version {
 }
 
 const MANUAL_NOTE = '收款为员工在主点单平板人工登记「已收到整单货款」，未与钱包、TNG 或银行自动核对。';
+/** 开了「出餐即记收款」的日子：自动记的钱是系统按出餐算的，提醒老板对钱箱和 QR 到账。 */
+const AUTO_NOTE = '「出餐自动记收款」的钱是系统按出餐算的，请和钱箱现金加 QR 到账对一下。差得多，就到订单页逐单找。';
+const noteFor = (f: CloseFiguresV2) => ((f.registeredAutoCount ?? 0) > 0 ? `${AUTO_NOTE}前台确认收款为员工人工登记，也未与钱包、TNG 或银行自动核对。` : MANUAL_NOTE);
 
 async function loadDay(date: string) {
   const [dayDoc, report, versions, orders, tokens, reviews, finance, unpaid] = await Promise.all([
@@ -199,7 +203,7 @@ export function ClosePage() {
           <div className="space-y-4">
             <Section title="当日数字" hint="关账前预览">
               <V2Table f={preview} />
-              <p className="mt-2 text-xs text-ink-2">{MANUAL_NOTE}</p>
+              <p className="mt-2 text-xs text-ink-2">{noteFor(preview)}</p>
             </Section>
             <Section title="老板关账">
               <textarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="备注（可选）" className="mb-2 h-20 w-full rounded-lg border border-control p-2" />
@@ -261,7 +265,7 @@ export function ClosePage() {
                         {v.unpaidCarriedForward?.reason && <p className="mt-1 text-xs text-ink-2">结转原因：{v.unpaidCarriedForward.reason}</p>}
                       </div>
                     )}
-                    <p className="mt-2 text-xs text-ink-2">{MANUAL_NOTE}</p>
+                    <p className="mt-2 text-xs text-ink-2">{noteFor(v.figures)}</p>
                   </>
                 ) : (
                   <LegacyFigures f={v.figures} />
@@ -329,7 +333,19 @@ function V2Table({ f }: { f: CloseFiguresV2 }) {
     <table className="w-full text-sm"><tbody>
       <Row label={`有效订单金额（${f.validOrderCount} 单${f.cancelledOrderCount ? `，另取消 ${f.cancelledOrderCount} 单` : ''}）`} v={f.validOrderSen} />
       <Row label="出餐份数" v={`${f.servedPortions} 份`} />
-      <Row label="已登记收款（人工确认）" v={f.registeredSen} strong />
+      {f.registeredManualCount === undefined ? (
+        // 旧快照：当时只有人工确认。
+        <Row label="已登记收款（人工确认）" v={f.registeredSen} strong />
+      ) : (
+        <>
+          {/* 新快照：前台确认和出餐自动记分开；撤回出餐成对抵消不计入；客人没付就走了单列。「人工确认」不能套在自动收款上。 */}
+          <Row label={`前台确认收款 · ${f.registeredManualCount} 单`} v={f.registeredManualSen ?? 0} />
+          {((f.registeredAutoCount ?? 0) > 0 || (f.undoServeCount ?? 0) > 0) && <Row label={`出餐自动记收款 · ${f.registeredAutoCount ?? 0} 单`} v={f.registeredAutoSen ?? 0} />}
+          {(f.undoServeCount ?? 0) > 0 && <Row label={`撤回出餐（30 秒内）· ${f.undoServeCount} 单`} v="不计入" />}
+          {(f.notPaidCount ?? 0) > 0 && <Row label={`客人没付就走了 · ${f.notPaidCount} 单`} v={`−${formatRM(f.notPaidSen ?? 0)} 放弃追收`} tone="bad" />}
+          <Row label="当日登记收款" v={f.registeredSen} strong />
+        </>
+      )}
       {f.registeredForEarlierDaysSen !== 0 && <Row label="　其中跨日补登记（之前营业日的单）" v={f.registeredForEarlierDaysSen} />}
       {f.paymentCorrectionsSen !== 0 && <Row label="　其中误登记更正" v={f.paymentCorrectionsSen} />}
       <Row label="已登记退款" v={-f.refundsSen} />

@@ -9,7 +9,13 @@ import type { Sen } from './money';
 /** 旧版（下单即收款）记录的真实渠道。 */
 export type LegacyPaymentMethod = 'cash' | 'qr_manual';
 export type PaymentMethod = LegacyPaymentMethod | 'unspecified';
-export type ConfirmationMode = 'manual';
+/**
+ * manual：员工在收银确认收到钱。
+ * auto_on_serve：门店开了「出餐即记收款」，后厨出餐时自动记的（不是员工确认到账）。
+ */
+export type ConfirmationMode = 'manual' | 'auto_on_serve';
+/** 收款冲正的原因：correction 误登记更正；undo_serve 30 秒内撤回出餐；not_paid 客人没付就走了。 */
+export type ReversalCause = 'correction' | 'undo_serve' | 'not_paid';
 
 export const PAYMENT_METHOD_ZH: Record<PaymentMethod, string> = { cash: '现金', qr_manual: 'DuitNow QR', unspecified: '已确认收款' };
 

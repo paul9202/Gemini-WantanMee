@@ -3,7 +3,9 @@
  * 状态转换全部交给领域状态机 applyLifecycle；这里负责读取依赖、落实副作用并保持投影一致。
  * 出餐 / 取消最终成立时在同一事务把本单从餐牌上摘下；同牌加单的其他单还没完成时牌继续占用，全部摘完才释放。
  * 牌已属于新单时绝不改动。
- * 厨房命令不读写付款字段：出餐不标已付款。
+ * 收款：门店关着「出餐即记收款」（缺省）时，厨房命令不碰付款字段，出餐不标已付款。
+ * 开关打开时，出餐的同一事务把仍待收款的单记为已收款（auto_on_serve，见 core/autoPay），钱的问题绝不让出餐失败；
+ * 30 秒内撤回出餐时，这笔自动记的收款一起冲正（cause=undo_serve，记今天）。人工确认的收款撤回出餐不动。
  */
 import { DocumentData, FieldValue, Firestore } from 'firebase-admin/firestore';
 import { businessDateOf } from '../../../src/domain/businessDay';
@@ -15,6 +17,9 @@ import { CommandContext, Role, runCommand } from '../core/command';
 import { CommandError, ReasonCode } from '../core/errors';
 import { bool, int, obj, oneOf, optStr, str, storeId, uuid } from '../core/input';
 import { loadStoreConfig, markDayActivity, requireDayOpen } from '../core/store';
+import { applyAutoPay, planAutoPay } from '../core/autoPay';
+import { paymentReversalWrites } from '../core/orderWrites';
+import { paymentSeqOf } from './payment';
 
 const LIFECYCLE_FIELDS: (keyof OrderLifecycleState)[] = [
   'fulfillmentStatus', 'paymentState', 'paidSen', 'refundedSen', 'kitchenCancelRequested', 'cancelReason',
@@ -112,11 +117,47 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
     tokenReclaimable, dayClosed: orderDayClosed,
   });
   if (!r.ok) throw new CommandError(ERROR_MAP[r.error], r.error, { currentVersion: before.version });
+  // 出餐即记收款：记账那天的营业日文档要在写入前读好；开关关 / 已付 / 金额 0 / 当天关账 → null，出餐照常。
+  const autoPlan = input.cmd.type === 'serve'
+    ? await planAutoPay(tx, store, { config, order, orderId: input.orderId, bookingDate: today })
+    : null;
+  // 撤回出餐：出餐时自动记的那笔收款还原样在（没被更正、没被前台确认升级、没退款）→ 一起冲正，记今天。
+  // 今天已关账则 requireDayOpen 抛 DAY_CLOSED，撤回被拒（不能只撤出餐、留下一笔对不上的收款）。
+  const servePaymentId = (order.servePaymentId as string | null | undefined) ?? null;
+  const undoReversesPayment = input.cmd.type === 'undo_serve' && servePaymentId !== null && order.paymentId === servePaymentId
+    && order.paymentState === 'paid' && ((order.refundedSen as number | undefined) ?? 0) === 0;
+  const undoDay = undoReversesPayment ? await requireDayOpen(tx, store, today) : null;
 
   // ---- 写入 ----
   const after = r.state;
   const patch: Record<string, unknown> = { updatedAtMs: nowMs };
   for (const f of LIFECYCLE_FIELDS) patch[f] = after[f];
+  // 付款字段在 LIFECYCLE_FIELDS 之后覆盖进同一个 patch：上面从 after 复制的是出餐前的 paymentState / paidSen，
+  // 订单只写这一次，自动记的收款不会被覆盖回待收款。
+  let autoPaidSen = 0;
+  let autoPaymentId: string | null = null;
+  let autoPaymentReversedSen = 0;
+  if (autoPlan) {
+    const ap = applyAutoPay(tx, store, autoPlan, {
+      nowMs, occurredAtMs: nowMs, actorUid: actor.uid, source: 'serve', operationId: input.operationId, offlineEventId: null,
+    });
+    Object.assign(patch, ap.orderPatch);
+    autoPaidSen = ap.amountSen;
+    autoPaymentId = ap.paymentId;
+  }
+  if (undoReversesPayment && undoDay) {
+    const rev = paymentReversalWrites(tx, store, {
+      orderId: input.orderId, order, seq: paymentSeqOf(order), cause: 'undo_serve', reason: '30 秒内撤回出餐', actorUid: actor.uid,
+      businessDate: today, nowMs, operationId: input.operationId,
+    });
+    Object.assign(patch, rev.orderPatch, { paymentState: 'unpaid' });
+    markDayActivity(tx, store, today, undoDay, nowMs);
+    autoPaymentReversedSen = order.paidSen as number;
+  } else if (input.cmd.type === 'undo_serve' && servePaymentId !== null) {
+    // 那笔已被更正或升级为人工确认：收款不动，只清掉过期的关联。
+    patch.servePaymentId = null;
+  }
+  const paymentStateAfter = patch.paymentState as OrderLifecycleState['paymentState'];
 
   for (const effect of r.effects) {
     if (effect === 'token_release' || effect === 'token_rehold') {
@@ -152,6 +193,9 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
         fulfillmentStatus: after.fulfillmentStatus, kitchenCancelRequested: after.kitchenCancelRequested,
         startedAtMs: after.startedAtMs, startedSource: after.startedSource, servedAtMs: after.servedAtMs, version: after.version,
         cancelReason: after.kitchenCancelRequested || after.fulfillmentStatus === 'cancelled' ? after.cancelReason : null,
+        // 撤回出餐：卡片回到队列。出餐后这段时间里收款可能被登记或更正过（厨单已出餐时付款命令不改它），
+        // 按撤回后的付款状态重算「已付 · 不用收」，否则可能重收或漏收。
+        ...(input.cmd.type === 'undo_serve' ? { paidBeforeServe: paymentStateAfter === 'paid' } : {}),
       });
     }
     if (effect === 'refund_recorded' && input.refund) {
@@ -172,12 +216,21 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
   tx.update(orderRef, patch);
   if (todayDay) markDayActivity(tx, store, today, todayDay, nowMs);
 
+  const result: Record<string, unknown> = {
+    orderId: input.orderId, version: after.version, fulfillmentStatus: after.fulfillmentStatus, paymentState: paymentStateAfter, effects: r.effects,
+  };
+  if (input.cmd.type === 'serve') result.autoPaidSen = autoPaidSen;
+  if (input.cmd.type === 'undo_serve') result.autoPaymentReversedSen = autoPaymentReversedSen;
   return {
-    result: { orderId: input.orderId, version: after.version, fulfillmentStatus: after.fulfillmentStatus, paymentState: after.paymentState, effects: r.effects },
+    result,
     audit: {
       entityId: input.orderId,
       before: { fulfillmentStatus: before.fulfillmentStatus, paymentState: before.paymentState, version: before.version },
-      after: { fulfillmentStatus: after.fulfillmentStatus, paymentState: after.paymentState, version: after.version },
+      after: {
+        fulfillmentStatus: after.fulfillmentStatus, paymentState: paymentStateAfter, version: after.version,
+        ...(autoPaymentId ? { autoPaymentId, autoPaidSen, paymentConfirmationMode: 'auto_on_serve', paymentBusinessDate: today } : {}),
+        ...(autoPaymentReversedSen ? { autoPaymentReversedSen, reversesPaymentId: servePaymentId } : {}),
+      },
     },
   };
 }

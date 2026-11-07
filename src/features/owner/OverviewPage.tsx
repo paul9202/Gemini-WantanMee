@@ -4,6 +4,7 @@
  * 估算经营利润为管理估算（按已登记收款估算），未含工资/税费。
  * 2026-10-23 运营改版：新收款不分现金 / QR，只看已登记 / 未登记；收款是人工登记，不是钱包或银行自动核对。
  * 旧版渠道拆分只在区间内有旧记录时显示，标为旧版记录。
+ * 出餐即记收款（2026-11-08）：区间内有出餐自动记的收款时，把前台确认和出餐自动记分开写，不再一概说「人工登记」。
  */
 import { useState } from 'react';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
@@ -11,7 +12,7 @@ import { BOM_V1 } from '../../domain/bom';
 import { addDays, businessDateOf, DateRange, lastNDays, previousRange, wallClock } from '../../domain/businessDay';
 import { DEFAULT_FIXED_COST, FixedCostPolicy, ratioOrNull, summarizePeriod } from '../../domain/finance';
 import { DEFAULT_EXPENSE_PLAN, ExpenseLinkDoc, monthOf, paybackStatus, PlanExpense, StartupCostDoc, startupSummary } from '../../domain/costing';
-import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, dishRanking, ledgerEvents, orderServiceStats, productMix, receiptsTrend } from '../../domain/ledger';
+import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, dishRanking, ledgerEvents, orderServiceStats, productMix, receiptsTrend, registeredBreakdown } from '../../domain/ledger';
 import { costUnitsToSen, formatRM } from '../../domain/money';
 import { OVERDUE_MS } from '../../domain/timing';
 import { db, storePath } from '../../data/firebase/client';
@@ -62,6 +63,9 @@ export function OverviewPage() {
   const svc = cur.data ? orderServiceStats(cur.data.orders) : null;
   const mix = cur.data ? productMix(cur.data.orders) : null;
   const ranking = cur.data ? dishRanking(cur.data.orders) : [];
+  // 区间内按登记日的收款按来源拆开（前台确认 / 出餐自动记）。
+  const split = cur.data ? registeredBreakdown(cur.data.docs.payments.filter((p) => p.businessDate >= range.start && p.businessDate < range.endExclusive)) : null;
+  const hasAuto = Boolean(split && (split.autoCount > 0 || split.undoServeCount > 0 || split.notPaidCount > 0));
   const trend = cur.data ? receiptsTrend(cur.data.docs.payments, cur.data.docs.refunds, range, config.timeZone) : [];
   const refundDue = cur.data ? cur.data.orders.filter((o) => o.paymentState === 'refund_due') : [];
   const orderPay = cur.data ? orderPaymentOverview(cur.data.orders) : null;
@@ -129,7 +133,7 @@ export function OverviewPage() {
           <div className="flex items-center text-sm text-white/85">{PERIOD_ZH[period]}净登记收款<Icon name="wallet" size={20} className="ml-auto" /></div>
           <div className="mt-2 text-4xl font-black tabular-nums"><span className="mr-1 text-lg">RM</span>{summary ? formatRM(summary.netReceiptsSen).replace('RM', '') : '…'}</div>
           <div className="mt-2 text-xs text-white/85">
-            {summary ? `已登记 ${formatRM(summary.receipts.totalSen)}${summary.refunds.totalSen ? ` · 已扣退款 ${formatRM(summary.refunds.totalSen)}` : ''} · 人工登记` : ''}
+            {summary ? `已登记 ${formatRM(summary.receipts.totalSen)}${summary.refunds.totalSen ? ` · 已扣退款 ${formatRM(summary.refunds.totalSen)}` : ''} · ${hasAuto ? '前台确认 + 出餐自动记' : '人工登记'}` : ''}
             {delta !== null && ` · 对比上一区间 ${delta >= 0 ? '+' : ''}${pct(delta)}`}
           </div>
         </div>
@@ -139,11 +143,14 @@ export function OverviewPage() {
       </div>
 
       <div className="mb-5">
-        <Section title="收款登记" hint="订单金额按订单营业日；收款按登记日。收款为员工人工登记，未与钱包或银行自动核对">
+        <Section title="收款登记" hint={hasAuto ? '订单金额按订单营业日；收款按登记日。出餐自动记的是系统按出餐算的，请和钱箱现金加 QR 到账对一下' : '订单金额按订单营业日；收款按登记日。收款为员工人工登记，未与钱包或银行自动核对'}>
           {summary && orderPay ? (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
               <PayFig label="有效订单金额" value={formatRM(orderPay.validSen)} sub={`${orderPay.validCount} 单${orderPay.cancelledCount ? ` · 另取消 ${orderPay.cancelledCount} 单` : ''}`} />
-              <PayFig label="已登记收款" value={formatRM(summary.receipts.totalSen)} sub={summary.receipts.correctionsSen ? `含误登记更正 ${formatRM(summary.receipts.correctionsSen)}` : '含跨日补登记'} />
+              <PayFig label="已登记收款" value={formatRM(summary.receipts.totalSen)}
+                sub={hasAuto && split
+                  ? `前台确认 ${formatRM(split.manualSen)} · 出餐自动记 ${formatRM(split.autoSen)}${split.notPaidCount ? ` · 没付就走 −${formatRM(split.notPaidSen)}` : ''}${split.correctionsSen ? ` · 更正 ${formatRM(split.correctionsSen)}` : ''}`
+                  : summary.receipts.correctionsSen ? `含误登记更正 ${formatRM(summary.receipts.correctionsSen)}` : '含跨日补登记'} />
               <PayFig label="未登记（本区间订单）" value={formatRM(orderPay.unpaidSen)} sub={`${orderPay.unpaidCount} 单 · 不算已收`} tone={orderPay.unpaidCount ? 'bad' : undefined} />
               <PayFig label="已登记退款" value={formatRM(summary.refunds.totalSen)} />
               <PayFig label="净登记收款" value={formatRM(summary.netReceiptsSen)} strong />

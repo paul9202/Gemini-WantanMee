@@ -4,7 +4,7 @@
  * 服务器按菜单版本重算价格与配置；前端传入的总价只用于比对，不是权威。
  * 旧客户端带 payment 字段（下单即收款）会被拒绝，避免把未付款新单当成已付。
  * 加单（addOnToOrderId）：客人吃完再加（多为打包），照常是一张新单、新厨单、新票号，
- * 但挂到仍未收款的原单上，收款时一次结清（recordGroupPayment）。原单须未收款、未取消、没有取消待确认。
+ * 但挂到原单上，收款时一次结清（recordGroupPayment，只收还没收的单）。原单须待收款或已收款、未取消、没有取消待确认。
  * 同牌加单（joinTokenOrderId）：客人拿着 N 号牌还要加一碗、或朋友来了再点，新单挂到仍被这桌占着的 N 号上，
  * 不另发牌；N 号上的单全部出餐 / 取消后牌才释放。没指定 addOnToOrderId 时自动并入这一轮占用的同桌账单（组长可以已收款，
  * 账单只收还没收的单）。厨单继承同桌未完成单里最早的排队位置，不重新排队。牌已给了别的客人时拒绝（TOKEN_OCCUPIED），绝不挂到别人的牌上。
@@ -152,8 +152,9 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
   if (o.addOnToOrderId) {
     if (!parent) throw new CommandError('NOT_FOUND', '原单不存在');
     if (o.joinTokenOrderId && parent.tokenNumber !== o.tokenNumber) throw new CommandError('ADD_ON_NOT_ALLOWED', '原单不在这张餐牌上');
-    if (parent.paymentState !== 'unpaid' || parent.fulfillmentStatus === 'cancelled' || parent.kitchenCancelRequested) {
-      throw new CommandError('ADD_ON_NOT_ALLOWED', '原单已收款、已取消或取消待确认', { paymentState: parent.paymentState, fulfillmentStatus: parent.fulfillmentStatus });
+    // 原单已收款也可以挂（开了出餐即记收款后，吃完再加时原单多半已自动记了收款）；账单只收还没收的单，原单不会再收一次。
+    if ((parent.paymentState !== 'unpaid' && parent.paymentState !== 'paid') || parent.fulfillmentStatus === 'cancelled' || parent.kitchenCancelRequested) {
+      throw new CommandError('ADD_ON_NOT_ALLOWED', '原单已取消、取消待确认或不能再收款', { paymentState: parent.paymentState, fulfillmentStatus: parent.fulfillmentStatus });
     }
     // 加单的加单仍挂到最早那张原单，一组只有一个根。
     addOnTo = (parent.addOnTo as AddOnLink | null | undefined)
