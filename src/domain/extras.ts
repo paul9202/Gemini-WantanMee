@@ -2,7 +2,7 @@
  * 下单后加料（加叉烧、加云吞）：一份加料是同一桌账单上的一张小单，有自己的票号和厨单，原单金额不变。
  * 这里是 POS 和服务器共用的规则：哪一碗能加什么、加料行长什么样、厨房怎么知道给哪一碗。
  */
-import { LineConfig, lineNameZh } from './lineItem';
+import { LineConfig, lineNameZh, NOTE_NO_CHAR_SIEW, noteTokens, withNoteToken } from './lineItem';
 import { AddOnId, MenuVersion, NOODLE_TYPE_NAMES, productOf, ServiceMode, SERVICE_MODE_NAMES, Spice } from './menu';
 import { PICTOGRAMS } from './pictograms';
 
@@ -25,13 +25,14 @@ export function extraBlockReason(menu: MenuVersion, bowl: Pick<LineConfig, 'prod
 }
 
 /** 厨房看的「给哪一碗」。Firestore 里存的就是这句话，所以不随界面语言变化。 */
-export function extraNote(menu: MenuVersion, bowl: LineConfig & { serviceMode?: ServiceMode }): string {
+export function extraNote(menu: MenuVersion, bowl: LineConfig & { serviceMode?: ServiceMode }, addOn?: AddOnId): string {
   const spice = bowl.spice as Spice | null;
   const parts = [
     lineNameZh(menu, bowl),
     bowl.noodleType ? NOODLE_TYPE_NAMES[bowl.noodleType].zh : null,
     spice ? PICTOGRAMS[`spice:${spice}`].zh : null,
-    bowl.note || null,
+    // 客人改主意加叉烧：不再写「不要叉烧」，免得后厨看到「加叉烧 · 不要叉烧」。
+    (addOn === 'char_siew' && noteTokens(bowl.note).length > 0 ? withNoteToken(bowl.note, NOTE_NO_CHAR_SIEW, false) : bowl.note) || null,
     bowl.serviceMode === 'takeaway' ? SERVICE_MODE_NAMES.takeaway.zh : null,
   ];
   return `给 ${parts.filter(Boolean).join(' · ')}`.slice(0, 80);

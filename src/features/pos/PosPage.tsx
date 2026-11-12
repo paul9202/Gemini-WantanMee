@@ -12,8 +12,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, cartServiceMode, computeTotals, emptyCart, setLineQuantity, setLineServiceMode, setServiceMode, updateLineConfig } from '../../domain/cart';
-import { defaultConfig, hasNoTomato, LineConfig, normalizeConfig } from '../../domain/lineItem';
-import { PICTOGRAMS } from '../../domain/pictograms';
+import { defaultConfig, LineConfig, normalizeConfig } from '../../domain/lineItem';
+import { notePictogramIds, PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
 import { createTokenBoard, countTokens, suggestNextToken, TokenBoard, tokenFromDoc, tokenHolders, tokenSession, TokenStateName } from '../../domain/tokens';
@@ -269,11 +269,11 @@ export function PosPage() {
 
   const summaryOf = (): ResultSummary => ({
     serviceMode: cartServiceMode(cart),
-    firstItem: cart.lines.map((l) => `${lineName(menu, l.config, lang)}${hasNoTomato(l.config) ? ` · ${lang === 'en' ? PICTOGRAMS['sauce:no_tomato'].en : PICTOGRAMS['sauce:no_tomato'].zh}` : ''}${l.quantity > 1 ? ` ×${l.quantity}` : ''}`).join('，'),
+    firstItem: cart.lines.map((l) => `${lineName(menu, l.config, lang)}${notePictogramIds(l.config).map((id) => ` · ${lang === 'en' ? PICTOGRAMS[id].en : PICTOGRAMS[id].zh}`).join('')}${l.quantity > 1 ? ` ×${l.quantity}` : ''}`).join('，'),
   });
 
   /** sharedToken：挂在客人已拿着的牌上，没有发出新牌，不改变循环建议的起点。 */
-  /** 特殊选项归默认，防止上一位顾客的走青、Kosong、不要番茄酱残留；保留所选餐品与面种。 */
+  /** 特殊选项归默认，防止上一位顾客的走青、Kosong、不要番茄酱、不要叉烧残留；保留所选餐品与面种。 */
   function resetDraftOptions() {
     if (!menu || !draft) return;
     const keep = defaultConfig(menu, draft.productKind, draft.sauce);

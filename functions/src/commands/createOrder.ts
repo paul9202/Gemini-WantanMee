@@ -190,7 +190,7 @@ async function createOrderTx(ctx: CommandContext, input: CreateOrderInput) {
     if (parsed.value.productKind !== 'extra' || !bowl || extraBlockReason(menu, bowl, parsed.value.addOns[0]) !== null) {
       throw new CommandError('EXTRA_NOT_ALLOWED', `第 ${i + 1} 行不能加这种料`, { line: i });
     }
-    lines.push({ lineId: l.lineId, config: { ...parsed.value, note: extraNote(menu, bowl) }, quantity: l.quantity, serviceMode: bowl.serviceMode ?? o.serviceMode });
+    lines.push({ lineId: l.lineId, config: { ...parsed.value, note: extraNote(menu, bowl, parsed.value.addOns[0]) }, quantity: l.quantity, serviceMode: bowl.serviceMode ?? o.serviceMode });
   }
   const cart: Cart = { serviceMode: o.serviceMode, lines };
   const totals = computeTotals(menu, bom, cart);

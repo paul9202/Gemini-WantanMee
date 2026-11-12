@@ -21,6 +21,16 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-12-no-char-siew', date: '2026-11-12', roles: ALL,
+    title: { zh: '新增「不要叉烧」', en: 'New option: no char siew' },
+    items: [
+      { zh: '点干捞面或汤面时，「特别要求」里多了「不要叉烧」：云吞照放，价钱不变。可以和「不要番茄酱」一起选。', en: 'Dry and soup noodles have a new “No char siew” special request: wantan stay, the price is the same. It can be combined with “No tomato sauce”.' },
+      { zh: '「不要叉烧」和「加叉烧」只能选一个，按了一个另一个自动取消；净面本来就没有叉烧，按钮会灰掉。', en: '“No char siew” and “Extra char siew” cancel each other; the button is greyed out for kosong, which has no char siew anyway.' },
+      { zh: '后厨每碗用黄色大条写「不要叉烧 · 云吞照放」，顶部合计显示「其中不要叉烧 N 份」。', en: 'The kitchen shows a yellow “No char siew · wantan as usual” bar on the bowl and “incl. no char siew N” in the totals.' },
+      { zh: '客人后来又要叉烧，照样可以下单后加叉烧，后厨的小单不会再写「不要叉烧」。', en: 'If the customer changes their mind, extra char siew can still be added after ordering; the kitchen slip will not say “no char siew”.' },
+    ],
+  },
+  {
     id: '2026-11-12-kosong-price', date: '2026-11-12', roles: ALL,
     title: { zh: '净面价格可以自己改', en: 'Kosong prices can now be set' },
     items: [

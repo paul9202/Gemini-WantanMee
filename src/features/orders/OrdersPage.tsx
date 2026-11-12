@@ -14,10 +14,9 @@
 import { useRef, useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
 import { billIdOf, BillSummary, summarizeBill } from '../../domain/bill';
-import { hasNoTomato } from '../../domain/lineItem';
 import { businessDateOf } from '../../domain/businessDay';
 import { LineKind, OrderServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
-import { PICTOGRAMS } from '../../domain/pictograms';
+import { notePictogramIds, PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import type { ConfirmationMode, PaymentMethod } from '../../domain/payment';
 import { isAwaitingPayment, PaymentState } from '../../domain/orderLifecycle';
@@ -82,8 +81,8 @@ interface OrderRow {
   items: { lineId: string; nameZh: string; quantity: number; photoId: string; productKind?: LineKind; spice?: Spice | null; note?: string | null }[];
 }
 
-/** 订单页的餐品文字：品名 + 辣度 + 不要番茄酱，例如「红酱面 · 小 · 辣 · 不要番茄酱」；加料写给哪一碗，例如「加叉烧 · 给 红酱面 · 中」。 */
-const itemName = (i: OrderRow['items'][number]) => [i.nameZh, i.spice ? PICTOGRAMS[`spice:${i.spice}`].zh : null, hasNoTomato(i) ? PICTOGRAMS['sauce:no_tomato'].zh : null, i.productKind === 'extra' ? i.note : null].filter(Boolean).join(' · ');
+/** 订单页的餐品文字：品名 + 辣度 + 不要番茄酱 / 不要叉烧，例如「红酱面 · 小 · 辣 · 不要番茄酱」；加料写给哪一碗，例如「加叉烧 · 给 红酱面 · 中」。 */
+const itemName = (i: OrderRow['items'][number]) => [i.nameZh, i.spice ? PICTOGRAMS[`spice:${i.spice}`].zh : null, ...notePictogramIds(i).map((id) => PICTOGRAMS[id].zh), i.productKind === 'extra' ? i.note : null].filter(Boolean).join(' · ');
 
 type Filter = 'all' | 'unpaid' | 'queued' | 'preparing' | 'served' | 'cancelled';
 const CANCEL_REASONS: [string, string][] = [['顾客离开', 'Customer left'], ['点错单', 'Wrong order'], ['重复下单', 'Duplicate order'], ['改单', 'Changing order'], ['其他', 'Other']];

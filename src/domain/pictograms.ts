@@ -2,7 +2,7 @@
  * 图卡语义表（06 §4）。POS、购物车、KDS、培训卡共用同一语义 ID，
  * UI 只负责把 ID 渲染成同一张图，不允许各页面自行解释含义。
  */
-import { hasNoTomato, LineConfig } from './lineItem';
+import { hasNoCharSiew, hasNoTomato, LineConfig } from './lineItem';
 import { MenuVersion, productOf, ServiceMode } from './menu';
 
 export type PictogramId =
@@ -12,7 +12,7 @@ export type PictogramId =
   | 'addon:char_siew' | 'addon:wanton_3' | 'kosong:on'
   | 'service:dine_in' | 'service:takeaway'
   | 'noodle:thin_egg' | 'noodle:mee_poh'
-  | 'soup:base' | 'takeaway:no_side_soup' | 'sauce:no_tomato'
+  | 'soup:base' | 'takeaway:no_side_soup' | 'sauce:no_tomato' | 'charsiew:none'
   | 'action:start' | 'action:serve' | 'action:undo' | 'token:return';
 
 export interface PictogramDef {
@@ -43,12 +43,18 @@ export const PICTOGRAMS: Record<PictogramId, PictogramDef> = {
   'noodle:mee_poh': { id: 'noodle:mee_poh', zh: '面薄', en: 'Mee Poh', strike: false },
   'soup:base': { id: 'soup:base', zh: '原汁汤底', en: 'Soup', strike: false },
   'sauce:no_tomato': { id: 'sauce:no_tomato', zh: '不要番茄酱', en: 'No tomato sauce', strike: true },
+  'charsiew:none': { id: 'charsiew:none', zh: '不要叉烧', en: 'No char siew', strike: true },
   'takeaway:no_side_soup': { id: 'takeaway:no_side_soup', zh: '不附送清汤', en: 'No side soup', strike: true },
   'action:start': { id: 'action:start', zh: '开始制作', en: 'Start', strike: false },
   'action:serve': { id: 'action:serve', zh: '完成出餐', en: 'Served', strike: false },
   'action:undo': { id: 'action:undo', zh: '撤回', en: 'Undo', strike: false },
   'token:return': { id: 'token:return', zh: '餐牌回收', en: 'Token returned', strike: false },
 };
+
+/** 备注里的固定要求对应的图卡（不要番茄酱、不要叉烧），按固定顺序。收银、订单页、加料都用它列出这碗的要求。 */
+export function notePictogramIds(cfg: { note?: string | null }): PictogramId[] {
+  return [hasNoTomato(cfg) ? ('sauce:no_tomato' as const) : null, hasNoCharSiew(cfg) ? ('charsiew:none' as const) : null].filter((x) => x !== null);
+}
 
 export interface LinePictogram {
   id: PictogramId;
@@ -64,6 +70,7 @@ export function linePictograms(menu: MenuVersion, cfg: LineConfig, serviceMode: 
   if (cfg.isKosong) out.push({ id: 'kosong:on', emphasized: true });
   if (product.isSoup) out.push({ id: 'soup:base', emphasized: false });
   if (hasNoTomato(cfg)) out.push({ id: 'sauce:no_tomato', emphasized: true });
+  if (hasNoCharSiew(cfg)) out.push({ id: 'charsiew:none', emphasized: true });
   if (cfg.spice) out.push({ id: `spice:${cfg.spice}`, emphasized: true });
   out.push({ id: `scallion:${cfg.scallion}`, emphasized: cfg.scallion !== 'normal' });
   if (cfg.lard) out.push({ id: `lard:${cfg.lard}`, emphasized: cfg.lard !== 'normal' });

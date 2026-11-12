@@ -8,12 +8,12 @@ import { useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
 import { businessDateOf } from '../../domain/businessDay';
 import { extraBlockReason, ExtraBlock, extraConfig } from '../../domain/extras';
-import { hasNoTomato, LineConfig, lineName } from '../../domain/lineItem';
+import { LineConfig, lineName, noteFreeText } from '../../domain/lineItem';
 import { AddOnId, MenuVersion, NOODLE_TYPE_NAMES, OrderServiceMode, ServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import { formatRM, Sen } from '../../domain/money';
 import type { Fulfillment, PaymentState } from '../../domain/orderLifecycle';
 import type { ConfirmationMode } from '../../domain/payment';
-import { PICTOGRAMS } from '../../domain/pictograms';
+import { notePictogramIds, PICTOGRAMS } from '../../domain/pictograms';
 import { TokenBoard, tokenForExtra, tokenSession } from '../../domain/tokens';
 import { db, storePath } from '../../data/firebase/client';
 import { useLiveQuery, useNow } from '../../data/firebase/live';
@@ -81,13 +81,13 @@ function blockText(tr: Tr, block: ExtraBlock, a: AddOnId): string {
   return a === 'char_siew' ? tr('这碗不配叉烧', 'Char siew not available on this bowl') : tr('这碗不配云吞', 'Wantan not available on this bowl');
 }
 
-/** 碗的辨认信息：面种、辣度、不要番茄酱、备注、打包。 */
+/** 碗的辨认信息：面种、辣度、不要番茄酱 / 不要叉烧、其他备注、打包。 */
 function bowlDetail(tr: Tr, i: OrderItem): string {
   const spice = i.spice ? PICTOGRAMS[`spice:${i.spice as Spice}`] : null;
-  const noTomato = hasNoTomato(i) ? PICTOGRAMS['sauce:no_tomato'] : null;
-  const named = [i.noodleType ? NOODLE_TYPE_NAMES[i.noodleType] : null, spice, noTomato].filter((x) => x !== null).map((x) => tr(x.zh, x.en));
+  const named = [i.noodleType ? NOODLE_TYPE_NAMES[i.noodleType] : null, spice, ...notePictogramIds(i).map((id) => PICTOGRAMS[id])].filter((x) => x !== null).map((x) => tr(x.zh, x.en));
   const takeaway = i.serviceMode === 'takeaway' ? [tr(SERVICE_MODE_NAMES.takeaway.zh, SERVICE_MODE_NAMES.takeaway.en)] : [];
-  return [...named, ...(i.note ? [i.note] : []), ...takeaway].join(' · ');
+  const free = noteFreeText(i.note);
+  return [...named, ...(free ? [free] : []), ...takeaway].join(' · ');
 }
 
 export function ExtraSheet({ menu, board, lastIssued, initialOrderId, blockedReason, onClose, onSend }: {

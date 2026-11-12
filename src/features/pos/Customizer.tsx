@@ -3,10 +3,12 @@
  * 所有组合由领域 normalizeConfig 收敛：汤品不显示辣度与油渣，干捞云吞只显示有效酱料，净面清除并锁定肉类加料。
  */
 import { ReactNode, useState } from 'react';
-import { allowsNoTomato, hasNoTomato, LineConfig, linePhotoId, normalizeConfig, NOTE_NO_TOMATO, unitPriceSen } from '../../domain/lineItem';
+import {
+  allowsNoCharSiew, allowsNoTomato, hasNoCharSiew, hasNoTomato, LineConfig, linePhotoId, normalizeConfig, NOTE_NO_CHAR_SIEW, NOTE_NO_TOMATO, unitPriceSen, withNoteToken,
+} from '../../domain/lineItem';
 import { AddOnId, Level, MenuVersion, NOODLE_TYPE_NAMES, productOf, Sauce, SAUCE_NAMES, SizeDef, Spice } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
-import { PictogramId, PICTOGRAMS } from '../../domain/pictograms';
+import { notePictogramIds, PictogramId, PICTOGRAMS } from '../../domain/pictograms';
 import { Icon, PictoArt, Photo } from '../../ui/visual';
 import { useLang, useT } from '../../app/i18n';
 import { Choice, Eyebrow, Group, Stepper } from './parts';
@@ -27,7 +29,13 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
   const tr = useT();
   const lang = useLang();
   const product = productOf(menu, config.productKind);
-  const set = (patch: Partial<LineConfig>) => onChange(normalizeConfig(menu, { ...config, ...patch }));
+  // 一个选择自动取消了另一个（加叉烧 ↔ 不要叉烧）时，提示一句；只跟着那次改出来的配置显示，之后任何改动都会让它消失。
+  const [notice, setNotice] = useState<{ msg: string; cfg: LineConfig } | null>(null);
+  const set = (patch: Partial<LineConfig>, msg?: string) => {
+    const next = normalizeConfig(menu, { ...config, ...patch });
+    setNotice(msg ? { msg, cfg: next } : null);
+    onChange(next);
+  };
   const deep = config.scallion === 'extra' || config.lard === 'extra' || config.isKosong;
   const [showMore, setShowMore] = useState(false);
   const moreOpen = showMore || deep;
@@ -42,10 +50,23 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
     config.productKind === 'dry_wanton' && config.sauce ? tr(SAUCE_NAMES[config.sauce].zh, SAUCE_NAMES[config.sauce].en) : null,
     size ? tr(size.nameZh, size.nameEn) : null,
     config.spice ? tr(SPICE_ZH[config.spice], SPICE_EN[config.spice]) : null,
-    hasNoTomato(config) ? pic('sauce:no_tomato') : null,
+    ...notePictogramIds(config).map(pic),
   ].filter(Boolean).join(' · ');
 
-  const toggleAddOn = (id: AddOnId) => set({ addOns: config.addOns.includes(id) ? config.addOns.filter((a) => a !== id) : [...config.addOns, id] });
+  const toggleAddOn = (id: AddOnId) => {
+    const on = !config.addOns.includes(id);
+    set(
+      { addOns: on ? [...config.addOns, id] : config.addOns.filter((a) => a !== id) },
+      on && id === 'char_siew' && hasNoCharSiew(config) ? tr('已取消「不要叉烧」', 'Removed "No char siew"') : undefined,
+    );
+  };
+  const toggleNoCharSiew = () => {
+    const on = !hasNoCharSiew(config);
+    set(
+      { note: withNoteToken(config.note, NOTE_NO_CHAR_SIEW, on), addOns: on ? config.addOns.filter((a) => a !== 'char_siew') : config.addOns },
+      on && config.addOns.includes('char_siew') ? tr('已取消「加叉烧」', 'Removed extra char siew') : undefined,
+    );
+  };
   const addOnPrice = (id: AddOnId) => formatRM(menu.addOns[id].priceSen).replace('.00', '');
 
   const quick = (key: string, selected: boolean, onClick: () => void, art: ReactNode, label: string, extra?: string, disabled?: boolean, disabledHint?: string) => (
@@ -144,8 +165,13 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
             {product.addOns.includes('wanton_3') && quick('w3', config.addOns.includes('wanton_3'), () => toggleAddOn('wanton_3'), <Icon name="dumpling" size={30} />, tr('加 3 粒', '+3 wantan'), `+${addOnPrice('wanton_3')}`, config.isKosong)}
             {product.addOns.includes('char_siew') && quick('cs', config.addOns.includes('char_siew'), () => toggleAddOn('char_siew'), <Photo id="ingredient.char_siew" size={30} rounded={6} />, tr('加叉烧', '+Char siew'), `+${addOnPrice('char_siew')}`, config.isKosong)}
             {/* 放在最后，原来的格子位置不变。有酱的餐品才显示；不是红酱就灰掉，让收银知道有这个选项。 */}
-            {config.sauce !== null && quick('no-tomato', hasNoTomato(config), () => set({ note: hasNoTomato(config) ? '' : NOTE_NO_TOMATO }), <PictoArt id="sauce:no_tomato" size={30} />, pic('sauce:no_tomato'), undefined, !allowsNoTomato(config), tr('红酱才有', 'Red sauce only'))}
+            {config.sauce !== null && quick('no-tomato', hasNoTomato(config), () => set({ note: withNoteToken(config.note, NOTE_NO_TOMATO, !hasNoTomato(config)) }), <PictoArt id="sauce:no_tomato" size={30} />, pic('sauce:no_tomato'), undefined, !allowsNoTomato(config), tr('红酱才有', 'Red sauce only'))}
+            {/* 有叉烧的碗（干捞面、汤面）才显示；净面本来就没有叉烧，灰掉。和「加叉烧」二选一。 */}
+            {product.addOns.includes('char_siew') && quick('no-char-siew', hasNoCharSiew(config), toggleNoCharSiew, <PictoArt id="charsiew:none" size={30} />, pic('charsiew:none'), tr('云吞照放', 'Wantan stays'), !allowsNoCharSiew(menu, config), tr('净面本来就没有叉烧', 'Kosong has no char siew'))}
           </div>
+          {notice && notice.cfg === config && (
+            <p role="status" className="mt-2 rounded-lg bg-warn-bg px-3 py-2 text-sm font-semibold text-warn">{notice.msg}</p>
+          )}
           {hasNoTomato(config) && config.spice === 'none' && (
             <p role="status" className="mt-2 rounded-lg bg-warn-bg px-3 py-2 text-sm font-semibold text-warn">{tr('不辣又不要番茄酱，请和客人确认', 'No chili and no tomato sauce: check with the customer')}</p>
           )}

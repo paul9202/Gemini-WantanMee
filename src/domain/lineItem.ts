@@ -17,13 +17,51 @@ export const MAX_LINE_QUANTITY = 50;
  */
 export const NOTE_NO_TOMATO = '不要番茄酱';
 export const NO_TOMATO_SAUCES: readonly Sauce[] = ['red'];
+/** 「不要叉烧」：云吞照放，价钱不变。和净面不同（净面叉烧、云吞都不放，价钱另算）。同样发布后不能改字。 */
+export const NOTE_NO_CHAR_SIEW = '不要叉烧';
+
+/**
+ * 一碗可以同时有几个固定要求，用「、」连起来，按这里的顺序写（同一碗不管先按哪个，备注都一样，购物车才能合并）。
+ * 不能用「 · 」：下单后加料的备注（extraNote）用它连接，那种备注不能被认成要求。
+ */
+export const NOTE_TOKENS: readonly string[] = [NOTE_NO_TOMATO, NOTE_NO_CHAR_SIEW];
+export const NOTE_TOKEN_SEPARATOR = '、';
+
+/** 备注里的固定要求。只有整句备注都由固定要求组成才算，其他备注（加料的「给 …」、手写备注）一律不当要求。 */
+export function noteTokens(note: string | null | undefined): string[] {
+  if (!note) return [];
+  const parts = note.split(NOTE_TOKEN_SEPARATOR);
+  return parts.every((p) => NOTE_TOKENS.includes(p)) ? NOTE_TOKENS.filter((t) => parts.includes(t)) : [];
+}
+
+/** 不是固定要求的备注原文（例如加料的「给 …」）；全部是固定要求时为空。 */
+export function noteFreeText(note: string | null | undefined): string {
+  return note && noteTokens(note).length === 0 ? note : '';
+}
+
+/** 打开或关闭一个固定要求，按固定顺序写回。原来是手写备注时，以按钮为准（POS 没有手写备注入口）。 */
+export function withNoteToken(note: string, token: string, on: boolean): string {
+  const tokens = new Set(noteTokens(note));
+  if (on) tokens.add(token);
+  else tokens.delete(token);
+  return NOTE_TOKENS.filter((t) => tokens.has(t)).join(NOTE_TOKEN_SEPARATOR);
+}
 
 export function hasNoTomato(cfg: { note?: string | null }): boolean {
-  return cfg.note === NOTE_NO_TOMATO;
+  return noteTokens(cfg.note).includes(NOTE_NO_TOMATO);
+}
+
+export function hasNoCharSiew(cfg: { note?: string | null }): boolean {
+  return noteTokens(cfg.note).includes(NOTE_NO_CHAR_SIEW);
 }
 
 export function allowsNoTomato(cfg: { sauce: Sauce | null }): boolean {
   return cfg.sauce !== null && NO_TOMATO_SAUCES.includes(cfg.sauce);
+}
+
+/** 这一碗本来有叉烧才能选「不要叉烧」：干捞面、汤面；净面、干捞云吞、云吞汤没有叉烧。 */
+export function allowsNoCharSiew(menu: MenuVersion, cfg: Pick<LineConfig, 'productKind' | 'size' | 'isKosong'>): boolean {
+  return !cfg.isKosong && (getSize(menu, cfg.productKind, cfg.size)?.charSiewPortions ?? 0) > 0;
 }
 
 export interface LineConfig {
@@ -70,6 +108,8 @@ export function defaultConfig(menu: MenuVersion, productKind: LineKind, sauce: S
  * - 汤品：sauce/spice/lard 为 null；无面餐品：noodleType 为 null。
  * - Kosong：仅允许的品类；开启时清除全部肉类加料（关闭不自动恢复）。
  * - 不要番茄酱：换成没有番茄酱的酱或汤品时清除（换回来不自动恢复）。这里只收敛 POS 选择，服务端校验不管它。
+ * - 不要叉烧：净面、干捞云吞、云吞汤时清除；和「加叉烧」不能同时有，同时出现时以加叉烧为准
+ *   （POS 按「不要叉烧」时会先去掉加叉烧）。固定要求按固定顺序重写，手写备注原样保留。
  */
 export function normalizeConfig(menu: MenuVersion, cfg: LineConfig): LineConfig {
   const product = productOf(menu, cfg.productKind);
@@ -84,7 +124,11 @@ export function normalizeConfig(menu: MenuVersion, cfg: LineConfig): LineConfig 
     (id) => cfg.addOns.includes(id) && product.addOns.includes(id) && !(isKosong && menu.addOns[id].isMeat),
   );
   const cleanNote = cfg.note.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, NOTE_MAX_LENGTH);
-  const note = hasNoTomato({ note: cleanNote }) && !allowsNoTomato({ sauce }) ? '' : cleanNote;
+  const tokens = noteTokens(cleanNote).filter((t) =>
+    t === NOTE_NO_TOMATO ? allowsNoTomato({ sauce })
+      : t === NOTE_NO_CHAR_SIEW ? allowsNoCharSiew(menu, { productKind: cfg.productKind, size, isKosong }) && !addOns.includes('char_siew')
+        : true);
+  const note = noteTokens(cleanNote).length > 0 ? tokens.join(NOTE_TOKEN_SEPARATOR) : cleanNote;
   return { productKind: cfg.productKind, size, noodleType, sauce, spice, lard, scallion, isKosong, addOns, note };
 }
 
@@ -193,12 +237,12 @@ export interface LinePortions {
   extraWantonPacks: number;
 }
 
-/** 单份的面球（半球单位）、云吞与叉烧数量。Kosong：云吞 0、叉烧 0，面球不变。 */
+/** 单份的面球（半球单位）、云吞与叉烧数量。Kosong：云吞 0、叉烧 0，面球不变。不要叉烧：叉烧 0，云吞照放。 */
 export function linePortions(menu: MenuVersion, cfg: LineConfig): LinePortions {
   const size = getSize(menu, cfg.productKind, cfg.size);
   if (!size) throw new RangeError(`未知规格 ${cfg.productKind}/${cfg.size}`);
   const baseWantonCount = cfg.isKosong ? 0 : size.wantonCount;
-  const baseCharSiewPortions = cfg.isKosong ? 0 : size.charSiewPortions;
+  const baseCharSiewPortions = cfg.isKosong || hasNoCharSiew(cfg) ? 0 : size.charSiewPortions;
   const extraCharSiew = cfg.addOns.includes('char_siew') ? 1 : 0;
   const extraWantonPacks = cfg.addOns.includes('wanton_3') ? 1 : 0;
   return {

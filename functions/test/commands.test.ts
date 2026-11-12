@@ -810,6 +810,25 @@ test('不要番茄酱：在线下单时备注原样进订单和厨单，价钱�
   assert.equal((await s(`kitchenTickets/${result.orderId}`).get()).data()!.lines[0].note, '不要番茄酱');
 });
 
+test('不要叉烧：和不要番茄酱一起进订单和厨单，价钱不变，成本少一份叉烧；之后加叉烧，小单不再写不要叉烧', async () => {
+  const f = await setupStore();
+  const s = (p: string) => admin().doc(`stores/${f.storeId}/${p}`);
+  const both = '不要番茄酱、不要叉烧';
+  const plain = await placeOrder(f, { tokenNumber: 21, lines: [{ config: noodle({ sauce: 'red' }), quantity: 1 }] });
+  const bowl = await placeOrder(f, { tokenNumber: 22, lines: [{ config: noodle({ sauce: 'red', note: both }), quantity: 1 }] });
+  assert.equal(bowl.result.totalSen, 700);
+  assert.equal((await s(`orders/${bowl.result.orderId}`).get()).data()!.items[0].note, both);
+  const line = (await s(`kitchenTickets/${bowl.result.orderId}`).get()).data()!.lines[0];
+  assert.equal(line.note, both);
+  assert.deepEqual(line.pictograms.filter((p: { emphasized: boolean }) => p.emphasized).map((p: { id: string }) => p.id).filter((id: string) => id === 'sauce:no_tomato' || id === 'charsiew:none'), ['sauce:no_tomato', 'charsiew:none']);
+  const cost = async (id: string) => (await s(`orderCosts/${id}`).get()).data()!.ingredientCostUnits as number;
+  assert.equal(await cost(plain.result.orderId) - await cost(bowl.result.orderId), BOM_V1.charSiewPortion);
+
+  const extra = await placeOrder(f, { tokenNumber: 22, extraForOrderId: bowl.result.orderId, expectedTotalSen: 200,
+    lines: [{ config: extraConfig('char_siew'), quantity: 1, forLineId: bowl.payload.order.lines[0].lineId }] });
+  assert.equal((await s(`kitchenTickets/${extra.result.orderId}`).get()).data()!.lines[0].note, '给 红酱面 · 小 · 细面 · 辣 · 不要番茄酱');
+});
+
 // ---------- 下单后加料 ----------
 
 type Placed = Awaited<ReturnType<typeof placeOrder>>;
