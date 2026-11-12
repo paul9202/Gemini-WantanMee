@@ -160,7 +160,7 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
               {product.allowsKosong && (
                 <Choice selected={config.isKosong} onClick={() => set({ isKosong: !config.isKosong })} className="flex w-full items-center gap-3 px-3 py-2 pr-8 text-left">
                   <PictoArt id="kosong:on" size={30} />
-                  <span className="font-semibold leading-tight">{tr('净面 · 半价', 'Kosong · half price')}<br /><span className="text-xs font-normal text-ink-2">{tr('无叉烧、无云吞，已选的肉类加料会清除', 'No char siew or wantan; meat add-ons are removed')}</span></span>
+                  <span className="font-semibold leading-tight">{tr('净面', 'Kosong')}<br /><span className="text-xs font-normal text-ink-2">{tr('无叉烧、无云吞，已选的肉类加料会清除', 'No char siew or wantan; meat add-ons are removed')}</span></span>
                 </Choice>
               )}
             </div>

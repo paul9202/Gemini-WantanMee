@@ -22,11 +22,12 @@ function offline(f: StoreFixture, menuVersion: string, totalSen: number, config:
   };
 }
 
-test('发布菜单：新价生效；旧版本在线单 MENU_CHANGED；越权、过期版本、奇数价被拒绝', async () => {
+test('发布菜单：新价生效；旧版本在线单 MENU_CHANGED；越权、过期版本、净面高于正价被拒绝', async () => {
   const f = await setupStore();
   const pub = (extra: Record<string, unknown>, who = f.owner) => who.code('publishMenu', { storeId: f.storeId, operationId: uuid(), baseVersion: MENU_V1.version, addOnPrices: {}, soldOut: [], ...extra });
   assert.equal(await pub({ prices: noodlePrices(800) }, f.cashier), 'FORBIDDEN');
-  assert.equal(await pub({ prices: noodlePrices(801) }), 'INVALID_ARGUMENT');
+  assert.equal(await pub({ prices: {}, kosongPrices: { dry_noodle: { small: 800 } } }), 'INVALID_ARGUMENT', '净面 RM8 高于正价 RM7');
+  assert.equal(await pub({ prices: {}, kosongPrices: 'cheap' }), 'INVALID_ARGUMENT');
   const r = await f.owner.call<{ version: string; basedOn: string }>('publishMenu', { storeId: f.storeId, operationId: uuid(), baseVersion: MENU_V1.version, prices: noodlePrices(800), addOnPrices: { char_siew: 250 }, soldOut: [] });
   assert.equal(r.basedOn, MENU_V1.version);
   assert.match(r.version, /^menu-\d{8}-01$/);
@@ -42,6 +43,23 @@ test('发布菜单：新价生效；旧版本在线单 MENU_CHANGED；越权、�
   const menuDoc = await getDoc(doc(f.cashier.db, `stores/${f.storeId}/menuVersions/${r.version}`));
   assert.equal(menuDoc.data()!.menu.addOns.char_siew.priceSen, 250);
   await assert.rejects(getDoc(doc(f.kitchen.db, `stores/${f.storeId}/menuVersions/${r.version}`)), /permission/i);
+});
+
+test('净面价单独设定：发布小 4 / 中 5 / 大 6 后，净面单按新净面价收；只改正价不动净面价', async () => {
+  const f = await setupStore();
+  const kp = { small: 400, medium: 500, large: 600 };
+  const r = await f.owner.call<{ version: string }>('publishMenu', { storeId: f.storeId, operationId: uuid(), baseVersion: MENU_V1.version, prices: {}, kosongPrices: { dry_noodle: kp, soup_noodle: kp }, addOnPrices: {}, soldOut: [] });
+  const menu = (await admin().doc(`stores/${f.storeId}/menuVersions/${r.version}`).get()).data()!.menu;
+  for (const k of ['dry_noodle', 'soup_noodle']) {
+    assert.deepEqual(menu.products[k].sizes.map((s: { priceSen: number; kosongPriceSen: number }) => [s.priceSen, s.kosongPriceSen]), [[700, 400], [900, 500], [1100, 600]]);
+  }
+  const k = await placeOrder(f, { tokenNumber: 1, menuVersion: r.version, lines: [{ config: noodle({ isKosong: true, size: 'medium' }), quantity: 1 }], expectedTotalSen: 500 });
+  assert.equal(k.result.totalSen, 500);
+  assert.equal(await f.cashier.code('createOrder', orderPayload(f, { tokenNumber: 2, menuVersion: r.version, lines: [{ config: noodle({ isKosong: true, size: 'medium' }), quantity: 1 }], expectedTotalSen: 450 })), 'PRICE_MISMATCH', '旧净面价 4.50 被拒');
+  // 之后只改正价（旧版设置页不传净面价）：净面价保持 4 / 5 / 6
+  const r2 = await f.owner.call<{ version: string }>('publishMenu', { storeId: f.storeId, operationId: uuid(), baseVersion: r.version, prices: noodlePrices(800), addOnPrices: {}, soldOut: [] });
+  const m2 = (await admin().doc(`stores/${f.storeId}/menuVersions/${r2.version}`).get()).data()!.menu;
+  assert.deepEqual(m2.products.dry_noodle.sizes[0], { ...m2.products.dry_noodle.sizes[0], priceSen: 800, kosongPriceSen: 400 });
 });
 
 test('D09 离线期间改价/售罄：按成交时的历史版本入账，不追收差额；未知版本隔离', async () => {

@@ -23,11 +23,15 @@ function versionId(prefix: string, date: string, seq: number) {
 }
 
 export async function publishMenu(db: Firestore, uid: string | undefined, raw: unknown) {
-  const o = obj(raw, ['storeId', 'operationId', 'baseVersion', 'prices', 'addOnPrices', 'soldOut', 'note']);
+  const o = obj(raw, ['storeId', 'operationId', 'baseVersion', 'prices', 'addOnPrices', 'soldOut', 'kosongPrices', 'note']);
   if (o.soldOut !== undefined && (!Array.isArray(o.soldOut) || !o.soldOut.every((x) => typeof x === 'string'))) throw bad('soldOut 必须是字符串数组');
   const input = {
     storeId: storeId(o), operationId: uuid(o, 'operationId'), baseVersion: str(o, 'baseVersion', 64),
-    changes: { prices: record(o.prices, 'prices'), addOnPrices: record(o.addOnPrices, 'addOnPrices'), soldOut: (o.soldOut as string[] | undefined) ?? [] } as MenuChanges,
+    changes: {
+      prices: record(o.prices, 'prices'), addOnPrices: record(o.addOnPrices, 'addOnPrices'), soldOut: (o.soldOut as string[] | undefined) ?? [],
+      // 净面价单独设定；旧客户端不传，审计里也只记实际提交的字段。
+      ...(o.kosongPrices === undefined ? {} : { kosongPrices: record(o.kosongPrices, 'kosongPrices') }),
+    } as MenuChanges,
     note: optStr(o, 'note', 200) ?? '',
   };
   return runCommand(db, {

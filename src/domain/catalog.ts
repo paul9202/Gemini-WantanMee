@@ -1,7 +1,7 @@
 /**
  * 菜单与 BOM 发布：在已发布版本上修改价格、售罄、单位成本，生成新的不可变版本。
  * - 只改数值与售罄，不增删品类和规格（结构变化需要同时改规格与测试）。
- * - Kosong 严格半价：有 Kosong 的规格价格必须是偶数 sen，Kosong 价自动 = 一半。
+ * - Kosong 净面价由老板单独设定（kosongPrices），不能高于同规格正价；只改正价时净面价保持不变。
  * - 历史版本保留，旧订单与离线单按成交时的版本校验，不随改价漂移。
  */
 import type { BomVersion } from './bom';
@@ -15,6 +15,8 @@ export interface MenuChanges {
   prices: Partial<Record<ProductKind, Partial<Record<SizeId, Sen>>>>;
   addOnPrices: Partial<Record<AddOnId, Sen>>;
   soldOut: ProductKind[];
+  /** 净面价（只对有 Kosong 的规格）。未提交的规格保持原净面价。旧客户端不传。 */
+  kosongPrices?: Partial<Record<ProductKind, Partial<Record<SizeId, Sen>>>>;
 }
 
 export type CatalogIssue = { field: string; message: string };
@@ -32,9 +34,26 @@ export function applyMenuChanges(base: MenuVersion, changes: MenuChanges, versio
       const size = p.sizes.find((s) => s.id === sizeId);
       if (!size) { issues.push({ field: `prices.${kind}.${sizeId}`, message: '未知规格' }); continue; }
       if (!isPrice(price)) { issues.push({ field: `prices.${kind}.${sizeId}`, message: `价格须为 ${MIN_PRICE_SEN}–${MAX_PRICE_SEN} sen 的整数` }); continue; }
-      if (size.kosongPriceSen !== null && price % 2 !== 0) { issues.push({ field: `prices.${kind}.${sizeId}`, message: 'Kosong 严格半价：价格须为偶数 sen' }); continue; }
       size.priceSen = price;
-      if (size.kosongPriceSen !== null) size.kosongPriceSen = price / 2;
+    }
+  }
+  for (const [kind, sizes] of Object.entries(changes.kosongPrices ?? {})) {
+    if (!PRODUCT_KINDS.includes(kind as ProductKind)) { issues.push({ field: `kosongPrices.${kind}`, message: '未知餐品' }); continue; }
+    const p = products[kind as ProductKind];
+    for (const [sizeId, price] of Object.entries(sizes ?? {})) {
+      const size = p.sizes.find((s) => s.id === sizeId);
+      if (!size) { issues.push({ field: `kosongPrices.${kind}.${sizeId}`, message: '未知规格' }); continue; }
+      if (size.kosongPriceSen === null) { issues.push({ field: `kosongPrices.${kind}.${sizeId}`, message: '这个规格没有净面' }); continue; }
+      if (!isPrice(price)) { issues.push({ field: `kosongPrices.${kind}.${sizeId}`, message: `价格须为 ${MIN_PRICE_SEN}–${MAX_PRICE_SEN} sen 的整数` }); continue; }
+      size.kosongPriceSen = price;
+    }
+  }
+  // 净面不放肉，不能比正价贵（正价和净面价都改完再查，提交顺序不影响结果）。
+  for (const kind of PRODUCT_KINDS) {
+    for (const size of products[kind].sizes) {
+      if (size.kosongPriceSen !== null && size.kosongPriceSen > size.priceSen) {
+        issues.push({ field: `kosongPrices.${kind}.${size.id}`, message: '净面价不能高于正价' });
+      }
     }
   }
   const addOns: MenuVersion['addOns'] = JSON.parse(JSON.stringify(base.addOns));

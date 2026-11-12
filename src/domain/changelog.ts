@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-12-kosong-price', date: '2026-11-12', roles: ALL,
+    title: { zh: '净面价格可以自己改', en: 'Kosong prices can now be set' },
+    items: [
+      { zh: '老板在「设置 → 菜单与价格」可以单独设定净面价（小 / 中 / 大），不再固定半价。', en: 'In Settings → Menu & prices the owner can set the kosong price for small / medium / large; it is no longer fixed at half price.' },
+      { zh: '只改正价时净面价不变；净面价不能高于同份量的正价。', en: 'Changing the normal price leaves the kosong price as it is; kosong cannot cost more than the normal price.' },
+    ],
+  },
+  {
     id: '2026-11-08-pay-on-serve', date: '2026-11-08', roles: ALL,
     title: { zh: '出餐即记收款，后厨显示每单金额', en: 'Payment recorded at serve; kitchen cards show each order’s amount' },
     items: [

@@ -189,7 +189,10 @@ function MenuEditor({ setMsg }: { setMsg: (m: Msg) => void }) {
   useEffect(() => {
     if (!menu) return;
     const d: Record<string, string> = {};
-    for (const s of menu.products.dry_noodle.sizes) d[`noodle.${s.id}`] = rm(s.priceSen);
+    for (const s of menu.products.dry_noodle.sizes) {
+      d[`noodle.${s.id}`] = rm(s.priceSen);
+      if (s.kosongPriceSen !== null) d[`kosong.${s.id}`] = rm(s.kosongPriceSen);
+    }
     for (const k of ['dry_wanton', 'wanton_soup'] as const) for (const s of menu.products[k].sizes) d[`${k}.${s.id}`] = rm(s.priceSen);
     for (const a of Object.values(menu.addOns)) d[`addon.${a.id}`] = rm(a.priceSen);
     setDraft(d);
@@ -198,7 +201,9 @@ function MenuEditor({ setMsg }: { setMsg: (m: Msg) => void }) {
 
   if (!menu) return <Section title="菜单与价格"><p className="text-ink-2">正在载入…</p></Section>;
   const sen = (k: string) => parseRMInput(draft[k] ?? '');
-  const invalid = Object.keys(draft).some((k) => sen(k) === null);
+  // 净面不能比正价贵（服务器同样检查）。
+  const kosongTooHigh = (id: string) => { const k = sen(`kosong.${id}`); const p = sen(`noodle.${id}`); return k !== null && p !== null && k > p; };
+  const invalid = Object.keys(draft).some((k) => sen(k) === null) || menu.products.dry_noodle.sizes.some((s) => kosongTooHigh(s.id));
 
   async function publish(m: MenuVersion) {
     const prices: Record<string, Record<string, number>> = { dry_noodle: {}, soup_noodle: {}, dry_wanton: {}, wanton_soup: {} };
@@ -208,9 +213,16 @@ function MenuEditor({ setMsg }: { setMsg: (m: Msg) => void }) {
       prices.soup_noodle[s.id] = sen(`noodle.${s.id}`)!;
     }
     for (const k of ['dry_wanton', 'wanton_soup'] as const) for (const s of m.products[k].sizes) prices[k][s.id] = sen(`${k}.${s.id}`)!;
+    // 净面价：干捞面与汤面同一个净面价。
+    const kosongPrices: Record<string, Record<string, number>> = { dry_noodle: {}, soup_noodle: {} };
+    for (const s of m.products.dry_noodle.sizes) {
+      if (s.kosongPriceSen === null) continue;
+      kosongPrices.dry_noodle[s.id] = sen(`kosong.${s.id}`)!;
+      kosongPrices.soup_noodle[s.id] = sen(`kosong.${s.id}`)!;
+    }
     const addOnPrices = Object.fromEntries(Object.keys(m.addOns).map((id) => [id, sen(`addon.${id}`)!]));
     setBusy(true);
-    const r = await run<{ version: string }>('publishMenu', { baseVersion: m.version, prices, addOnPrices, soldOut, note }, setMsg);
+    const r = await run<{ version: string }>('publishMenu', { baseVersion: m.version, prices, kosongPrices, addOnPrices, soldOut, note }, setMsg);
     setBusy(false);
     if (r) {
       setMsg({ ok: true, text: `已发布菜单版本 ${r.version}。收银机会自动改用新价格；离线期间按旧版本成交的单仍按旧价入账。` });
@@ -219,13 +231,12 @@ function MenuEditor({ setMsg }: { setMsg: (m: Msg) => void }) {
     }
   }
 
-  const priceInput = (k: string, label: string, kosong?: boolean) => (
+  const priceInput = (k: string, label: string, bad = false) => (
     <label key={k} className="flex items-center justify-between gap-2">
       <span>{label}</span>
       <span className="flex items-center gap-2">
         RM<input aria-label={label} inputMode="decimal" value={draft[k] ?? ''} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })}
-          className={`${field} w-24 text-right tabular-nums ${sen(k) === null ? 'border-danger' : ''}`} />
-        {kosong && <span className="w-28 text-xs text-ink-2">净面 {sen(k) !== null ? formatRM(Math.floor(sen(k)! / 2)) : '—'}{sen(k) !== null && sen(k)! % 2 ? '（须偶数 sen）' : ''}</span>}
+          className={`${field} w-24 text-right tabular-nums ${sen(k) === null || bad ? 'border-danger' : ''}`} />
       </span>
     </label>
   );
@@ -235,7 +246,10 @@ function MenuEditor({ setMsg }: { setMsg: (m: Msg) => void }) {
       <div className="grid gap-4 md:grid-cols-3">
         <div className="space-y-2">
           <div className="font-semibold">面条（干捞 / 汤面统一售价）</div>
-          {menu.products.dry_noodle.sizes.map((s) => priceInput(`noodle.${s.id}`, `${s.nameZh}（${s.badge} 面球）`, true))}
+          {menu.products.dry_noodle.sizes.map((s) => priceInput(`noodle.${s.id}`, `${s.nameZh}（${s.badge} 面球）`))}
+          <div className="pt-2 font-semibold">净面（不要肉）</div>
+          {menu.products.dry_noodle.sizes.filter((s) => s.kosongPriceSen !== null).map((s) => priceInput(`kosong.${s.id}`, `净面 ${s.nameZh}`, kosongTooHigh(s.id)))}
+          {menu.products.dry_noodle.sizes.some((s) => kosongTooHigh(s.id)) && <p className="text-xs text-danger">净面价不能高于同份量的正价。</p>}
         </div>
         <div className="space-y-2">
           <div className="font-semibold">云吞</div>
@@ -257,7 +271,7 @@ function MenuEditor({ setMsg }: { setMsg: (m: Msg) => void }) {
         <input value={note} maxLength={200} onChange={(e) => setNote(e.target.value)} placeholder="发布说明（例如：叉烧涨价）" className={`${field} min-w-[240px] flex-1`} />
         <button type="button" disabled={busy || invalid} onClick={() => void publish(menu)} className="h-11 rounded-lg bg-brand px-4 font-bold text-white disabled:bg-control">发布新菜单版本</button>
       </div>
-      <p className="mt-2 text-xs text-ink-2">Kosong 净面严格半价，由系统自动计算。发布后正在点单的收银机会自动重算；仍按旧价提交的单会被要求重新确认价格。</p>
+      <p className="mt-2 text-xs text-ink-2">净面价单独设定，只改正价时净面价不变。发布后正在点单的收银机会自动重算；仍按旧价提交的单会被要求重新确认价格。</p>
       {(history.data ?? []).length > 0 && (
         <details className="mt-3 text-sm">
           <summary className="cursor-pointer font-semibold">历史版本（{history.data!.length}）</summary>

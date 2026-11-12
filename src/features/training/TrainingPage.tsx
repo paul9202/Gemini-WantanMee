@@ -21,7 +21,7 @@ const GROUPS: { zh: string; en: string; ids: PictogramId[] }[] = [
 ];
 
 const NOTES: Record<string, { zh: string; en: string }> = {
-  'kosong:on': { zh: '半价 · 不能加肉', en: 'Half price · no meat add-ons' },
+  'kosong:on': { zh: '不要肉 · 不能加肉 · 净面价', en: 'No meat · no meat add-ons · kosong price' },
   'sauce:no_tomato': { zh: '红酱才有 · 不是过敏保证', en: 'Red sauce only · not an allergy promise' },
   'addon:char_siew': { zh: '每份 +RM2', en: '+RM2 each' },
   'addon:wanton_3': { zh: '每份 +RM2', en: '+RM2 each' },
