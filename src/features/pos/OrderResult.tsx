@@ -70,6 +70,15 @@ interface Props {
   onReceipt: () => void;
   /** 订单是否已登记收款（云端订单或本机收款事件）。 */
   paid: boolean;
+  /** 送餐单打印（打印机启用时才有）：接单进度的第四步，没打出来时可补打。 */
+  printStep?: PrintStep | null;
+}
+
+export interface PrintStep {
+  label: string;
+  done: boolean;
+  warn: boolean;
+  action?: { label: string; run: () => void };
 }
 
 function Steps({ steps, offline }: { steps: Facts['steps']; offline: boolean }) {
@@ -157,7 +166,13 @@ export function OrderResultDialog(props: Props & { onClose: () => void; extra?: 
         <p className="text-xs text-ink-2">
           {stage.kind === 'accepted' ? tr(`${stage.tokenNumber}号 · 票号 ${stage.receiptNumber}`, `No. ${stage.tokenNumber} · receipt ${stage.receiptNumber}`) : tr(`${stage.tokenNumber}号 · 临时号 ${stage.offlineReceiptNumber}`, `No. ${stage.tokenNumber} · temp ${stage.offlineReceiptNumber}`)}
         </p>
-        <div className="mt-6"><Steps steps={facts.steps} offline={offline} /></div>
+        <div className="mt-6"><Steps steps={props.printStep ? [...facts.steps, { ...props.printStep, icon: 'receipt' as const }] : facts.steps} offline={offline} /></div>
+        {props.printStep?.action && (
+          <button type="button" onClick={props.printStep.action.run}
+            className={`mt-3 h-14 rounded-xl px-5 text-sm font-bold ${props.printStep.warn ? 'bg-warn text-white' : 'border border-line text-ink-2'}`}>
+            {props.printStep.action.label}
+          </button>
+        )}
         <Alerts {...props} facts={facts} />
         {props.extra}
         <div className="mt-6 flex flex-wrap justify-center gap-3">

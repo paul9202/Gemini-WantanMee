@@ -21,6 +21,17 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    // 总开关默认关着，收银现在看不到任何变化，所以先只给老板看；打开、员工要用时再补一条给收银。
+    id: '2026-11-13-runner-slip', date: '2026-11-13', roles: ['owner'],
+    title: { zh: '新增送餐单打印（默认关着）', en: 'New: order slip printing (off by default)' },
+    items: [
+      { zh: '设置里新增「送餐单打印」总开关，默认关着，关着时收银和后厨都没有任何变化。打印机到货后，先看设置里的「连接说明」，再打开开关，到主收银平板的「设备」页连接蓝牙打印机。', en: 'Settings has a new “Order slip printing” switch. It is off by default, and nothing changes for cashiers or the kitchen while it is off. When the printer arrives, read “How to connect” in Settings, turn the switch on, then connect the Bluetooth printer on the main register’s Device page.' },
+      { zh: '连好后，每下一单，出餐口就打出一张送餐单：牌号、堂食或打包、每碗是什么、每行金额和合计。纸单不写付没付，客人付没付看后厨卡片。', en: 'Once connected, every order prints a slip at the pass: token, dine-in or takeaway, each bowl, line amounts and the total. The slip does not say whether it is paid — check the kitchen card for that.' },
+      { zh: '同牌加单、吃完再加、加料各有一句说明；断网时打的是「断网单」，厨师照纸单做。', en: 'Same-token add-ons, later add-ons and extras each carry a note; when offline it prints an “offline slip” for the cook to work from.' },
+      { zh: '打印机没连、断开或没纸都不影响下单。页头会显示打印机状态，没打出来的单可以在打印机面板里补打。', en: 'Ordering never waits for the printer. The header shows the printer status, and slips that did not print can be reprinted from the printer panel.' },
+    ],
+  },
+  {
     id: '2026-11-12-no-char-siew', date: '2026-11-12', roles: ALL,
     title: { zh: '新增「不要叉烧」', en: 'New option: no char siew' },
     items: [

@@ -121,6 +121,28 @@ export async function setPayOnServe(db: Firestore, uid: string | undefined, raw:
   });
 }
 
+/**
+ * 「送餐单打印」总开关（老板）：打开后收银平板才能在设备页连接蓝牙打印机、下单后打送餐单；关掉后各平板都不打、页头不显示打印机。
+ * 写在 config/public（各端实时在读），缺省关：打印机到货、照连接说明试好之前一直关着。服务器不用它做任何判断，只是让各端一起切换。
+ */
+export async function setSlipPrinting(db: Firestore, uid: string | undefined, raw: unknown) {
+  const o = obj(raw, ['storeId', 'operationId', 'enabled', 'reason']);
+  const input = { storeId: storeId(o), operationId: uuid(o, 'operationId'), enabled: bool(o, 'enabled'), reason: optStr(o, 'reason', 200) };
+  return runCommand(db, {
+    type: 'setSlipPrinting', storeId: input.storeId, operationId: input.operationId, uid, roles: ['owner'], payload: input,
+    run: async ({ tx, store, nowMs, actor }) => {
+      const snap = await tx.get(store.configPublic);
+      if (!snap.exists) throw new CommandError('STORE_NOT_CONFIGURED');
+      const before = snap.data()?.slipPrinting === true;
+      tx.set(store.configPublic, { slipPrinting: input.enabled, slipPrintingUpdatedAtMs: nowMs, slipPrintingUpdatedBy: actor.uid }, { merge: true });
+      return {
+        result: { enabled: input.enabled },
+        audit: { entityId: 'config/public', before: { slipPrinting: before }, after: { slipPrinting: input.enabled, reason: input.reason } },
+      };
+    },
+  });
+}
+
 /** 查询原操作结果（请求结果不明时先核对，不写入）。仅原操作者或老板可查。 */
 export async function getOperationResult(db: Firestore, uid: string | undefined, raw: unknown) {
   if (!uid) throw new CommandError('UNAUTHENTICATED');

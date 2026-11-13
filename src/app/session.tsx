@@ -30,6 +30,11 @@ export interface StoreConfig {
    * 旧配置没有这个字段 = 关；前台文案按它切换（关着时照旧要人手确认）。
    */
   payOnServe?: boolean;
+  /**
+   * 送餐单打印总开关（老板在设置里开）：开了收银平板才能连接蓝牙打印机、下单后打送餐单。
+   * 旧配置没有这个字段 = 关；关着时设备页、页头都不显示打印机，也不连接、不打印。
+   */
+  slipPrinting?: boolean;
 }
 
 interface Session {

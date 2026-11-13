@@ -12,7 +12,7 @@ import { toHttpsError } from './core/errors';
 import { createOrder } from './commands/createOrder';
 import { lifecycleCommand } from './commands/lifecycle';
 import { ackKitchenTicket, openShift, releaseToken } from './commands/front';
-import { assignRegister, getOperationResult, inviteMember, manageMember, setPayOnServe } from './commands/admin';
+import { assignRegister, getOperationResult, inviteMember, manageMember, setPayOnServe, setSlipPrinting } from './commands/admin';
 import { publishBom, publishMenu } from './commands/catalog';
 import { routeManualOrderToKitchen, syncOfflineEvents } from './commands/offline';
 import { resolveOfflineReview } from './commands/review';
@@ -76,6 +76,7 @@ export const reinstateWrittenOffCmd = command(reinstateWrittenOff);
 // 出餐即记收款：客人没付就走了（冲正 + 放弃追收一次完成）、老板开关。
 export const markNotPaidCmd = command(markNotPaid);
 export const setPayOnServeCmd = command(setPayOnServe);
+export const setSlipPrintingCmd = command(setSlipPrinting);
 export const rejectKitchenCancelCmd = command((d, u, x) => lifecycleCommand(d, 'rejectKitchenCancel', u, x));
 export const manageMemberCmd = command(manageMember);
 export const assignRegisterCmd = command(assignRegister);

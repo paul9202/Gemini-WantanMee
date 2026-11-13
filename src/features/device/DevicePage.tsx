@@ -20,6 +20,8 @@ import manifest from '../../ui/photoManifest.json';
 import { serverNow, unsyncedEvents, useOfflineRuntime } from '../../data/offline/runtime';
 import { setLang, useLang, useT } from '../../app/i18n';
 import { measureViewport, useViewportProfile } from '../../data/viewportProfile';
+import { slipPrintingOn, usePrinter } from '../../data/printer/printer';
+import { PrinterSheet } from '../printer/PrinterPanel';
 
 type Tone = 'ok' | 'warn' | 'bad' | 'idle';
 const TONE: Record<Tone, string> = { ok: 'bg-ok-bg text-ok', warn: 'bg-warn-bg text-warn', bad: 'bg-danger-bg text-danger', idle: 'bg-subtle text-ink-2' };
@@ -190,6 +192,7 @@ export function DevicePage() {
                 <button type="button" onClick={() => navigate('/kitchen')} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{tr('打开', 'Open')}<Icon name="arrow" size={18} /></button>
               </Row>
             )}
+            {front && slipPrintingOn(config) && <PrinterRow />}
             <Row title={tr('菜单与图片', 'Menu & photos')} sub={`${tr('菜单版本', 'Menu version')} ${config?.activeMenuVersion ?? '—'}`}>
               <span className={`rounded-lg px-2.5 py-1 text-sm font-semibold ${check && check.photos === check.total ? TONE.ok : TONE.warn}`}>
                 {check && check.photos === check.total ? tr('已就绪', 'Ready') : tr('图片未缓存完', 'Photos not cached')}
@@ -235,6 +238,25 @@ export function DevicePage() {
 }
 
 interface Node { tone: Tone; title: string; sub: string }
+
+/** 送餐单打印机：没连过时说明用途；连过后显示打印机名和状态。点「设置」打开打印机面板。 */
+function PrinterRow() {
+  const s = usePrinter();
+  const tr = useT();
+  const [open, setOpen] = useState(false);
+  const state = !s.settings.enabled ? null
+    : s.link === 'ready' ? { tone: 'ok' as Tone, text: tr('已连接', 'Connected') }
+    : s.link === 'lost' ? { tone: 'bad' as Tone, text: tr('断开了', 'Disconnected') }
+    : { tone: 'warn' as Tone, text: tr('没连接', 'Not connected') };
+  return (
+    <Row title={tr('送餐单打印机', 'Order slip printer')}
+      sub={s.settings.enabled ? (s.settings.deviceName ?? tr('蓝牙打印机', 'Bluetooth printer')) : tr('下单后在出餐口打一张送餐单（蓝牙打印机）', 'Prints a slip at the pass for each order (Bluetooth printer)')}>
+      {state && <span className={`rounded-lg px-2.5 py-1 text-sm font-semibold ${TONE[state.tone]}`}>{state.text}</span>}
+      <button type="button" onClick={() => setOpen(true)} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{s.settings.enabled ? tr('设置', 'Settings') : tr('连接', 'Connect')}<Icon name="arrow" size={18} /></button>
+      {open && <PrinterSheet onClose={() => setOpen(false)} />}
+    </Row>
+  );
+}
 
 function Card({ children }: { children: ReactNode }) {
   return <section className="rounded-2xl border border-line bg-card p-5 shadow-card lg:p-6">{children}</section>;

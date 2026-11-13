@@ -14,6 +14,7 @@ import { useMenu } from '../../data/menu';
 import { useSession } from '../../app/session';
 import { useLoad } from './data';
 import { GoLiveReset } from './GoLiveReset';
+import { PrinterGuideDialog } from '../printer/PrinterGuide';
 import { OwnerTabs, Section } from './ui';
 
 const ROLE_ZH = { owner: '老板', cashier: '收银', kitchen: '后厨' } as const;
@@ -42,6 +43,7 @@ export function SettingsPage() {
       {msg && <p role={msg.ok ? 'status' : 'alert'} className={`rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>{msg.text}</p>}
       <Members setMsg={setMsg} />
       <PayOnServeSwitch setMsg={setMsg} />
+      <SlipPrintingSwitch setMsg={setMsg} />
       <MenuEditor setMsg={setMsg} />
       <BomEditor setMsg={setMsg} />
       <GoLiveReset setMsg={setMsg} />
@@ -169,6 +171,49 @@ function PayOnServeSwitch({ setMsg }: { setMsg: (m: Msg) => void }) {
         </div>
       )}
       <p className="mt-2 text-xs text-ink-2">上线时先保持关着，等所有平板都更新好再打开；以后有需要也能随时关掉。更新前已经出餐、还挂着未收款的旧单不会自动改，留在「待登记收款」里确认一次就清掉。</p>
+    </Section>
+  );
+}
+
+// ---------- 送餐单打印 ----------
+
+/**
+ * 门店总开关（config/public.slipPrinting，缺省 = 关）：打印机到货、照连接说明试好之前一直关着。
+ * 关着：设备页没有打印机这一行，收银页头不显示打印机，下单不打印，平板也不去连打印机。
+ * 打开不用多问：只是让收银平板可以去连打印机，没连上之前什么都不会变。
+ */
+function SlipPrintingSwitch({ setMsg }: { setMsg: (m: Msg) => void }) {
+  const { config } = useSession();
+  const on = config?.slipPrinting === true;
+  const [busy, setBusy] = useState(false);
+  const [guide, setGuide] = useState(false);
+
+  async function set(enabled: boolean) {
+    setBusy(true);
+    const r = await run<{ enabled: boolean }>('setSlipPrinting', { enabled, reason: enabled ? '老板打开送餐单打印' : '老板关闭送餐单打印' }, setMsg);
+    setBusy(false);
+    if (r) setMsg({ ok: true, text: r.enabled ? '已打开「送餐单打印」：到主收银平板的「设备」页连接打印机，步骤看「连接说明」。' : '已关闭「送餐单打印」：各平板不再打印，页头也不显示打印机。' });
+  }
+
+  return (
+    <Section title="送餐单打印" hint="下单后在出餐口打一张纸单">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3">
+        <div className="min-w-[220px] flex-1">
+          <b>送餐单打印</b>
+          <span className="block text-sm text-ink-2">打开后，主收银平板可以连接蓝牙打印机，每下一单就在出餐口打一张送餐单（牌号、堂食 / 打包、每碗是什么、金额）。</span>
+        </div>
+        <span className={`rounded-lg px-2 py-1 text-sm font-semibold ${on ? 'bg-ok-bg text-ok' : 'bg-subtle text-ink-2'}`}>{config ? (on ? '已打开' : '已关闭') : '载入中…'}</span>
+        <button type="button" role="switch" aria-checked={on} aria-label="送餐单打印" disabled={busy || !config}
+          onClick={() => void set(!on)}
+          className={`relative h-10 w-[68px] shrink-0 rounded-full transition-colors disabled:opacity-50 ${on ? 'bg-ok' : 'bg-control'}`}>
+          <span className={`absolute top-1 h-8 w-8 rounded-full bg-white shadow transition-all ${on ? 'right-1' : 'left-1'}`} />
+        </button>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <p className="min-w-0 flex-1 text-xs text-ink-2">打印机到货前先关着。到货后先看「连接说明」，打开这里，再到主收银平板的「设备」页连接、打测试条。以后不想用随时可以关掉。</p>
+        <button type="button" onClick={() => setGuide(true)} className="h-11 rounded-lg border border-control bg-card px-4 font-semibold">连接说明</button>
+      </div>
+      {guide && <PrinterGuideDialog onClose={() => setGuide(false)} />}
     </Section>
   );
 }

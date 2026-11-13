@@ -8,11 +8,11 @@
  * 手选的空闲牌，若这个号上一桌还没收款：只在本单上方提示，可一键并到一起算；不理它就是普通新客人。牌号全天复用，绝不按号自动并账。
  * 下单后加料：页头「＋加料」开面板，给已下的单加叉烧 / 云吞，单独一张小单，不动当前这张单、餐牌和加单目标；只能联网。
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, cartServiceMode, computeTotals, emptyCart, setLineQuantity, setLineServiceMode, setServiceMode, updateLineConfig } from '../../domain/cart';
-import { defaultConfig, LineConfig, normalizeConfig } from '../../domain/lineItem';
+import { defaultConfig, LineConfig, normalizeConfig, unitPriceSen } from '../../domain/lineItem';
 import { notePictogramIds, PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
@@ -46,6 +46,41 @@ import { ProductGrid } from './ProductGrid';
 import { TokenPicker } from './TokenPicker';
 import { ReceiptDialog, receiptFromLocal, receiptFromOrder } from '../receipt/ReceiptDialog';
 import type { ReceiptSource } from '../../domain/receipt';
+import { buildRunnerSlip, RunnerSlipSource, slipKey } from '../../domain/runnerSlip';
+import type { MenuVersion, ServiceMode } from '../../domain/menu';
+import type { OrderLineInput } from '../../domain/cart';
+import { printer, slipPrintingOn, usePrinter } from '../../data/printer/printer';
+import { PrinterChip, slipStep } from '../printer/PrinterPanel';
+
+/** 送餐单的行：订单行 + 成交菜单的单价。 */
+function slipLines(menu: MenuVersion, lines: { config: LineConfig; quantity: number; serviceMode?: ServiceMode }[]): RunnerSlipSource['lines'] {
+  return lines.map((l) => ({ config: l.config, quantity: l.quantity, unitPriceSen: unitPriceSen(menu, l.config), ...(l.serviceMode ? { serviceMode: l.serviceMode } : {}) }));
+}
+
+/** 登记一张送餐单。打印出任何问题都不影响下单，所以这里吞掉所有错误。 */
+function queueSlip(menu: MenuVersion, timeZone: string, key: string, src: RunnerSlipSource, label: string, reconciled = false) {
+  try {
+    const slip = buildRunnerSlip(menu, src, { timeZone, printIndex: 0, reconciled });
+    void printer.enqueue(key, slip, { label, reconciled }).catch(() => undefined);
+  } catch {
+    // 打印不影响下单
+  }
+}
+
+/** 下单结果不明、核对后确认已接单的单：从本机记下的下单内容补打送餐单。 */
+async function queueReconciledSlip(op: PendingOp, current: MenuVersion | undefined, timeZone: string) {
+  const order = op.payload.order as unknown as { tokenNumber: number; serviceMode: ServiceMode; menuVersion: string; lines: OrderLineInput[]; extraForOrderId?: string };
+  const r = (op.result ?? {}) as Partial<CreateOrderResult>;
+  if (!r.orderId || !r.receiptNumber) return;
+  const menu = current?.version === order.menuVersion ? current : await menuForVersion(order.menuVersion);
+  if (!menu) return;
+  const extraOnly = Boolean(order.extraForOrderId);
+  queueSlip(menu, timeZone, slipKey({ orderId: r.orderId }), {
+    tokenNumber: r.tokenNumber ?? order.tokenNumber, serviceMode: order.serviceMode, acceptedAtMs: r.acceptedAtMs ?? op.createdAtMs,
+    receiptNumber: r.receiptNumber, offlineReceiptNumber: null, source: 'online', lines: slipLines(menu, order.lines),
+    totalSen: r.totalSen ?? op.summary.totalSen, sharedToken: Boolean(r.sharedToken), extraOnly,
+  }, `#${r.receiptNumber}${extraOnly ? ' · 加料' : ''} · 核对后`, true);
+}
 
 interface CreateOrderResult {
   orderId: string;
@@ -208,10 +243,39 @@ export function PosPage() {
     stage.kind === 'accepted' ? storePath(`orders/${stage.result.orderId}`) : null,
   );
 
+  // 送餐单打印：老板在设置里打开总开关才用；关着时不连打印机、不打印、页头不显示。
+  const slipOn = slipPrintingOn(config);
+  const printerState = usePrinter(slipOn);
+  // 总开关被关掉：放开蓝牙连接（打印机可以给别的设备用），排着的单也不再打。
+  useEffect(() => {
+    if (!slipOn && printer.getState().link !== 'off' && printer.getState().link !== 'needs_tap') printer.disconnect();
+  }, [slipOn]);
+  // 送餐单：下单结果不明的单，核对确认已接单后补打（标「核对后补打」）；查无此单就不打。
+  // 打开页面时还在送单中 / 结果不明的旧单也算（页面在送单途中被关掉）。本次打开里正常送单中的不算，那些接单时直接打。
+  const awaitingCheck = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!rt.loaded || !config) return;
+    if (awaitingCheck.current === null) {
+      awaitingCheck.current = new Set(rt.pendingOps.filter((o) => o.status === 'submitting' || o.status === 'unknown_result').map((o) => o.operationId));
+    }
+    const waiting = awaitingCheck.current;
+    for (const op of rt.pendingOps) {
+      if (op.status === 'unknown_result') waiting.add(op.operationId);
+      if (!waiting.has(op.operationId)) continue;
+      if (op.status === 'accepted') {
+        waiting.delete(op.operationId);
+        if (slipPrintingOn(config)) void queueReconciledSlip(op, menu, config.timeZone);
+      } else if (op.status === 'not_found' || op.status === 'rejected' || op.status === 'converted') {
+        waiting.delete(op.operationId);
+      }
+    }
+  }, [rt.loaded, rt.pendingOps, menu, config]);
+
   if (!menu || !config || !draft) return <p className="p-6">{tr('正在载入菜单…', 'Loading menu…')}</p>;
   if (reg.status !== 'ready') return <RegisterGate status={reg.status} isOwner={member?.role === 'owner'} />;
 
   const totals = computeTotals(menu, BOM_V1, cart);
+  const timeZone = config.timeZone;
   const counts = countTokens(board);
   const busy = stage.kind === 'saving' || stage.kind === 'submitting';
   const blockingOnline = unresolved.filter((o) => o.status === 'not_found');
@@ -310,6 +374,11 @@ export function PosPage() {
         };
         return { event, order: { ...payload, sequence, createdAtMs: Date.now(), changeSen: null } };
       });
+      // 断网单：后厨屏看不到，送餐单就是厨师照着做的纸单（补同步时不会再打）。
+      if (slipOn) queueSlip(menu, timeZone, slipKey({ clientOrderId }), {
+        tokenNumber: token, serviceMode: cart.serviceMode, acceptedAtMs: order.createdAtMs, receiptNumber: null, offlineReceiptNumber: order.offlineReceiptNumber,
+        source: 'offline', lines: slipLines(menu, order.lines), totalSen: order.totalSen,
+      }, `临时号 ${order.offlineReceiptNumber} · 断网单`);
       await reloadLocal();
       setStage({ kind: 'local_accepted', clientOrderId, offlineReceiptNumber: order.offlineReceiptNumber, tokenNumber: token, totalSen: totals.totalSen, summary: summaryOf() });
       setResultAddOnRoot(null);
@@ -366,6 +435,12 @@ export function PosPage() {
       const result = await submit<CreateOrderResult>('createOrder', payload);
       await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
       if (!result.replayed) void recordServerOffset(result.acceptedAtMs - (sentAt + Date.now()) / 2);
+      // 送餐单：牌号、票号、合计都用服务器返回的。
+      const addOnToToken = !result.sharedToken && addOnTarget ? addOnTarget.tokenNumber : null;
+      if (slipOn) queueSlip(menu, timeZone, slipKey({ orderId: result.orderId }), {
+        tokenNumber: result.tokenNumber, serviceMode: cart.serviceMode, acceptedAtMs: result.acceptedAtMs, receiptNumber: result.receiptNumber, offlineReceiptNumber: null,
+        source: 'online', lines: slipLines(menu, payload.order.lines), totalSen: result.totalSen, sharedToken: Boolean(result.sharedToken), addOnToToken,
+      }, `#${result.receiptNumber}${result.sharedToken ? ' · 同牌加单' : addOnToToken !== null ? ' · 加单' : ''}`);
       setStage({ kind: 'accepted', result, summary: summaryOf(), joinRequested });
       // 收款组以服务器为准（同牌加单可能被自动并入原单）；旧服务器不返回时按本机加单目标推算。
       setResultAddOnRoot(result.addOnToOrderId ?? (addOnTarget ? addOnTarget.addOnToOrderId ?? addOnTarget.id : null));
@@ -443,6 +518,10 @@ export function PosPage() {
       const result = await submit<CreateOrderResult>('createOrder', payload);
       await putPendingOp({ ...op, status: 'accepted', result: { ...result }, updatedAtMs: Date.now() });
       if (!result.replayed) void recordServerOffset(result.acceptedAtMs - (sentAt + Date.now()) / 2);
+      if (slipOn) queueSlip(menu, timeZone, slipKey({ orderId: result.orderId }), {
+        tokenNumber: result.tokenNumber, serviceMode: req.serviceMode, acceptedAtMs: result.acceptedAtMs, receiptNumber: result.receiptNumber, offlineReceiptNumber: null,
+        source: 'online', lines: slipLines(menu, req.lines), totalSen: result.totalSen, extraOnly: true,
+      }, `#${result.receiptNumber} · 加料`);
       const mixed = new Set(req.lines.map((l) => l.serviceMode ?? req.serviceMode)).size > 1;
       setStage({ kind: 'accepted', result, summary: { serviceMode: mixed ? 'mixed' : req.serviceMode, firstItem: req.summary }, joinRequested: false, extraOnly: true });
       setResultAddOnRoot(result.addOnToOrderId ?? null);
@@ -510,6 +589,10 @@ export function PosPage() {
     offsetMs: rt.serverOffsetMs ?? rt.snapshot?.serverOffsetMs ?? 0,
     handedOff,
     paid: resultPaid,
+    printStep: slipOn && resultStage ? slipStep(
+      printerState.jobs.find((j) => j.key === (resultStage.kind === 'accepted' ? slipKey({ orderId: resultStage.orderId }) : slipKey({ clientOrderId: resultStage.clientOrderId }))),
+      printerState, resultStage.kind === 'local_accepted', tr,
+    ) : null,
     onlineHandoffAtMs: lastOrder.data?.manualHandoffAtMs ?? null,
     onReceipt: () => {
       if (stage.kind === 'accepted') setReceipt({ key: stage.result.orderId, load: () => receiptFromOrder(stage.result.orderId, config.name) });
@@ -670,6 +753,7 @@ export function PosPage() {
           </button>
         )}
         {!offlineMode && <KitchenHealthBadge lastSeenMs={opsStatus.data?.kitchenLastSeenAtMs ?? null} tickets={queueQ.data} />}
+        {slipOn && <PrinterChip />}
         {!tokensFromServer && <span className="text-sm text-warn">{tr('餐牌为本机记录', 'Tokens from this device')}{rt.snapshot ? `（快照 ${new Date(rt.snapshot.savedAtMs).toLocaleTimeString('zh-CN', { hour12: false })}）` : ''}</span>}
       </ShellHeaderActions>
 

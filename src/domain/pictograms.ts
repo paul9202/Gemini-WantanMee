@@ -62,6 +62,16 @@ export interface LinePictogram {
   emphasized: boolean;
 }
 
+/**
+ * 收据、送餐单共用：这碗要写出来的要求（辣度、葱、油渣、加料、不要番茄酱、不要叉烧、打包不附送清汤）。
+ * 不含面种和净面：这两样各自另写。
+ */
+export function modifierNamesZh(menu: MenuVersion, cfg: LineConfig, serviceMode: ServiceMode): string[] {
+  return linePictograms(menu, cfg, serviceMode)
+    .filter((p) => p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'kosong:on')
+    .map((p) => PICTOGRAMS[p.id].zh);
+}
+
 /** 某行在 POS/KDS/收据上显示的图卡序列（顺序固定）。 */
 export function linePictograms(menu: MenuVersion, cfg: LineConfig, serviceMode: ServiceMode): LinePictogram[] {
   const product = productOf(menu, cfg.productKind);

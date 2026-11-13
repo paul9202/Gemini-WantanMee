@@ -13,7 +13,7 @@ import { MenuVersion, NOODLE_TYPE_NAMES, OrderServiceMode, SERVICE_MODE_NAMES, S
 import { formatRM } from './money';
 import type { PaymentState } from './orderLifecycle';
 import type { PaymentMethod } from './payment';
-import { linePictograms, PICTOGRAMS } from './pictograms';
+import { modifierNamesZh } from './pictograms';
 
 export interface ReceiptSource {
   storeName: string;
@@ -76,7 +76,7 @@ function lineRows(menu: MenuVersion, r: ReceiptSource): ReceiptRow[] {
     const detail = [
       r.serviceMode === 'mixed' ? SERVICE_MODE_NAMES[mode].zh : null,
       l.config.noodleType ? NOODLE_TYPE_NAMES[l.config.noodleType].zh : null,
-      ...linePictograms(menu, l.config, mode).filter((p) => p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'kosong:on').map((p) => PICTOGRAMS[p.id].zh),
+      ...modifierNamesZh(menu, l.config, mode),
     ].filter(Boolean);
     if (detail.length) rows.push({ left: `  ${detail.join(' · ')}`, small: true });
   }
