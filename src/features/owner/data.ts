@@ -3,7 +3,12 @@
  * 首版直接读账本，不依赖 dailyStats 缓存；数据量变大后再加可重建的汇总缓存。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { collection, getDocs, query, where, QueryConstraint } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where, QueryConstraint } from 'firebase/firestore';
+import { BOM_V1, BOM_VERSIONS, BomVersion } from '../../domain/bom';
+import { DEFAULT_SALES_TARGETS } from '../../domain/costing';
+import { addDays } from '../../domain/businessDay';
+import { CostSourcesDoc, DayUsage, EMPTY_COST_SOURCES, StockBatch, StockCountDoc } from '../../domain/costSources';
+import { materialUsage, UsageOrder } from '../../domain/usage';
 import type { DateRange } from '../../domain/businessDay';
 import type { CloseOrderRow, LedgerDocs, OrderReportRow } from '../../domain/ledger';
 import type { Sen } from '../../domain/money';
@@ -101,4 +106,45 @@ export function download(filename: string, text: string, type = 'text/csv;charse
   const a = Object.assign(document.createElement('a'), { href: url, download: filename });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** 当前启用的单位成本（BOM）：随代码发布的版本直接用；老板发布的版本从 bomVersions 读。读不到时退回 BOM_V1。 */
+export async function loadActiveBom(version: string | null | undefined): Promise<BomVersion> {
+  if (!version) return BOM_V1;
+  if (BOM_VERSIONS[version]) return BOM_VERSIONS[version];
+  return ((await getDoc(doc(db, storePath(`bomVersions/${version}`)))).data()?.bom as BomVersion | undefined) ?? BOM_V1;
+}
+
+/** 每日面团粒数目标（经营目标里设的，默认 50）。 */
+export async function loadDailyBallsTarget(): Promise<number> {
+  const goals = (await getDoc(doc(db, storePath('config/goals')))).data() as { sales?: { dailyBalls?: number } } | undefined;
+  return goals?.sales?.dailyBalls ?? DEFAULT_SALES_TARGETS.dailyBalls;
+}
+
+/** 单位成本里还没实店核实的项目（老板看得懂的名字）。 */
+export const CALIBRATION_ZH: Record<string, string> = {
+  'noodleHalfBall.mee_poh': '面薄面团', 'base.soup_noodle': '汤面汤底', scallion_lard_extra: '多葱 / 多油渣',
+};
+
+/** 单价来源与 AI 建议（config/costSources）。 */
+export async function loadCostSources(): Promise<CostSourcesDoc> {
+  const d = (await getDoc(doc(db, storePath('config/costSources')))).data() as Partial<CostSourcesDoc> | undefined;
+  return { ...EMPTY_COST_SOURCES, ...d, prices: d?.prices ?? {}, suggestions: d?.suggestions ?? {}, conversions: d?.conversions ?? {} };
+}
+
+/**
+ * 算剩余要用的资料：近 35 天每天的用量（订单算）、进货批次、收档点数、单价来源。
+ * 35 天够涵盖「近 30 天第一次进货」起点和前三周同一天。
+ */
+export async function loadStockInputs(today: string): Promise<{ days: DayUsage[]; batches: StockBatch[]; counts: StockCountDoc[]; sources: CostSourcesDoc }> {
+  const from = addDays(today, -35), to = addDays(today, 1);
+  const [orders, batches, counts, sources] = await Promise.all([
+    fetchAll<UsageOrder & { businessDate: string }>('orders', where('businessDate', '>=', from), where('businessDate', '<', to)),
+    fetchAll<StockBatch>('ingredientBatches'),
+    fetchAll<StockCountDoc>('stockCounts'),
+    loadCostSources(),
+  ]);
+  const days: DayUsage[] = [];
+  for (let d = from; d < to; d = addDays(d, 1)) days.push({ date: d, usage: materialUsage(orders.filter((o) => o.businessDate === d)) });
+  return { days, batches, counts, sources };
 }

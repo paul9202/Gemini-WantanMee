@@ -130,3 +130,50 @@ test('邀请成员：创建账号并返回设置密码链接；员工设密码�
   assert.deepEqual([after.active, after.email], [false, email], '停用后保留邮箱');
   assert.equal(await staff.code('heartbeatDevice', { storeId: f.storeId, deviceId: 'kds-2' }), 'NOT_A_MEMBER');
 });
+
+// ───────── 经营改版：确认单价、换算、收档点数、小结（Emulator） ─────────
+
+test('确认单价：发布新 BOM、记下来源并清掉 AI 建议；收银不能确认；过期版本被拒；跟现在一样只记来源', async () => {
+  const f = await setupStore();
+  const src = () => admin().doc(`stores/${f.storeId}/config/costSources`);
+  await src().set({ suggestions: { wanton: { kind: 'ai', unitCostUnits: 240, lowUnits: 200, highUnits: 300, basis: '估', atMs: 1, provider: 'claude', model: 'm' } } });
+  const accept = (items: unknown[], baseVersion = 'bom-2026-10-v1', who = f.owner) => who.code('acceptUnitCosts', { storeId: f.storeId, operationId: uuid(), baseVersion, items });
+  assert.equal(await accept([{ key: 'wanton', unitCostUnits: 240, kind: 'ai', basis: '估' }], undefined, f.cashier), 'FORBIDDEN');
+  assert.equal(await accept([{ key: 'wanton', unitCostUnits: 0, kind: 'ai', basis: '估' }]), 'INVALID_ARGUMENT');
+  const r = await f.owner.call<{ version: string; published: boolean }>('acceptUnitCosts', {
+    storeId: f.storeId, operationId: uuid(), baseVersion: 'bom-2026-10-v1',
+    items: [{ key: 'wanton', unitCostUnits: 240, kind: 'ai', basis: 'AI 估 · 肉碎 RM19/kg' }, { key: 'mee_poh', unitCostUnits: 899, kind: 'receipt', basis: '11/10 进货 60 粒 RM54.00', ref: 'b1' }],
+  });
+  assert.ok(r.published);
+  assert.equal((await cfg(f)).activeBomVersion, r.version);
+  const bom = (await admin().doc(`stores/${f.storeId}/bomVersions/${r.version}`).get()).data()!.bom;
+  assert.equal(bom.wanton, 240);
+  assert.equal(bom.noodleHalfBall.mee_poh, 450, '面团单价取偶数后平分成半粒');
+  assert.ok(!bom.pendingCalibration.includes('noodleHalfBall.mee_poh'));
+  const s = (await src().get()).data()!;
+  assert.equal(s.prices.wanton.kind, 'ai');
+  assert.equal(s.prices.mee_poh.ref, 'b1');
+  assert.equal(s.suggestions.wanton, undefined);
+  assert.equal(await accept([{ key: 'wanton', unitCostUnits: 250, kind: 'owner', basis: '改' }]), 'STALE_VERSION');
+  const same = await f.owner.call<{ version: string; published: boolean }>('acceptUnitCosts', { storeId: f.storeId, operationId: uuid(), baseVersion: r.version, items: [{ key: 'packaging', unitCostUnits: 200, kind: 'owner', basis: '对' }] });
+  assert.equal(same.published, false);
+  assert.equal((await src().get()).data()!.prices.packaging.kind, 'owner');
+});
+
+test('换算与收档点数：范围检查；点数写入营业日；小结在没有 AI 时给白话', async () => {
+  const f = await setupStore();
+  assert.equal(await f.owner.code('setCostConversions', { storeId: f.storeId, operationId: uuid(), values: { wantonsPerKgPork: 5 } }), 'INVALID_ARGUMENT');
+  await f.owner.call('setCostConversions', { storeId: f.storeId, operationId: uuid(), values: { wantonsPerKgPork: 90 } });
+  assert.equal((await admin().doc(`stores/${f.storeId}/config/costSources`).get()).data()!.conversions.wantonsPerKgPork.value, 90);
+  assert.equal(await f.owner.code('recordStockCount', { storeId: f.storeId, operationId: uuid(), counts: [{ ingredientId: 'ing-salt', quantity: 1 }] }), 'INVALID_ARGUMENT');
+  assert.equal(await f.cashier.code('recordStockCount', { storeId: f.storeId, operationId: uuid(), counts: [{ ingredientId: 'ing-mee-poh', quantity: 8 }] }), 'FORBIDDEN');
+  const sc = await f.owner.call<{ ids: string[]; businessDate: string }>('recordStockCount', { storeId: f.storeId, operationId: uuid(), counts: [{ ingredientId: 'ing-mee-poh', quantity: 8 }, { ingredientId: 'ing-minced-pork', quantity: 1.5 }] });
+  const doc0 = (await admin().doc(`stores/${f.storeId}/stockCounts/${sc.ids[1]}`).get()).data()!;
+  assert.equal(doc0.unit, 'kg');
+  assert.equal(doc0.businessDate, sc.businessDate);
+  await placeOrder(f, { tokenNumber: 3 });
+  const sum = await f.owner.call<{ status: string; plain: string[]; facts: { bowls: number } }>('getDailySummary', { storeId: f.storeId, date: sc.businessDate, generate: true });
+  assert.equal(sum.facts.bowls, 1);
+  assert.equal(sum.plain.length, 3);
+  assert.equal(sum.status, 'disabled', 'AI 记成本没开时不调用模型，只给白话');
+});

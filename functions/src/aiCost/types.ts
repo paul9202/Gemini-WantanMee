@@ -61,6 +61,15 @@ export interface AiProvider {
   modelFor(task: 'extract' | 'explain', hasImages: boolean): string | null;
   extract(input: ExtractionInput, signal: AbortSignal): Promise<ProviderResult<ExtractedCostDraft>>;
   explain(input: ExplainInput, allowedIds: Set<string>, allowedAmounts: Set<number>, signal: AbortSignal): Promise<ProviderResult<CostExplanation>>;
+  /** 通用结构化输出（经营改版：估单价、收档小结）。只用文字模型；结果仍由调用方严格校验。 */
+  structured<T>(req: StructuredRequest<T>, signal: AbortSignal): Promise<ProviderResult<T>>;
+}
+
+export interface StructuredRequest<T> {
+  system: string;
+  user: string;
+  schema: Record<string, unknown>;
+  parse: (raw: unknown) => T;
 }
 
 /** 每次供应商调用的计量（写入 attempts 文档；不含密钥、不含收据原文）。 */

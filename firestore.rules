@@ -85,7 +85,8 @@ service cloud.firestore {
             'dailyReports', 'dailyStats', 'businessDays', 'auditEvents', 'operations',
             'bomVersions', 'devices', 'offlineInbox',
             'ingredients', 'ingredientBatches', 'recurringSlots', 'startupCosts', 'goals', 'expenseLinks',
-            'costDrafts', 'costReceipts', 'purchaseDetails', 'costAnalysis', 'aiUsage'
+            'costDrafts', 'costReceipts', 'purchaseDetails', 'costAnalysis', 'aiUsage',
+            'stockCounts', 'aiSummaries'
           ] && isOwner(storeId);
         allow write: if false;
       }

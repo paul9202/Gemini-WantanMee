@@ -38,7 +38,7 @@ export function ReviewPage() {
 
   return (
     <div className="mx-auto max-w-[1100px] p-4 pb-8 lg:p-8">
-      <OwnerTabs current="/owner/review" badge={{ '/owner/review': rows.length }} />
+      <OwnerTabs current="/owner/review" badge={{ '/owner/finance': rows.length }} />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <h1 className="text-2xl font-bold">离线待核对</h1>
         <span className="text-ink-2">{rows.length} 条{total ? ` · 已收 ${formatRM(total)} 尚未入云端账` : ''}</span>

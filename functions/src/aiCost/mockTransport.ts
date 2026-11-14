@@ -56,6 +56,35 @@ function mockExplain(userText: string) {
   };
 }
 
+/** 估单价：收据价照用，其余按固定示范值（标明是模拟）。 */
+function mockEstimate(userText: string) {
+  const receipt = new Map([...userText.matchAll(/^(\w+)：RM(\d+\.\d{3})（/gm)].map((m) => [m[1], m[2]]));
+  const base: Record<string, string> = { thin_egg: '0.850', mee_poh: '0.900', wanton: '0.240', char_siew: '1.300', dry_base: '0.500', soup_base: '0.600', packaging: '0.250' };
+  return {
+    prices: Object.entries(base).map(([key, v]) => {
+      const cost = receipt.get(key) ?? v;
+      const n = Number(cost);
+      return { key, cost_rm: cost, low_rm: (n * 0.8).toFixed(3), high_rm: (n * 1.25).toFixed(3), basis: receipt.has(key) ? '（模拟）按收据价' : '（模拟）按柔佛一般批发价估' };
+    }),
+    conversions: { wantons_per_kg_pork: 100, sheets_per_kg_skin: 300, char_siew_grams_per_portion: 27 },
+    notes: ['这是 Emulator 模拟估价，不是真实模型输出'],
+  };
+}
+
+/** 收档小结：只用给的数字（从 JSON 里取）。 */
+function mockSummary(userText: string) {
+  const f = JSON.parse(userText.slice(userText.indexOf('{')));
+  const top = (f.topDishes as { label: string; bowls: number }[]).slice(0, 2).map((d) => `${d.label} ${d.bowls} 碗`).join('、');
+  const t = f.tomorrow;
+  return {
+    paragraphs: [
+      { title: '今天', text: `（模拟）卖了 ${f.bowls} 碗、${f.balls} 粒面，收入 RM${(f.revenueSen / 100).toFixed(2)}。` },
+      { title: '卖得好的', text: top ? `（模拟）${top}最好卖。` : '（模拟）还没有卖出。' },
+      { title: '明天备料', text: t.thinBalls !== null ? `（模拟）明天细面约 ${t.thinBalls} 粒${t.wanton !== null ? `、云吞约 ${t.wanton} 粒` : ''}。` : '（模拟）资料还不够。' },
+    ],
+  };
+}
+
 function today(userText: string, shift: number) {
   const d = /营业日 (\d{4}-\d{2}-\d{2})/.exec(userText)?.[1];
   if (!d) return null;
@@ -64,7 +93,9 @@ function today(userText: string, shift: number) {
   return t.toISOString().slice(0, 10);
 }
 
-function respond(kind: 'extract' | 'explain', userText: string, hasImage: boolean) {
+function respond(kind: 'extract' | 'explain' | 'estimate' | 'summary', userText: string, hasImage: boolean) {
+  if (kind === 'estimate') return mockEstimate(userText);
+  if (kind === 'summary') return mockSummary(userText);
   if (kind === 'explain') return mockExplain(userText);
   if (hasImage) return mockExtractReceipt();
   const raw = /"""\n([\s\S]*?)\n"""/.exec(userText)?.[1] ?? userText;
@@ -83,7 +114,8 @@ export function createMockFetch(): typeof fetch {
       const content = body.messages?.[0]?.content as { type: string; text?: string }[];
       const text = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
       if (/#mock:(claude-down|all-down)/.test(text)) return json(529, { type: 'error', error: { type: 'overloaded_error', message: 'mock overloaded' } });
-      const kind = body.output_config?.format?.schema?.properties?.summary ? 'explain' : 'extract';
+      const props = body.output_config?.format?.schema?.properties ?? {};
+      const kind = props.prices ? 'estimate' : props.paragraphs ? 'summary' : props.summary ? 'explain' : 'extract';
       const out = /#mock:bad-json/.test(text) ? { nope: true } : respond(kind, text, content.some((c) => c.type === 'image'));
       return json(200, { id: 'msg_mock', type: 'message', role: 'assistant', model: `${body.model}（模拟）`, content: [{ type: 'text', text: JSON.stringify(out) }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 } });
     }
@@ -91,7 +123,8 @@ export function createMockFetch(): typeof fetch {
       const user = body.messages?.[1]?.content;
       const text = typeof user === 'string' ? user : (user as { type: string; text?: string }[]).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
       if (/#mock:all-down/.test(text)) return json(503, { error: { message: 'mock unavailable' } });
-      const kind = String(body.messages?.[0]?.content).includes('"summary"') ? 'explain' : 'extract';
+      const sys = String(body.messages?.[0]?.content);
+      const kind = sys.includes('"prices"') ? 'estimate' : sys.includes('"paragraphs"') ? 'summary' : sys.includes('"summary"') ? 'explain' : 'extract';
       const out = respond(kind, text, typeof user !== 'string');
       return json(200, { id: 'cmpl_mock', model: `${body.model}（模拟）`, choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify(out) } }], usage: { prompt_tokens: 0, completion_tokens: 0 } });
     }

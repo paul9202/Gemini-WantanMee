@@ -10,6 +10,8 @@ import { DevicePage } from '../features/device/DevicePage';
 import { SyncPage } from '../features/sync/SyncPage';
 import { OverviewPage } from '../features/owner/OverviewPage';
 import { FinancePage } from '../features/owner/FinancePage';
+import { MaterialsPage } from '../features/owner/MaterialsPage';
+import { CostsPage } from '../features/owner/CostsPage';
 import { ReviewPage } from '../features/owner/ReviewPage';
 import { ClosePage } from '../features/owner/ClosePage';
 import { SettingsPage } from '../features/owner/SettingsPage';
@@ -28,6 +30,8 @@ const ALLOWED: Record<Exclude<Route, '/login'>, Role[]> = {
   '/kitchen': ['kitchen', 'owner'],
   '/device': ['cashier', 'owner', 'kitchen'],
   '/owner': ['owner'],
+  '/owner/materials': ['owner'],
+  '/owner/costs': ['owner'],
   '/owner/finance': ['owner'],
   '/owner/finance/ingredients': ['owner'],
   '/owner/finance/expenses': ['owner'],
@@ -66,6 +70,8 @@ function Routes() {
   if (route === '/orders') return <Shell route="/orders"><OrdersPage /></Shell>;
   if (route === '/sync') return <Shell route="/sync"><SyncPage /></Shell>;
   if (route === '/owner') return <Shell route="/owner"><OverviewPage /></Shell>;
+  if (route === '/owner/materials') return <Shell route="/owner" title="/owner/materials"><MaterialsPage /></Shell>;
+  if (route === '/owner/costs') return <Shell route="/owner" title="/owner/costs"><CostsPage /></Shell>;
   if (route?.startsWith('/owner/finance')) return <Shell route="/owner" title="/owner/finance"><FinancePage route={route} /></Shell>;
   if (route === '/owner/review') return <Shell route="/owner" title="/owner/review"><ReviewPage /></Shell>;
   if (route === '/owner/close') return <Shell route="/owner" title="/owner/close"><ClosePage /></Shell>;

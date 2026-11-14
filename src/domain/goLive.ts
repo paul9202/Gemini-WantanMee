@@ -11,8 +11,8 @@ export const GO_LIVE_RESET_GROUPS = [
   { id: 'shifts', label: '班次、钱箱、营业日与日结', collections: ['shifts', 'cashMovements', 'businessDays', 'dailyReports', 'offlineInbox'] },
   { id: 'costs', label: '成本记录与损耗', collections: ['costEvents', 'wastage'] },
   { id: 'expenses', label: '日常开支与固定费用付款', collections: ['expenses', 'expenseLinks', 'recurringSlots'] },
-  { id: 'ingredients', label: '食材批次与采购记录', collections: ['ingredientBatches', 'purchaseDetails'] },
-  { id: 'aiCost', label: 'AI 记成本草稿、收据与解读', collections: ['costDrafts', 'costReceipts', 'costAnalysis', 'aiUsage'] },
+  { id: 'ingredients', label: '食材批次、采购记录与收档点数', collections: ['ingredientBatches', 'purchaseDetails', 'stockCounts'] },
+  { id: 'aiCost', label: 'AI 记成本草稿、收据、解读与收档小结', collections: ['costDrafts', 'costReceipts', 'costAnalysis', 'aiUsage', 'aiSummaries'] },
   { id: 'logs', label: '操作与审计记录', collections: ['operations', 'auditEvents'] },
 ] as const;
 

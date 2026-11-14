@@ -87,6 +87,10 @@ export function storeRefs(db: Firestore, storeId: string) {
     costAnalysis: (key: string) => root.collection('costAnalysis').doc(key),
     aiUsage: (date: string) => root.collection('aiUsage').doc(date),
     configAiCost: root.collection('config').doc('aiCost'),
+    // 经营改版：单价来源与 AI 建议、收档点数、AI 收档小结缓存。
+    configCostSources: root.collection('config').doc('costSources'),
+    stockCount: (id: string) => root.collection('stockCounts').doc(id),
+    aiSummary: (date: string) => root.collection('aiSummaries').doc(date),
     // 清空测试数据的状态（ready / resetting）、上次清空时间与输错次数；确认码哈希不在这里。
     configGoLive: root.collection('config').doc('goLive'),
   };

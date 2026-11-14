@@ -74,5 +74,8 @@ export function deepseekProvider(cfg: DeepSeekConfig): AiProvider {
     explain(input, allowedIds, allowedAmounts, signal) {
       return run(cfg.textModel, EXPLAIN_SYSTEM + jsonShapeHint(EXPLANATION_SCHEMA), explainUserText(input), (raw) => parseExplanation(raw, allowedIds, allowedAmounts), signal);
     },
+    structured(req, signal) {
+      return run(cfg.textModel, req.system + jsonShapeHint(req.schema), req.user, req.parse, signal);
+    },
   };
 }

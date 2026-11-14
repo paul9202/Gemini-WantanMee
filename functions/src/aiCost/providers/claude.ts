@@ -68,5 +68,8 @@ export function claudeProvider(cfg: ClaudeConfig): AiProvider {
     explain(input, allowedIds, allowedAmounts, signal) {
       return run(EXPLAIN_SYSTEM, [{ type: 'text', text: explainUserText(input) }], EXPLANATION_SCHEMA as unknown as Record<string, unknown>, (raw) => parseExplanation(raw, allowedIds, allowedAmounts), signal);
     },
+    structured(req, signal) {
+      return run(req.system, [{ type: 'text', text: req.user }], req.schema, req.parse, signal);
+    },
   };
 }

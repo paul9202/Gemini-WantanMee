@@ -21,6 +21,19 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-14-owner-today', date: '2026-11-14', roles: ['owner'],
+    title: { zh: '「经营」改成今天、用料、成本、账目四页', en: 'Owner pages are now Today, Ingredients, Costs and Accounts' },
+    items: [
+      { zh: '「今天」一打开就看到：卖了多少、大约赚了多少、用了多少料。赚多少下面写清楚收入减材料、减租金电费。', en: '“Today” shows at a glance how much you sold, roughly how much you made, and what you used. The profit card shows income minus ingredients minus rent and power.' },
+      { zh: '每天卖了几粒面（细面 / 面薄 × 大中小）、几粒云吞、几份叉烧、几碗汤、几份打包，全部从订单算出来，不用另外记。「用料」页写着每样怎么算，还有近 7 天的面团粒数对比目标。', en: 'Noodle balls (thin / mee pok × size), wantons, char siew portions, soups and takeaways are all counted from orders — nothing extra to record. “Ingredients” shows how each is counted and the last 7 days of noodle balls against your target.' },
+      { zh: '「成本」页列出每样材料的单价、今天的料花了多少，以及每个菜每个大小赚多少。改单价还是在设置里。', en: '“Costs” lists each ingredient’s unit cost, what today’s ingredients cost, and how much each dish and size earns. Unit costs are still changed in Settings.' },
+      { zh: '日结和待核对移到「账目」里，今天页的提醒也能直接进去。', en: 'Close day and To review are now under “Accounts”, and Today’s reminders link straight to them.' },
+      { zh: '没时间记成本？在「成本」页按「让 AI 估价」，AI 按收据价和柔佛一般批发价先估每样材料的单价。估的价钱标黄，按「对」或改一个数才会用；拍过的进货单会算出收据价，可以一键改用。', en: 'No time to track costs? On “Costs”, tap “Let AI estimate” and AI suggests each ingredient’s unit cost from your receipts and typical Johor wholesale prices. Suggestions are highlighted and only used after you tap “OK” or change the number; receipts you photographed give a receipt price you can switch to in one tap.' },
+      { zh: '「用料」页会估面团、面薄、肉碎、云吞皮还剩多少、够不够明天，不够就在今天页提醒。收档时可以点一下实际剩多少，让剩余更准。', en: '“Ingredients” estimates how much noodle dough, mee pok, minced pork and wanton skin is left and whether it’s enough for tomorrow; Today warns you when it isn’t. Count what’s left at closing to make it more accurate.' },
+      { zh: '今天页最下面有收档小结：今天卖得怎样、什么好卖、明天建议备多少。可以让 AI 写成白话，数字全部来自账本。', en: 'Today ends with a closing summary: how the day went, what sold best, and what to prepare tomorrow. AI can write it in plain words; all numbers come from your records.' },
+    ],
+  },
+  {
     // 送餐单打印的开关还关着，只有老板会用到打印机面板。
     id: '2026-11-14-printer-58mm', date: '2026-11-14', roles: ['owner'],
     title: { zh: '送餐单打印支持 58mm 手撕的便携打印机', en: 'Order slips work with 58mm tear-off portable printers' },

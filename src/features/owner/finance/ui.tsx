@@ -11,6 +11,8 @@ export const FINANCE_PAGES: { route: Route; label: string; icon: IconName }[] = 
   { route: '/owner/finance/expenses', label: '日常开支', icon: 'receipt' },
   { route: '/owner/finance/goals', label: '经营目标', icon: 'target' },
   { route: '/owner/finance/startup', label: '开档成本', icon: 'store' },
+  { route: '/owner/close', label: '日结关账', icon: 'check' },
+  { route: '/owner/review', label: '待核对', icon: 'shield' },
 ];
 
 /** 收支五个子页：桌面为左侧栏，手机与平板为页内横排（不与外壳底部导航重叠）。 */

@@ -1,69 +1,77 @@
 /**
- * 老板概览（02 §7、01 §9；2026-10-23 新版布局）：先回答「今天经营如何」。
- * 所有数字、走势与排行都来自账本查询和领域函数；无数据时显示空态，不放示例数字。
- * 估算经营利润为管理估算（按已登记收款估算），未含工资/税费。
- * 2026-10-23 运营改版：新收款不分现金 / QR，只看已登记 / 未登记；收款是人工登记，不是钱包或银行自动核对。
- * 旧版渠道拆分只在区间内有旧记录时显示，标为旧版记录。
- * 出餐即记收款（2026-11-08）：区间内有出餐自动记的收款时，把前台确认和出餐自动记分开写，不再一概说「人工登记」。
+ * 今天（2026-11-14 经营改版，取代「经营概览」）：先回答三件事——卖了多少、赚了多少、用了多少料。
+ * - 收入、利润口径不变：按已登记收款（summarizePeriod）；材料成本是下单时按单位成本记的理论成本，租金电费按日历日摊。
+ * - 面团粒数、云吞、叉烧等用量全部由订单算出（domain/usage），老板不用录入。
+ * - 第二阶段：有进货记录时第三张卡改成「材料够不够」（StockSection 同一算法）；页尾加收档小结（SummaryCard）。
+ * - 收款明细、出餐效率、回本等原有细账收在页尾「细账」里，不删。
+ * 所有数字都来自账本；无数据时显示空态，不放示例数字。
  */
-import { useState } from 'react';
+import { ReactNode, useState } from 'react';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
-import { BOM_V1 } from '../../domain/bom';
-import { addDays, businessDateOf, DateRange, lastNDays, previousRange, wallClock } from '../../domain/businessDay';
-import { DEFAULT_FIXED_COST, FixedCostPolicy, ratioOrNull, summarizePeriod } from '../../domain/finance';
-import { DEFAULT_EXPENSE_PLAN, ExpenseLinkDoc, monthOf, paybackStatus, PlanExpense, StartupCostDoc, startupSummary } from '../../domain/costing';
-import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, dishRanking, ledgerEvents, orderServiceStats, productMix, receiptsTrend, registeredBreakdown } from '../../domain/ledger';
+import { addDays, businessDateOf, DateRange, daysInMonth, wallClock } from '../../domain/businessDay';
+import { DEFAULT_FIXED_COST, FixedCostPolicy, monthlyFixedSen, summarizePeriod } from '../../domain/finance';
+import { ballsText, DEFAULT_EXPENSE_PLAN, ExpenseLinkDoc, monthOf, paybackStatus, PlanExpense, StartupCostDoc, startupSummary } from '../../domain/costing';
+import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, ledgerEvents, orderServiceStats, receiptsTrend, registeredBreakdown } from '../../domain/ledger';
 import { costUnitsToSen, formatRM } from '../../domain/money';
+import { materialUsage, UsageOrder } from '../../domain/usage';
 import { OVERDUE_MS } from '../../domain/timing';
 import { db, storePath } from '../../data/firebase/client';
 import { useLiveQuery, useNow } from '../../data/firebase/live';
 import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
 import { Icon, Photo } from '../../ui/visual';
-import { download, loadLedger, loadOpenReviews, orderPaymentOverview, useLoad } from './data';
+import type { IconName } from '../../ui/iconSymbols';
+import { CALIBRATION_ZH, download, loadActiveBom, loadDailyBallsTarget, loadLedger, loadOpenReviews, orderPaymentOverview, useLoad } from './data';
 import { BarList, minutes, OwnerTabs, pct, Section } from './ui';
+import { useStock } from './StockSection';
+import { SummaryCard } from './SummaryCard';
 
-type Period = 'today' | 'd7' | 'd30';
-const PERIOD_ZH: Record<Period, string> = { today: '今日', d7: '近7天', d30: '近30天' };
+const WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const weekdayOf = (date: string) => WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()];
+const NOODLE_ROWS = [['thin_egg', '细面'], ['mee_poh', '面薄']] as const;
+const SIZE_COLS = [['small', '小', '1粒'], ['medium', '中', '1½粒'], ['large', '大', '2粒']] as const;
 
 export function OverviewPage() {
   const { config } = useSession();
   const now = useNow(60_000);
   const today = config ? businessDateOf(now, { timeZone: config.timeZone, cutoverMinutes: config.cutoverMinutes }) : '';
-  const [period, setPeriod] = useState<Period>('today');
-  const [detail, setDetail] = useState(false);
-  const range: DateRange = lastNDays(today || '2000-01-01', period === 'today' ? 1 : period === 'd7' ? 7 : 30);
-  const prev = previousRange(range);
-  const key = `${today}-${range.start}-${range.endExclusive}`;
+  const [picked, setPicked] = useState<string | null>(null);
+  const date = picked && picked <= today ? picked : today;
+  const isToday = date === today;
+  const range: DateRange = { start: date || '2000-01-01', endExclusive: addDays(date || '2000-01-01', 1) };
+  const lastWeek: DateRange = { start: addDays(range.start, -7), endExclusive: addDays(range.start, -6) };
+  const key = `${today}-${date}`;
   // 门店配置载入前营业日为空：先不查询。
-  const cur = useLoad(() => (today ? loadLedger(range) : Promise.resolve(null)), `cur-${key}`);
-  const before = useLoad(() => (today ? loadLedger(prev) : Promise.resolve(null)), `prev-${key}`);
+  const cur = useLoad(() => (date ? loadLedger(range) : Promise.resolve(null)), `cur-${key}`);
+  const before = useLoad(() => (date ? loadLedger(lastWeek) : Promise.resolve(null)), `lastweek-${key}`);
   const all = useLoad(() => (today ? loadLedger(null) : Promise.resolve(null)), `all-${today}`);
   const reviews = useLoad(loadOpenReviews, 'reviews');
   const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data() as { fixedCostPolicy: FixedCostPolicy } | undefined, 'finance');
+  const bom = useLoad(() => loadActiveBom(config?.activeBomVersion), `bom-${config?.activeBomVersion}`);
+  const target = useLoad(loadDailyBallsTarget, 'balls-target');
+  const day = useLoad(async () => (date ? (await getDoc(doc(db, storePath(`businessDays/${date}`)))).data() as { state?: string } | undefined : undefined), `day-${key}`);
   const payInputs = useLoad(async () => ({
     startup: (await getDocs(collection(db, storePath('startupCosts')))).docs.map((d) => d.data() as StartupCostDoc),
     plan: { ...DEFAULT_EXPENSE_PLAN, ...((await getDoc(doc(db, storePath('config/expensePlan')))).data()?.plan ?? {}) },
     links: (await getDocs(collection(db, storePath('expenseLinks')))).docs.map((d) => d.data() as ExpenseLinkDoc),
   }), 'payback-inputs');
-  // 关注事项用实时数据：厨房超时单、待登记收款、旧版遗留的待回收餐牌。
+  // 提醒用实时数据：厨房超时单、待登记收款、旧版遗留的待回收餐牌。
   const kitchenQ = useLiveQuery<{ tokenNumber: number; acceptedAtEffectiveMs: number; fulfillmentStatus: string; kitchenRouting: string }>(
     query(collection(db, storePath('kitchenTickets')), where('fulfillmentStatus', 'in', ['queued', 'preparing'])), 'owner-kitchen',
   );
   const unpaidQ = useLiveQuery<{ id: string; receiptNumber: string; tokenNumber: number; totalSen: number; fulfillmentStatus: string; businessDate: string }>(
     query(collection(db, storePath('orders')), where('paymentState', '==', 'unpaid')), 'owner-unpaid',
   );
+  const stock = useStock(today);
   const tokensQ = useLiveQuery<{ number: number; state: string }>(query(collection(db, storePath('tokens')), where('state', '==', 'awaiting_return')), 'owner-tokens');
 
   if (!config) return null;
   const fixed = finance.data?.fixedCostPolicy ?? DEFAULT_FIXED_COST;
   const loading = cur.loading || !cur.data;
   const summary = cur.data ? summarizePeriod(ledgerEvents(cur.data.docs), range, fixed) : null;
-  const prevSummary = before.data ? summarizePeriod(ledgerEvents(before.data.docs), prev, fixed) : null;
+  const lastSummary = before.data ? summarizePeriod(ledgerEvents(before.data.docs), lastWeek, fixed) : null;
+  const usage = cur.data ? materialUsage(cur.data.orders as unknown as UsageOrder[]) : null;
   const svc = cur.data ? orderServiceStats(cur.data.orders) : null;
-  const mix = cur.data ? productMix(cur.data.orders) : null;
-  const ranking = cur.data ? dishRanking(cur.data.orders) : [];
-  // 区间内按登记日的收款按来源拆开（前台确认 / 出餐自动记）。
   const split = cur.data ? registeredBreakdown(cur.data.docs.payments.filter((p) => p.businessDate >= range.start && p.businessDate < range.endExclusive)) : null;
   const hasAuto = Boolean(split && (split.autoCount > 0 || split.undoServeCount > 0 || split.notPaidCount > 0));
   const trend = cur.data ? receiptsTrend(cur.data.docs.payments, cur.data.docs.refunds, range, config.timeZone) : [];
@@ -71,7 +79,6 @@ export function OverviewPage() {
   const orderPay = cur.data ? orderPaymentOverview(cur.data.orders) : null;
   const outstanding = unpaidQ.data.filter((o) => o.fulfillmentStatus !== 'cancelled');
   const outstandingSen = outstanding.reduce((s, o) => s + o.totalSen, 0);
-  // 回本（2026-10-25 起）：目标 = 开档成本总投入，进度按真实账目（与「收支 · 经营目标」同一口径）。
   const startup = startupSummary(payInputs.data?.startup ?? []);
   const payback = all.data && payInputs.data ? paybackStatus({
     startupTotalSen: startup.totalSen, receiptsSen: all.data.docs.payments.reduce((s, p) => s + p.amountSen, 0), refundsSen: all.data.docs.refunds.reduce((s, r) => s + r.amountSen, 0),
@@ -79,152 +86,217 @@ export function OverviewPage() {
   }) : null;
   const openReviews = reviews.data ?? [];
   const reviewAmount = openReviews.reduce((s, r) => s + (r.amountSen ?? 0), 0);
-  const delta = summary && prevSummary ? ratioOrNull(summary.netReceiptsSen - prevSummary.netReceiptsSen, prevSummary.netReceiptsSen) : null;
   const overdue = kitchenQ.data.filter((t) => t.kitchenRouting === 'digital' && now - t.acceptedAtEffectiveMs >= OVERDUE_MS);
   const inKitchen = kitchenQ.data.filter((t) => t.kitchenRouting === 'digital').length;
   const hour = wallClock(now, config.timeZone).hh;
   const greeting = hour < 11 ? '早上好' : hour < 17 ? '下午好' : '晚上好';
-  const dateLabel = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${range.start}T00:00:00Z`));
+  const [y, m] = date ? date.split('-').map(Number) : [2000, 1];
+  const monthlyFixed = monthlyFixedSen(fixed, y, m);
+  const pending = (bom.data?.pendingCalibration ?? []).map((k) => CALIBRATION_ZH[k] ?? k);
+  const ballsTarget = target.data ?? 50;
+  const delta = summary && lastSummary && lastSummary.netReceiptsSen > 0 ? summary.netReceiptsSen - lastSummary.netReceiptsSen : null;
+  const closed = day.data?.state === 'closed';
+  const stockShown = isToday ? stock.estimates.filter((e) => e.status !== null) : [];
+  const short = stockShown.filter((e) => e.status === 'short');
+  const dateLabel = date ? `${Number(date.slice(5, 7))}月${Number(date.slice(8))}日 ${weekdayOf(date)}` : '';
+  const servedTimes = cur.data ? cur.data.orders.filter((o) => o.fulfillmentStatus !== 'cancelled').map((o) => o.acceptedAtEffectiveMs).sort((a, b) => a - b) : [];
+  const hhmm = (ms: number) => { const w = wallClock(ms, config.timeZone); return `${String(w.hh).padStart(2, '0')}:${String(w.mm).padStart(2, '0')}`; };
 
   const exportCsv = () => {
     if (!cur.data || !summary) return;
-    const tag = `${range.start}_${addDays(range.endExclusive, -1)}`;
-    download(`汇总_${tag}.csv`, csvSummary(summary));
-    download(`订单_${tag}.csv`, csvOrders(cur.data.orders, config.timeZone));
-    download(`收款退款_${tag}.csv`, csvPayments(cur.data.docs.payments, cur.data.docs.refunds, config.timeZone));
-    download(`支出_${tag}.csv`, csvExpenses(cur.data.docs.expenses, config.timeZone));
-    download(`损耗_${tag}.csv`, csvWastage(cur.data.docs.wastage, config.timeZone));
+    download(`汇总_${date}.csv`, csvSummary(summary));
+    download(`订单_${date}.csv`, csvOrders(cur.data.orders, config.timeZone));
+    download(`收款退款_${date}.csv`, csvPayments(cur.data.docs.payments, cur.data.docs.refunds, config.timeZone));
+    download(`支出_${date}.csv`, csvExpenses(cur.data.docs.expenses, config.timeZone));
+    download(`损耗_${date}.csv`, csvWastage(cur.data.docs.wastage, config.timeZone));
   };
 
   // 同牌加单时一张餐牌可有多单：餐牌号去重后再列出。
-  const attention: { title: string; sub: string; action?: { label: string; go: () => void } }[] = [];
-  if (overdue.length) attention.push({ title: `有 ${overdue.length} 单等候超过 12 分钟`, sub: `餐牌 ${[...new Set(overdue.map((t) => t.tokenNumber))].join('、')} · 后厨可优先处理`, action: { label: '去后厨', go: () => navigate('/kitchen') } });
-  if (outstanding.length) attention.push({ title: `待登记收款 ${outstanding.length} 单 · ${formatRM(outstandingSen)}`, sub: `票号 ${outstanding.slice(0, 6).map((o) => o.receiptNumber).join('、')}${outstanding.length > 6 ? ' 等' : ''} · 收到钱后在主点单平板确认`, action: { label: '去订单', go: () => navigate('/orders') } });
-  if (tokensQ.data.length) attention.push({ title: `旧版遗留 ${tokensQ.data.length} 张餐牌待回收`, sub: `餐牌 ${tokensQ.data.map((t) => t.number).sort((a, b) => a - b).join('、')} · 改版前的记录；新流程出餐即自动释放`, action: { label: '查看', go: () => navigate('/pos') } });
-  if (openReviews.length) attention.push({ title: `离线记录待核对 ${openReviews.length} 条`, sub: reviewAmount ? `已收 ${formatRM(reviewAmount)} 尚未入云端账，上面的数字不含这些金额` : '逐条补入账或不入账', action: { label: '去核对', go: () => navigate('/owner/review') } });
-  if (refundDue.length) attention.push({ title: `${refundDue.length} 单应退款待登记`, sub: `餐牌 ${[...new Set(refundDue.map((o) => o.tokenNumber))].join('、')} · 实际退款后到订单页登记`, action: { label: '去订单', go: () => navigate('/orders') } });
+  const attention: { icon: IconName; tone: 'warn' | 'bad' | 'plain'; title: string; sub: string; action?: { label: string; go: () => void; primary?: boolean } }[] = [];
+  if (overdue.length) attention.push({ icon: 'clock', tone: 'bad', title: `有 ${overdue.length} 单等候超过 12 分钟`, sub: `餐牌 ${[...new Set(overdue.map((t) => t.tokenNumber))].join('、')} · 后厨可优先处理`, action: { label: '去后厨', go: () => navigate('/kitchen') } });
+  if (outstanding.length) attention.push({ icon: 'wallet', tone: 'warn', title: `待登记收款 ${outstanding.length} 单 · ${formatRM(outstandingSen)}`, sub: `票号 ${outstanding.slice(0, 6).map((o) => o.receiptNumber).join('、')}${outstanding.length > 6 ? ' 等' : ''} · 收到钱后在主点单平板确认`, action: { label: '去订单', go: () => navigate('/orders') } });
+  if (refundDue.length) attention.push({ icon: 'receipt', tone: 'warn', title: `${refundDue.length} 单应退款待登记`, sub: `餐牌 ${[...new Set(refundDue.map((o) => o.tokenNumber))].join('、')} · 实际退款后到订单页登记`, action: { label: '去订单', go: () => navigate('/orders') } });
+  if (openReviews.length) attention.push({ icon: 'shield', tone: 'warn', title: `离线记录待核对 ${openReviews.length} 条`, sub: reviewAmount ? `已收 ${formatRM(reviewAmount)} 尚未入云端账，上面的数字不含这些金额` : '逐条补入账或不入账', action: { label: '去核对', go: () => navigate('/owner/review') } });
+  if (tokensQ.data.length) attention.push({ icon: 'list', tone: 'plain', title: `旧版遗留 ${tokensQ.data.length} 张餐牌待回收`, sub: `餐牌 ${tokensQ.data.map((t) => t.number).sort((a, b) => a - b).join('、')} · 改版前的记录；新流程出餐即自动释放`, action: { label: '查看', go: () => navigate('/pos') } });
+  if (short.length) attention.push({ icon: 'box', tone: 'bad', title: `${short.map((e) => e.name).join('、')}明天不够`, sub: '收档后记得订 / 买；进货后拍进货单就会更新', action: { label: '看用料', go: () => navigate('/owner/materials') } });
+  if (pending.length) attention.push({ icon: 'edit', tone: 'warn', title: `${pending.length} 项成本还没核实`, sub: `${pending.join('、')} · 核实后「赚了多少」更准`, action: { label: '看成本', go: () => navigate('/owner/costs') } });
+  if (summary && !closed && (usage?.orders ?? 0) > 0) attention.push({ icon: 'check', tone: 'plain', title: isToday ? '今天还没日结' : `${dateLabel}还没日结`, sub: outstanding.length ? '先处理待登记收款再关账' : `${usage?.orders ?? 0} 单 · 收档后核对一下就能关账`, action: { label: '日结', go: () => navigate('/owner/close'), primary: true } });
 
   return (
     <div className="mx-auto max-w-[1440px] p-4 pb-8 lg:p-8">
-      <OwnerTabs current="/owner" badge={{ '/owner/review': openReviews.length }} />
+      <OwnerTabs current="/owner" badge={{ '/owner/finance': openReviews.length }} />
       <div className="mb-5 flex flex-wrap items-end gap-3">
-        <div>
-          <h2 className="text-2xl font-bold lg:text-[28px]">{greeting}，今天也辛苦了。</h2>
+        <div className="min-w-0">
+          <h2 className="text-2xl font-bold lg:text-[28px]">{isToday ? `${greeting}，今天也辛苦了。` : `${dateLabel}的生意`}</h2>
           <p className="text-sm text-ink-2">
-            {dateLabel}{period !== 'today' ? ` 至 ${addDays(range.endExclusive, -1).slice(5)}` : ''} · 更新于 {cur.loadedAt ? new Date(cur.loadedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '—'}
+            {dateLabel}{servedTimes.length ? ` · ${hhmm(servedTimes[0])} 第一单 · ${hhmm(servedTimes[servedTimes.length - 1])} 最后一单` : ''} · 更新于 {cur.loadedAt ? new Date(cur.loadedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—'}
           </p>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          <div className="flex rounded-2xl bg-subtle p-1" role="group" aria-label="统计区间">
-            {(Object.keys(PERIOD_ZH) as Period[]).map((p) => (
-              <button key={p} type="button" aria-pressed={period === p} onClick={() => setPeriod(p)}
-                className={`h-14 rounded-xl px-4 text-base font-semibold ${period === p ? 'bg-card shadow' : 'text-ink-2'}`}>{PERIOD_ZH[p]}</button>
-            ))}
+          <div className="flex items-center rounded-2xl bg-subtle p-1" role="group" aria-label="营业日">
+            <button type="button" onClick={() => setPicked(addDays(date, -1))} className="h-12 rounded-xl px-4 font-semibold text-ink-2">前一天</button>
+            <button type="button" onClick={() => setPicked(null)} aria-pressed={isToday} className={`h-12 rounded-xl px-4 font-semibold ${isToday ? 'bg-card shadow' : 'text-ink-2'}`}>今天</button>
+            <label className="flex h-12 items-center px-2 text-ink-2"><span className="sr-only">选日期</span><Icon name="calendar" size={18} />
+              <input type="date" value={date} max={today} onChange={(e) => setPicked(e.target.value || null)} className="ml-1 w-[8.5rem] bg-transparent text-sm" />
+            </label>
           </div>
-          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); reviews.refresh(); }} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold"><Icon name="refresh" size={18} />刷新</button>
-          <button type="button" disabled={!summary} onClick={exportCsv} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold disabled:opacity-40"><Icon name="download" size={18} />导出 CSV</button>
+          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); reviews.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
+          <button type="button" onClick={() => navigate('/owner/close')} className={`flex h-14 items-center gap-2 rounded-xl px-5 font-bold ${closed ? 'border border-line bg-card text-ok' : 'bg-brand text-[#fff8e8]'}`}>
+            <Icon name="check" size={18} />{closed ? '已关账' : '收档日结'}
+          </button>
         </div>
       </div>
 
       {cur.error && <p role="alert" className="mb-4 rounded-lg bg-danger-bg px-3 py-2 text-danger">读取失败：{cur.error}</p>}
 
-      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-2xl bg-ok p-5 text-white shadow-card">
-          <div className="flex items-center text-sm text-white/85">{PERIOD_ZH[period]}净登记收款<Icon name="wallet" size={20} className="ml-auto" /></div>
-          <div className="mt-2 text-4xl font-black tabular-nums"><span className="mr-1 text-lg">RM</span>{summary ? formatRM(summary.netReceiptsSen).replace('RM', '') : '…'}</div>
-          <div className="mt-2 text-xs text-white/85">
-            {summary ? `已登记 ${formatRM(summary.receipts.totalSen)}${summary.refunds.totalSen ? ` · 已扣退款 ${formatRM(summary.refunds.totalSen)}` : ''} · ${hasAuto ? '前台确认 + 出餐自动记' : '人工登记'}` : ''}
-            {delta !== null && ` · 对比上一区间 ${delta >= 0 ? '+' : ''}${pct(delta)}`}
+      {/* 三个答案 */}
+      <div className="mb-5 grid gap-4 md:grid-cols-3">
+        <section className="min-w-0 rounded-2xl border border-line bg-card p-5 shadow-card lg:p-6">
+          <div className="flex items-center gap-2 text-[15px] font-semibold text-ink-2"><Icon name="wallet" size={20} />卖了多少</div>
+          <Big prefix="RM" value={summary ? formatRM(summary.netReceiptsSen).replace('RM', '') : '…'} />
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[15px]">
+            <span><b className="tabular-nums">{usage?.orders ?? '…'}</b> 单</span><span><b className="tabular-nums">{usage?.bowls ?? '…'}</b> 碗</span><span><b className="tabular-nums">{usage ? ballsText(usage.noodleHalf) : '…'}</b> 粒面</span>
           </div>
-        </div>
-        <Kpi icon="chart" label="估算经营利润" value={summary ? formatRM(summary.estimatedProfitSen) : '…'} bad={Boolean(summary && summary.estimatedProfitSen < 0)} sub="按已登记收款估算 · 未计工资与税费" />
-        <Kpi icon="serve" label="已出餐" value={mix ? `${mix.portionsServed}` : '…'} unit="份" sub={inKitchen ? `厨房还有 ${inKitchen} 单处理中` : '厨房目前没有待做单'} />
-        <Kpi icon="clock" label="8 分钟内出餐率" value={svc ? pct(svc.onTimeRate) : '…'} sub={svc ? (svc.count ? `${Math.round((svc.onTimeRate ?? 0) * svc.count)} / ${svc.count} 单达标 · 平均 ${minutes(svc.avgMs)}` : '还没有已出餐样本') + (svc.excluded ? ` · ${svc.excluded} 单离线时间未核对不计` : '') : undefined} />
-      </div>
+          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-line pt-3 text-[13px] text-ink-2">
+            {delta !== null && lastSummary ? (
+              <><span className={`whitespace-nowrap rounded-md px-1.5 py-0.5 font-bold ${delta >= 0 ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>{delta >= 0 ? '↑' : '↓'} {formatRM(Math.abs(delta))}</span>
+                <span>比上{weekdayOf(date)}（{formatRM(lastSummary.netReceiptsSen)}）{delta >= 0 ? '多' : '少'}{usage && usage.orders ? ` · 平均每单 ${formatRM(Math.round((summary?.netReceiptsSen ?? 0) / usage.orders))}` : ''}</span></>
+            ) : <span>已登记收款 · 退款已扣除{hasAuto ? ' · 含出餐自动记' : ''}</span>}
+          </div>
+        </section>
 
-      <div className="mb-5">
-        <Section title="收款登记" hint={hasAuto ? '订单金额按订单营业日；收款按登记日。出餐自动记的是系统按出餐算的，请和钱箱现金加 QR 到账对一下' : '订单金额按订单营业日；收款按登记日。收款为员工人工登记，未与钱包或银行自动核对'}>
-          {summary && orderPay ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
-              <PayFig label="有效订单金额" value={formatRM(orderPay.validSen)} sub={`${orderPay.validCount} 单${orderPay.cancelledCount ? ` · 另取消 ${orderPay.cancelledCount} 单` : ''}`} />
-              <PayFig label="已登记收款" value={formatRM(summary.receipts.totalSen)}
-                sub={hasAuto && split
-                  ? `前台确认 ${formatRM(split.manualSen)} · 出餐自动记 ${formatRM(split.autoSen)}${split.notPaidCount ? ` · 没付就走 −${formatRM(split.notPaidSen)}` : ''}${split.correctionsSen ? ` · 更正 ${formatRM(split.correctionsSen)}` : ''}`
-                  : summary.receipts.correctionsSen ? `含误登记更正 ${formatRM(summary.receipts.correctionsSen)}` : '含跨日补登记'} />
-              <PayFig label="未登记（本区间订单）" value={formatRM(orderPay.unpaidSen)} sub={`${orderPay.unpaidCount} 单 · 不算已收`} tone={orderPay.unpaidCount ? 'bad' : undefined} />
-              <PayFig label="已登记退款" value={formatRM(summary.refunds.totalSen)} />
-              <PayFig label="净登记收款" value={formatRM(summary.netReceiptsSen)} strong />
-            </div>
-          ) : <Empty text="正在载入…" />}
-          {summary?.hasLegacyChannels && (
-            <p className="mt-3 rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">
-              旧版记录（改版前按渠道登记）：现金收款 {formatRM(summary.receipts.cashSen)} · QR 收款 {formatRM(summary.receipts.qrSen)}
-              {summary.refunds.cashSen + summary.refunds.qrSen ? ` · 现金退款 ${formatRM(summary.refunds.cashSen)} · QR 退款 ${formatRM(summary.refunds.qrSen)}` : ''}；已包含在上面的已登记收款与退款内。
-            </p>
+        <section className="min-w-0 rounded-2xl bg-ok p-5 text-white shadow-card lg:p-6">
+          <div className="flex items-center gap-2 text-[15px] font-semibold text-white/85"><Icon name="chart" size={20} />赚了多少<span className="ml-auto rounded-full bg-white/15 px-2 py-0.5 text-[12px] font-bold">估算</span></div>
+          <Big prefix={summary && summary.estimatedProfitSen < 0 ? '亏 RM' : '约 RM'} value={summary ? formatRM(Math.abs(summary.estimatedProfitSen)).replace('RM', '') : '…'} light />
+          {summary && (
+            <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[14px] tabular-nums text-white/90">
+              <dt>收入</dt><dd className="text-right">{formatRM(summary.netReceiptsSen)}</dd>
+              <dt className="flex flex-wrap items-center gap-1.5">− 材料成本{pending.length > 0 && <span className="rounded-full bg-warn-bg px-1.5 text-[11px] font-bold text-warn">含 {pending.length} 项未核实</span>}</dt>
+              <dd className="text-right">{formatRM(costUnitsToSen(summary.allocatedCostUnits + summary.wastageCostUnits))}</dd>
+              <dt>− 租金电费 <span className="text-white/65">（每月 {formatRM(monthlyFixed)} ÷ {daysInMonth(y, m)} 天）</span></dt><dd className="text-right">{formatRM(summary.fixedCostSen)}</dd>
+              {summary.otherOpexSen > 0 && <><dt>− 煤气、杂费等</dt><dd className="text-right">{formatRM(summary.otherOpexSen)}</dd></>}
+            </dl>
           )}
-        </Section>
-      </div>
+          <div className="mt-3 border-t border-white/20 pt-3 text-[13px] text-white/80">{summary && summary.otherOpexSen === 0 ? '煤气、杂费这天没有记 · ' : ''}不含工资和税 · 按已登记收款算</div>
+        </section>
 
-      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <Section title={period === 'today' ? '今日收款走势' : `${PERIOD_ZH[period]}收款走势`} hint={period === 'today' ? '按登记时间整点 · 已登记收款减退款' : '按登记营业日 · 已登记收款减退款'}>
-          <TrendChart buckets={trend} loading={loading} />
-        </Section>
-        <Section title="客人最爱" hint="按实际出餐份数排列">
-          {ranking.length === 0 ? <Empty text={loading ? '正在载入…' : '这段时间还没有出餐记录'} /> : (
-            <ol className="space-y-3">
-              {ranking.slice(0, 5).map((r, i) => (
-                <li key={r.key} className="flex items-center gap-3">
-                  <span className="w-6 text-sm text-ink-2 tabular-nums">{String(i + 1).padStart(2, '0')}</span>
-                  <Photo id={r.photoId} size={48} rounded={24} />
-                  <div className="min-w-0 flex-1">
-                    <b>{r.label}</b>
-                    <div className="mt-1 h-1.5 rounded bg-subtle"><div className="h-1.5 rounded bg-ok/60" style={{ width: `${(r.portions / ranking[0].portions) * 100}%` }} /></div>
-                  </div>
-                  <b className="text-lg tabular-nums">{r.portions}<span className="ml-0.5 text-xs font-normal text-ink-2">份</span></b>
+        {stockShown.length > 0 ? (
+          <section className={`relative min-w-0 overflow-hidden rounded-2xl border bg-card p-5 shadow-card lg:p-6 ${short.length ? 'border-[#ecd9a8]' : 'border-line'}`}>
+            {short.length > 0 && <span className="absolute inset-y-0 left-0 w-1.5 bg-warn" />}
+            <div className="flex items-center gap-2 text-[15px] font-semibold text-ink-2"><Icon name="box" size={20} />材料够不够</div>
+            <div className={`mt-3 text-[28px] font-black leading-tight ${short.length ? 'text-warn' : 'text-ok'}`}>{short.length ? `${short.length} 样明天不够` : '明天够用'}</div>
+            <ul className="mt-3 space-y-2 text-[15px]">
+              {[...stockShown].sort((a, b) => (a.status === b.status ? 0 : a.status === 'short' ? -1 : b.status === 'short' ? 1 : a.status === 'low' ? -1 : 1)).slice(0, 3).map((e) => (
+                <li key={e.ingredientId} className="flex items-center gap-2">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${e.status === 'short' ? 'bg-danger' : e.status === 'low' ? 'bg-warn' : 'bg-ok'}`} /><b className="truncate">{e.name}</b>
+                  <span className="ml-auto whitespace-nowrap text-right tabular-nums">剩约 {e.remaining < 0 ? 0 : Number.isInteger(e.remaining) ? e.remaining : e.remaining.toFixed(1)} {e.unit}{e.tomorrowNeed !== null && <span className="text-ink-2"> · 明天要 ~{e.tomorrowNeed}</span>}</span>
                 </li>
               ))}
-            </ol>
-          )}
-        </Section>
+            </ul>
+            <button type="button" onClick={() => navigate('/owner/materials')} className="mt-4 flex w-full items-center gap-1 border-t border-line pt-3 text-[14px] font-bold">看用料和剩余 <Icon name="arrow" size={16} /></button>
+          </section>
+        ) : (
+        <section className="min-w-0 rounded-2xl border border-line bg-card p-5 shadow-card lg:p-6">
+          <div className="flex items-center gap-2 text-[15px] font-semibold text-ink-2"><Icon name="box" size={20} />用了多少料</div>
+          {usage && usage.bowls > 0 ? (
+            <ul className="mt-3 space-y-2.5 text-[15px]">
+              <UseRow icon={<Photo id="noodle.thin_egg" size={28} rounded={8} />} label="面团" value={ballsText(usage.noodleHalf)} unit="粒"
+                sub={`目标 ${ballsTarget} 粒 · ${usage.noodleHalf >= ballsTarget * 2 ? `已达标${usage.noodleHalf > ballsTarget * 2 ? `，多 ${ballsText(usage.noodleHalf - ballsTarget * 2)}` : ''}` : `还差 ${ballsText(ballsTarget * 2 - usage.noodleHalf)}`}`} good={usage.noodleHalf >= ballsTarget * 2} />
+              <UseRow icon={<Icon name="wanton" size={24} className="text-[#9a7a3c]" />} label="云吞" value={String(usage.wanton.total)} unit="粒" />
+              <UseRow icon={<Photo id="ingredient.char_siew" size={28} rounded={8} />} label="叉烧" value={String(usage.charSiew.total)} unit="份" />
+            </ul>
+          ) : <p className="mt-6 text-ink-2">{loading ? '正在载入…' : '这天还没有订单'}</p>}
+          <button type="button" onClick={() => navigate('/owner/materials')} className="mt-4 flex w-full items-center gap-1 border-t border-line pt-3 text-[14px] font-bold">每样怎么算出来的 <Icon name="arrow" size={16} /></button>
+        </section>
+        )}
       </div>
 
-      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        <Section title="钱从哪里来，花到哪里去" hint="按已登记收款估算 · 进货不与理论成本重复扣减"
-          actions={<button type="button" onClick={() => setDetail(!detail)} aria-expanded={detail} className="min-h-14 px-1 text-sm underline underline-offset-4">{detail ? '收起现金视角' : '查看现金视角'}</button>}>
-          {summary ? (
-            <table className="w-full text-[15px]">
-              <tbody>
-                {[
-                  ['净登记收款', summary.netReceiptsSen], ['理论食材与包装成本', -costUnitsToSen(summary.allocatedCostUnits)],
-                  ['未重复计算的损耗', -costUnitsToSen(summary.wastageCostUnits)], ['固定费用摊销（按日历日）', -summary.fixedCostSen],
-                  ['其他营业费用', -summary.otherOpexSen],
-                ].map(([l, v]) => <tr key={l as string} className="border-b border-line"><td className="py-2.5">{l}</td><td className="text-right tabular-nums">{formatRM(v as number)}</td></tr>)}
-                <tr><td className="pt-3 font-bold text-ok">估算经营利润（按已登记收款估算）</td><td className={`pt-3 text-right font-bold tabular-nums ${summary.estimatedProfitSen < 0 ? 'text-danger' : 'text-ok'}`}>{formatRM(summary.estimatedProfitSen)}</td></tr>
-                {detail && (
-                  <>
-                    <tr><td className="pt-5 pb-1 font-semibold" colSpan={2}>现金视角（不同于估算利润；新收款不分渠道，不能推算钱箱金额）</td></tr>
-                    {[
-                      ['已登记收款 − 已登记退款', summary.receipts.totalSen - summary.refunds.totalSen], ['已付进货', -summary.cash.purchasesPaidSen],
-                      ['已付营业费用（含房租等付款）', -summary.cash.opexPaidSen], ['= 经营现金净流入', summary.cash.operatingNetInflowSen],
-                      ['资本设备付款（另列，不计经营）', -summary.cash.capitalPaidSen],
-                    ].map(([l, v]) => <tr key={l as string} className="border-b border-line"><td className="py-2">{l}</td><td className="text-right tabular-nums">{formatRM(v as number)}</td></tr>)}
-                  </>
-                )}
-              </tbody>
-            </table>
-          ) : <Empty text="正在载入…" />}
-          {summary && summary.wastageAlreadyAllocatedCount > 0 && <p className="mt-2 text-xs text-ink-2">另有 {summary.wastageAlreadyAllocatedCount} 条损耗属于已计入订单成本的食材，只记数量、不重复扣款。</p>}
-          <p className="mt-3 text-xs text-ink-2">收款数字为员工人工登记，未登记的订单不计入；面薄与汤底成本待实店校准。</p>
+      {/* 面量 + 卖得最好 */}
+      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+        <section className="min-w-0 rounded-2xl border border-line bg-card p-5 shadow-card lg:p-6">
+          <div className="mb-4 flex flex-wrap items-baseline gap-2"><h3 className="text-lg font-bold">卖了多少面</h3><span className="text-sm text-ink-2">按订单自动算 · 小 1 粒、中 1½ 粒、大 2 粒 · 不含取消的单</span></div>
+          {!usage || usage.noodleBowls === 0 ? <Empty text={loading ? '正在载入…' : '这天还没有卖面'} /> : (
+            <>
+              <div className="flex flex-wrap items-center gap-5">
+                <div>
+                  <div className="text-[40px] font-black leading-none tabular-nums">{ballsText(usage.noodleHalf)} <span className="text-base font-bold">粒面</span></div>
+                  <div className="mt-1 text-[13px] text-ink-2">每日目标 {ballsTarget} 粒 · {usage.noodleHalf >= ballsTarget * 2 ? <b className="text-ok">已达标</b> : `还差 ${ballsText(ballsTarget * 2 - usage.noodleHalf)} 粒`}</div>
+                </div>
+                <div className="min-w-[200px] flex-1">
+                  <div className="relative h-3 rounded-full bg-subtle">
+                    <div className="h-3 rounded-full bg-ok" style={{ width: `${Math.min(100, (usage.noodleHalf / Math.max(usage.noodleHalf, ballsTarget * 2)) * 100)}%` }} />
+                    <span className="absolute -top-1 h-5 w-0.5 bg-ink" style={{ left: `${(ballsTarget * 2 / Math.max(usage.noodleHalf, ballsTarget * 2)) * 100}%` }} title={`目标 ${ballsTarget}`} />
+                  </div>
+                </div>
+              </div>
+              <table className="mt-5 w-full text-[15px] tabular-nums">
+                <thead><tr className="text-left text-[13px] text-ink-2"><th className="py-2 font-semibold">面种</th>{SIZE_COLS.map(([k, l, n]) => <th key={k} className="py-2 text-right font-semibold">{l} <span className="font-normal">({n})</span></th>)}<th className="py-2 text-right font-semibold">合计</th></tr></thead>
+                <tbody>
+                  {NOODLE_ROWS.map(([t, label]) => {
+                    const row = usage.noodle[t];
+                    const bowls = row.small.bowls + row.medium.bowls + row.large.bowls;
+                    return (
+                      <tr key={t} className="border-t border-line">
+                        <td className="py-2.5 font-semibold">{label}</td>
+                        {SIZE_COLS.map(([k]) => <td key={k} className="text-right"><Cell half={row[k].half} bowls={row[k].bowls} /></td>)}
+                        <td className="text-right"><Cell half={usage.noodleHalfByType[t]} bowls={bowls} strong /></td>
+                      </tr>
+                    );
+                  })}
+                  <tr className="border-t-2 border-ink/80 bg-subtle/60">
+                    <td className="py-2.5 pl-2 font-bold">合计</td>
+                    {SIZE_COLS.map(([k]) => <td key={k} className="text-right"><Cell half={usage.noodle.thin_egg[k].half + usage.noodle.mee_poh[k].half} bowls={usage.noodle.thin_egg[k].bowls + usage.noodle.mee_poh[k].bowls} /></td>)}
+                    <td className="pr-2 text-right"><Cell half={usage.noodleHalf} bowls={usage.noodleBowls} strong /></td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="mt-5 grid grid-cols-2 gap-2.5 sm:grid-cols-5">
+                <Chip icon={<Icon name="wanton" size={16} />} label="云吞" value={usage.wanton.total} unit="粒" />
+                <Chip icon={<Photo id="ingredient.char_siew" size={16} rounded={8} />} label="叉烧" value={usage.charSiew.total} unit="份" />
+                <Chip icon={<Icon name="soup" size={16} />} label="汤" value={usage.byKind.soup_noodle + usage.byKind.wanton_soup} unit="碗" />
+                <Chip icon={<Icon name="bag" size={16} />} label="打包" value={usage.takeawayBowls} unit="份" />
+                <Chip icon={<Icon name="plain" size={16} />} label="净面" value={usage.kosongBowls} unit="碗" />
+              </div>
+            </>
+          )}
+        </section>
+
+        <section className="min-w-0 rounded-2xl border border-line bg-card p-5 shadow-card lg:p-6">
+          <div className="mb-4 flex items-baseline gap-2"><h3 className="text-lg font-bold">卖得最好</h3><span className="text-sm text-ink-2">碗数 · 金额（按订单）</span></div>
+          {!usage || usage.byDish.length === 0 ? <Empty text={loading ? '正在载入…' : '这天还没有订单'} /> : (
+            <>
+              <ol className="space-y-3.5">
+                {usage.byDish.map((d) => (
+                  <li key={d.key} className="flex items-center gap-3">
+                    <Photo id={d.photoId} size={44} rounded={22} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline"><b>{d.label}</b><span className="ml-auto font-bold tabular-nums">{d.bowls} 碗</span></div>
+                      <div className="mt-1 flex items-center gap-2"><div className="h-1.5 flex-1 rounded bg-subtle"><div className="h-1.5 rounded bg-ok/70" style={{ width: `${(d.bowls / usage.byDish[0].bowls) * 100}%` }} /></div><span className="w-[76px] text-right text-[13px] text-ink-2 tabular-nums">{formatRM(d.sen)}</span></div>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-4 border-t border-line pt-3 text-[13px] text-ink-2">酱料：黑酱 {usage.bySauce.black} · 红酱 {usage.bySauce.red} · 白酱 {usage.bySauce.white}（含干捞云吞）</p>
+            </>
+          )}
+        </section>
+      </div>
+
+      {/* 几点最忙 + 提醒 */}
+      <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+        <Section title="几点最忙" hint="每小时收款 · 按登记时间">
+          <TrendChart buckets={trend} loading={loading} />
         </Section>
-        <Section title="营业小提醒" hint="需要关注的事情，集中看">
+        <Section title="要你看一下" hint={attention.length ? `${attention.length} 件` : undefined}>
           {attention.length === 0 ? (
-            <p className="flex items-center gap-2 rounded-xl border border-warn/20 bg-warn-bg/60 px-4 py-3 text-sm text-ink"><Icon name="check" size={18} className="text-ok" />目前没有超时单、待登记收款、待核对记录或应退款。</p>
+            <p className="flex items-center gap-2 rounded-xl bg-ok-bg px-4 py-3 text-sm"><Icon name="check" size={18} className="text-ok" />{closed ? '这天已关账，没有要处理的事。' : '没有超时单、待登记收款、待核对记录或应退款。'}</p>
           ) : (
             <ul className="divide-y divide-line">
               {attention.map((a) => (
                 <li key={a.title} className="flex items-center gap-3 py-3">
+                  <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${a.tone === 'bad' ? 'bg-danger-bg text-danger' : a.tone === 'warn' ? 'bg-warn-bg text-warn' : 'bg-subtle text-ink'}`}><Icon name={a.icon} size={20} /></span>
                   <div className="min-w-0 flex-1"><b>{a.title}</b><p className="text-[13px] text-ink-2">{a.sub}</p></div>
-                  {a.action && <button type="button" onClick={a.action.go} className="h-14 shrink-0 rounded-xl border border-line px-4 font-bold">{a.action.label}</button>}
+                  {a.action && <button type="button" onClick={a.action.go} className={`h-12 shrink-0 rounded-xl px-4 font-bold ${a.action.primary ? 'bg-ink text-white' : 'border border-line'}`}>{a.action.label}</button>}
                 </li>
               ))}
             </ul>
@@ -232,25 +304,29 @@ export function OverviewPage() {
         </Section>
       </div>
 
-      {!loading && summary && svc && mix && (
-        <details className="group rounded-2xl border border-line bg-card p-5 shadow-card">
-          <summary className="flex min-h-14 cursor-pointer list-none items-center gap-2 font-bold"><Icon name="chevron-right" size={18} className="transition-transform group-open:rotate-90" />细账：收款构成、出餐效率、酱料与面种、回本进度</summary>
+      {date && <SummaryCard date={date} isToday={isToday} />}
+
+      {!loading && summary && svc && orderPay && (
+        <details className="group mt-5 rounded-2xl border border-line bg-card p-5 shadow-card">
+          <summary className="flex min-h-14 cursor-pointer list-none items-center gap-2 font-bold"><Icon name="chevron-right" size={18} className="transition-transform group-open:rotate-90" />细账：收款明细、出餐速度、回本进度、导出</summary>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <Section title="收款构成" hint="新收款不分渠道 · 人工登记">
-              <BarList format={formatRM} rows={[
-                { label: '已登记收款', value: summary.receipts.unspecifiedSen },
-                ...(summary.receipts.correctionsSen ? [{ label: '误登记更正', value: summary.receipts.correctionsSen }] : []),
-                { label: '已登记退款', value: -summary.refunds.unspecifiedSen },
-                ...(summary.hasLegacyChannels ? [
-                  { label: '旧版·现金收', value: summary.receipts.cashSen }, { label: '旧版·QR 收', value: summary.receipts.qrSen },
-                  { label: '旧版·现金退', value: -summary.refunds.cashSen }, { label: '旧版·QR 退', value: -summary.refunds.qrSen },
-                ] : []),
-              ]} />
+            <Section title="收款明细" hint="订单金额按订单营业日；收款按登记日">
+              <div className="grid grid-cols-2 gap-3">
+                <PayFig label="有效订单金额" value={formatRM(orderPay.validSen)} sub={`${orderPay.validCount} 单${orderPay.cancelledCount ? ` · 另取消 ${orderPay.cancelledCount} 单` : ''}`} />
+                <PayFig label="已登记收款" value={formatRM(summary.receipts.totalSen)}
+                  sub={hasAuto && split ? `前台确认 ${formatRM(split.manualSen)} · 出餐自动记 ${formatRM(split.autoSen)}${split.notPaidCount ? ` · 没付就走 −${formatRM(split.notPaidSen)}` : ''}` : summary.receipts.correctionsSen ? `含误登记更正 ${formatRM(summary.receipts.correctionsSen)}` : '含跨日补登记'} />
+                <PayFig label="未登记（这天的订单）" value={formatRM(orderPay.unpaidSen)} sub={`${orderPay.unpaidCount} 单 · 不算已收`} tone={orderPay.unpaidCount ? 'bad' : undefined} />
+                <PayFig label="已登记退款" value={formatRM(summary.refunds.totalSen)} />
+              </div>
+              {summary.hasLegacyChannels && (
+                <p className="mt-3 rounded-lg bg-subtle px-3 py-2 text-xs text-ink-2">旧版记录（改版前按渠道登记）：现金收款 {formatRM(summary.receipts.cashSen)} · QR 收款 {formatRM(summary.receipts.qrSen)}；已包含在上面的已登记收款内。</p>
+              )}
+              <p className="mt-3 text-xs text-ink-2">收款数字为员工人工登记{hasAuto ? '或出餐自动记，请和钱箱现金加 QR 到账对一下' : '，未与钱包或银行自动核对'}。</p>
             </Section>
-            <Section title="出餐效率" hint={`样本 ${svc.count} 单`}>
+            <Section title="出餐速度" hint={`样本 ${svc.count} 单${inKitchen ? ` · 厨房还有 ${inKitchen} 单` : ''}`}>
               <div className="grid grid-cols-3 gap-2 text-center">
-                {[['平均', svc.avgMs], ['中位数', svc.medianMs], ['P90', svc.p90Ms], ['最快', svc.minMs], ['最慢', svc.maxMs], ['打包平均', svc.takeaway.avgMs]].map(([l, v]) => (
-                  <div key={l as string} className="rounded-lg bg-subtle p-2"><div className="text-xs text-ink-2">{l}</div><b className="tabular-nums">{minutes(v as number | null)}</b></div>
+                {[['8 分钟内', svc.onTimeRate === null ? '—' : pct(svc.onTimeRate)], ['平均', minutes(svc.avgMs)], ['最慢', minutes(svc.maxMs)]].map(([l, v]) => (
+                  <div key={l} className="rounded-lg bg-subtle p-2"><div className="text-xs text-ink-2">{l}</div><b className="tabular-nums">{v}</b></div>
                 ))}
               </div>
               <div className="mt-3">
@@ -260,46 +336,62 @@ export function OverviewPage() {
                 ]} />
               </div>
             </Section>
-            <Section title="酱料与面种" hint="只算已出餐份数">
-              <div className="grid grid-cols-2 gap-4">
-                <BarList format={(v) => `${v}`} rows={mix.bySauce.map((r) => ({ label: r.label, value: r.portions }))} />
-                <BarList format={(v) => `${v}`} rows={mix.byNoodle.map((r) => ({ label: r.label, value: r.portions }))} />
-              </div>
-            </Section>
-            <Section title="现金回本结余（参考）" hint="收回开档总投入 · 口径待确认" actions={<button type="button" onClick={() => navigate('/owner/finance/goals')} className="h-10 rounded-lg border border-line px-3 text-sm">经营目标</button>}>
+            <Section title="回本进度（参考）" hint="收回开档总投入" actions={<button type="button" onClick={() => navigate('/owner/finance/goals')} className="h-10 rounded-lg border border-line px-3 text-sm">经营目标</button>}>
               {!payback ? <p className="text-ink-2">正在载入…</p> : payback.state === 'pending' ? <p className="text-ink-2">待核算：{payback.pendingReasons.join('；')}。</p> : (
                 <>
                   <div className="h-3 rounded bg-subtle"><div className="h-3 rounded bg-ok" style={{ width: `${payback.barRatio * 100}%` }} /></div>
-                  <p className="mt-2 text-sm tabular-nums">
-                    已收回 <b className={payback.recoveredSen < 0 ? 'text-danger' : ''}>{formatRM(payback.recoveredSen)}</b> ·
-                    开档总投入 {formatRM(payback.targetSen)} · 进度 <b>{pct(payback.ratio)}</b> · 还差 {formatRM(payback.remainingSen)}
-                  </p>
+                  <p className="mt-2 text-sm tabular-nums">已收回 <b className={payback.recoveredSen < 0 ? 'text-danger' : ''}>{formatRM(payback.recoveredSen)}</b> · 开档总投入 {formatRM(payback.targetSen)} · 进度 <b>{pct(payback.ratio)}</b> · 还差 {formatRM(payback.remainingSen)}</p>
                 </>
               )}
+            </Section>
+            <Section title="导出" hint="给会计或自己存档">
+              <button type="button" onClick={exportCsv} className="flex h-14 items-center gap-1.5 rounded-xl border border-line bg-card px-4 font-semibold"><Icon name="download" size={18} />导出这天的 CSV</button>
+              <p className="mt-2 text-xs text-ink-2">汇总、订单、收款退款、支出、损耗五个文件。更长的区间请到账目页。</p>
             </Section>
           </div>
         </details>
       )}
-      <p className="mt-4 text-xs text-ink-2">BOM 版本 {BOM_V1.version}；固定费用{fixed.schedule ? `按租金阶段（起租 ${fixed.schedule.rentStartMonth}）+ 冰箱电费` : ` ${formatRM(fixed.monthlySen)}/月`}按日历日摊销。</p>
     </div>
   );
 }
 
-function Kpi({ icon, label, value, unit, sub, bad }: { icon: 'chart' | 'serve' | 'clock'; label: string; value: string; unit?: string; sub?: string; bad?: boolean }) {
+function Big({ prefix, value, light }: { prefix: string; value: string; light?: boolean }) {
   return (
-    <div className="rounded-2xl border border-line bg-card p-5 shadow-card">
-      <div className="flex items-center text-sm text-ink-2">{label}<Icon name={icon} size={icon === 'serve' ? 24 : 20} className="ml-auto" /></div>
-      <div className={`mt-2 text-4xl font-black tabular-nums ${bad ? 'text-danger' : ''}`}>{value}{unit && <span className="ml-1 text-base font-bold">{unit}</span>}</div>
-      {sub && <div className="mt-2 text-xs text-ink-2">{sub}</div>}
+    <div className="mt-3 flex items-baseline gap-1.5 tabular-nums">
+      <span className={`text-lg font-bold ${light ? 'text-white/85' : ''}`}>{prefix}</span>
+      <span className="text-[40px] font-black leading-none tracking-tight lg:text-[44px]">{value}</span>
     </div>
   );
 }
 
-function PayFig({ label, value, sub, strong, tone }: { label: string; value: string; sub?: string; strong?: boolean; tone?: 'bad' }) {
+function UseRow({ icon, label, value, unit, sub, good }: { icon: ReactNode; label: string; value: string; unit: string; sub?: string; good?: boolean }) {
   return (
-    <div className={`rounded-xl p-3 ${strong ? 'bg-ok-bg' : 'bg-subtle'}`}>
+    <li className="flex items-center gap-2.5">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center">{icon}</span>
+      <div className="min-w-0 flex-1"><b>{label}</b>{sub && <p className={`text-[12px] ${good ? 'text-ok' : 'text-ink-2'}`}>{sub}</p>}</div>
+      <span className="text-xl font-black tabular-nums">{value} <span className="text-[13px] font-semibold">{unit}</span></span>
+    </li>
+  );
+}
+
+function Cell({ half, bowls, strong }: { half: number; bowls: number; strong?: boolean }) {
+  return <><b className={strong ? 'text-[17px]' : ''}>{ballsText(half)}</b> 粒<span className="block text-[12px] text-ink-2">{bowls} 碗</span></>;
+}
+
+function Chip({ icon, label, value, unit }: { icon: ReactNode; label: string; value: number; unit: string }) {
+  return (
+    <div className="rounded-xl bg-subtle px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-[13px] text-ink-2">{icon}{label}</div>
+      <div className="mt-0.5 text-xl font-black tabular-nums">{value} <span className="text-[13px] font-semibold">{unit}</span></div>
+    </div>
+  );
+}
+
+function PayFig({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: 'bad' }) {
+  return (
+    <div className="rounded-xl bg-subtle p-3">
       <div className="text-xs text-ink-2">{label}</div>
-      <div className={`mt-1 text-xl font-black tabular-nums ${tone === 'bad' ? 'text-danger' : strong ? 'text-ok' : ''}`}>{value}</div>
+      <div className={`mt-1 text-xl font-black tabular-nums ${tone === 'bad' ? 'text-danger' : ''}`}>{value}</div>
       {sub && <div className="mt-0.5 text-xs text-ink-2">{sub}</div>}
     </div>
   );
@@ -311,27 +403,24 @@ function Empty({ text }: { text: string }) {
 
 /** 柱状走势：最高时段用深绿，其余浅绿；数值写在最高柱上方，不依赖颜色读数。 */
 function TrendChart({ buckets, loading }: { buckets: { key: string; label: string; netSen: number }[]; loading: boolean }) {
-  if (!buckets.length || buckets.every((b) => b.netSen === 0)) return <Empty text={loading ? '正在载入…' : '这段时间还没有登记收款'} />;
+  if (!buckets.length || buckets.every((b) => b.netSen === 0)) return <Empty text={loading ? '正在载入…' : '这天还没有登记收款'} />;
   const max = Math.max(...buckets.map((b) => b.netSen), 1);
   const peak = buckets.reduce((m, b) => (b.netSen > m.netSen ? b : m), buckets[0]);
-  const step = buckets.length > 16 ? Math.ceil(buckets.length / 8) : 1;
+  const total = buckets.reduce((s, b) => s + b.netSen, 0);
   return (
     <figure>
-      <div className="flex h-56 items-end gap-1.5 border-b border-line sm:gap-2" role="img" aria-label={`最高 ${peak.label} ${formatRM(peak.netSen)}`}>
+      <div className="flex h-44 items-end gap-1.5 border-b border-line sm:gap-2" role="img" aria-label={`最高 ${peak.label} ${formatRM(peak.netSen)}`}>
         {buckets.map((b) => (
           <div key={b.key} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end" title={`${b.label} ${formatRM(b.netSen)}`}>
-            {b === peak && <span className="mb-1 text-xs whitespace-nowrap text-ink-2">{formatRM(b.netSen).replace('.00', '')}</span>}
-            <div className={`w-full max-w-[64px] rounded-t-md ${b === peak ? 'bg-ok' : 'bg-[#d2dac4]'}`} style={{ height: `${Math.max(2, (Math.max(0, b.netSen) / max) * 85)}%` }} />
+            {b === peak && <span className="mb-1 text-xs font-bold whitespace-nowrap">{formatRM(b.netSen)}</span>}
+            <div className={`w-full max-w-[56px] rounded-t-md ${b === peak ? 'bg-ok' : 'bg-[#d2dac4]'}`} style={{ height: `${Math.max(1, (Math.max(0, b.netSen) / max) * 85)}%` }} />
           </div>
         ))}
       </div>
       <div className="mt-1.5 flex gap-1.5 sm:gap-2">
-        {buckets.map((b, i) => <span key={b.key} className="min-w-0 flex-1 text-center text-[11px] text-ink-2">{i % step === 0 ? b.label : ''}</span>)}
+        {buckets.map((b) => <span key={b.key} className={`min-w-0 flex-1 text-center text-[11px] ${b === peak ? 'font-bold text-ok' : 'text-ink-2'}`}>{b.label.slice(0, 2)}点</span>)}
       </div>
-      <figcaption className="mt-3 flex gap-4 text-xs text-ink-2">
-        <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-[#d2dac4]" />已登记收款</span>
-        <span className="inline-flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-ok" />最高时段</span>
-      </figcaption>
+      {total > 0 && <figcaption className="mt-3 text-[13px] text-ink-2">{peak.label.slice(0, 2)} 点那一小时最旺（{formatRM(peak.netSen)}，占这天 {Math.round((peak.netSen / total) * 100)}%）。</figcaption>}
     </figure>
   );
 }

@@ -29,6 +29,7 @@ import { ANTHROPIC_API_KEY, DEEPSEEK_API_KEY } from './aiCost/config';
 import { cleanupExpiredDrafts } from './aiCost/drafts';
 import { deleteAttachments } from './aiCost/receiptStorage';
 import { previewStoreReset, resetStoreForOpening } from './commands/goLive';
+import { acceptUnitCosts, estimateUnitCosts, getDailySummary, recordStockCount, setCostConversions } from './commands/costSources';
 import { defineSecret } from 'firebase-functions/params';
 import { getStorage } from 'firebase-admin/storage';
 
@@ -129,6 +130,13 @@ export const commitCostDraftCmd = command(commitCostDraft);
 export const completePurchaseUsageCmd = command(completePurchaseUsage);
 export const setAiCostEnabledCmd = command(setAiCostEnabled);
 export const getCostAnalysisCmd = command(getCostAnalysis, AI_LONG);
+
+// 经营改版：确认单价（发布新 BOM）、换算、收档点数；AI 估单价与收档小结（专用长请求）。
+export const acceptUnitCostsCmd = command(acceptUnitCosts);
+export const setCostConversionsCmd = command(setCostConversions);
+export const recordStockCountCmd = command(recordStockCount);
+export const estimateUnitCostsCmd = command(estimateUnitCosts, AI_LONG);
+export const getDailySummaryCmd = command(getDailySummary, AI_LONG);
 
 // 清空测试数据（可多次使用）：确认码（店主 IC）只以哈希存在 Secret Manager，只挂在清空这一个函数上。
 const STORE_RESET_CODE_HASH = defineSecret('STORE_RESET_CODE_HASH');

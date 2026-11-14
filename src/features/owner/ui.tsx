@@ -2,11 +2,15 @@
 import { ReactNode } from 'react';
 import { navigate, Route } from '../../app/router';
 
-const TABS: { route: Route; label: string }[] = [
-  { route: '/owner', label: '概览' },
-  { route: '/owner/finance', label: '收支' },
-  { route: '/owner/review', label: '待核对' },
-  { route: '/owner/close', label: '日结' },
+/**
+ * 2026-11-14 经营改版：今天 · 用料 · 成本 · 账目 · 设置。
+ * 日结、待核对并入「账目」（今天页的提醒和账目页的入口都能进），页签上仍亮「账目」。
+ */
+const TABS: { route: Route; label: string; also?: Route[] }[] = [
+  { route: '/owner', label: '今天' },
+  { route: '/owner/materials', label: '用料' },
+  { route: '/owner/costs', label: '成本' },
+  { route: '/owner/finance', label: '账目', also: ['/owner/review', '/owner/close'] },
   { route: '/owner/settings', label: '设置' },
 ];
 
@@ -14,13 +18,16 @@ const TABS: { route: Route; label: string }[] = [
 export function OwnerTabs({ current, badge }: { current: Route; badge?: Partial<Record<Route, number>> }) {
   return (
     <nav aria-label="老板页面" className="-mx-4 mb-5 flex gap-2 overflow-x-auto px-4 pb-1 lg:mx-0 lg:px-0">
-      {TABS.map((t) => (
-        <button key={t.route} type="button" onClick={() => navigate(t.route)} aria-current={current === t.route ? 'page' : undefined}
-          className={`relative h-14 shrink-0 rounded-xl border px-4 font-semibold ${current === t.route ? 'border-ink bg-ink text-white' : 'border-line bg-card text-ink-2 hover:text-ink'}`}>
-          {t.label}
-          {badge?.[t.route] ? <span className="ml-1.5 rounded-full bg-danger px-1.5 text-xs text-white">{badge[t.route]}</span> : null}
-        </button>
-      ))}
+      {TABS.map((t) => {
+        const active = current === t.route || Boolean(t.also?.includes(current)) || (t.route === '/owner/finance' && current.startsWith('/owner/finance'));
+        return (
+          <button key={t.route} type="button" onClick={() => navigate(t.route)} aria-current={active ? 'page' : undefined}
+            className={`relative h-14 shrink-0 rounded-xl border px-4 font-semibold sm:px-5 ${active ? 'border-ink bg-ink text-white' : 'border-line bg-card text-ink-2 hover:text-ink'}`}>
+            {t.label}
+            {badge?.[t.route] ? <span className="ml-1.5 rounded-full bg-danger px-1.5 text-xs text-white">{badge[t.route]}</span> : null}
+          </button>
+        );
+      })}
     </nav>
   );
 }

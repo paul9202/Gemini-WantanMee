@@ -24,6 +24,7 @@ test('验收模式下 Claude 不被调用，直接由 DeepSeek 处理，并记�
     name, modelFor: () => `${name}-model`,
     extract: async () => { seen.push(name); return { value: { lines: [] } as never, usage: { inputTokens: 0, outputTokens: 0 }, model: `${name}-model` }; },
     explain: async () => { throw new Error('unused'); },
+    structured: async () => { throw new Error('unused'); },
   });
   const r = await runCostAi('extract', false, (p, s) => p.extract({} as never, s), { primary: null, backup: fake('deepseek'), primarySkipped: 'acceptance_skip' });
   assert.deepEqual(seen, ['deepseek']);

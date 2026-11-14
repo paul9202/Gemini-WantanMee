@@ -99,3 +99,23 @@ export async function uploadReceiptImage(prefix: string, file: File): Promise<st
 export async function receiptImageUrl(path: string): Promise<string> {
   return URL.createObjectURL(await getBlob(ref(storage, path)));
 }
+
+// ───────── 经营改版：AI 估单价、收档小结（专用长请求；不自动重发，避免重复计费） ─────────
+
+export type OwnerAiStatus = 'ok' | 'disabled' | 'not_configured' | 'quota' | 'failed' | 'not_requested';
+
+export function estimateUnitCosts(): Promise<{ status: OwnerAiStatus; suggested?: string[]; notes?: string[] }> {
+  return callLong('estimateUnitCosts', {});
+}
+
+export interface DailySummaryView {
+  date: string;
+  facts: import('../../domain').SummaryFacts;
+  plain: string[];
+  ai: { paragraphs: { title: string; text: string }[]; provider: string; model: string; generatedAtMs: number; stale: boolean } | null;
+  status: OwnerAiStatus;
+}
+
+export function getDailySummary(date: string, generate: boolean): Promise<DailySummaryView> {
+  return callLong('getDailySummary', { date, generate });
+}
