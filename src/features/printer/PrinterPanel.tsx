@@ -117,13 +117,14 @@ export function PrinterSheet({ onClose }: { onClose: () => void }) {
                     </button>
                   </div>
                   <div className="flex items-center gap-3 border-b border-line py-4">
-                    <b className="flex-1">{tr('纸宽', 'Paper width')}</b>
-                    <div className="flex rounded-xl bg-subtle p-1" role="group" aria-label={tr('纸宽', 'Paper width')}>
-                      {([58, 80] as const).map((w) => (
-                        <button key={w} type="button" aria-pressed={s.settings.width === w} onClick={() => printer.setWidth(w)}
-                          className={`h-12 rounded-lg px-4 font-semibold ${s.settings.width === w ? 'bg-card shadow' : 'text-ink-2'}`}>{w}mm</button>
-                      ))}
-                    </div>
+                    <div className="min-w-0 flex-1"><b>{tr('纸宽', 'Paper width')}</b><p className="text-[13px] text-ink-2">{tr('测试条的虚线断成两行、或只到纸的三分之二，就是选错了', 'If the test strip’s dashed line breaks onto two lines or covers only two-thirds of the paper, this is wrong')}</p></div>
+                    <Choice label={tr('纸宽', 'Paper width')} value={s.settings.width} onChange={(w) => printer.setWidth(w)}
+                      options={[[58, '58mm'], [80, '80mm']]} />
+                  </div>
+                  <div className="flex items-center gap-3 border-b border-line py-4">
+                    <div className="min-w-0 flex-1"><b>{tr('切纸', 'Cutting')}</b><p className="text-[13px] text-ink-2">{tr('便携机多半没有切刀，选「手撕」', 'Most portable printers have no cutter: choose Tear')}</p></div>
+                    <Choice label={tr('切纸', 'Cutting')} value={s.settings.cut} onChange={(c) => printer.setCut(c)}
+                      options={[['tear', tr('手撕', 'Tear')], ['auto', tr('自动切刀', 'Auto cutter')]]} />
                   </div>
 
                   {failed.length > 0 && (
@@ -165,6 +166,18 @@ function jobStatusText(j: SlipJob, s: PrinterState, tr: Tr): string {
   if (j.status === 'waiting') return s.link === 'ready' ? tr('排队中', 'Queued') : tr('等打印机连上', 'Waiting for printer');
   if (j.status === 'skipped') return j.prints > 0 ? tr(`已打印 ${j.prints} 次`, `Printed ${j.prints}×`) : tr('没有打印', 'Not printed');
   return j.prints > 1 ? tr(`已打印 ${j.prints} 次`, `Printed ${j.prints}×`) : tr('已打印', 'Printed');
+}
+
+/** 两三个选项的分段按钮（纸宽、切纸）。 */
+function Choice<T extends string | number>({ label, value, onChange, options }: { label: string; value: T; onChange: (v: T) => void; options: [T, string][] }) {
+  return (
+    <div className="flex shrink-0 rounded-xl bg-subtle p-1" role="group" aria-label={label}>
+      {options.map(([v, text]) => (
+        <button key={String(v)} type="button" aria-pressed={value === v} onClick={() => onChange(v)}
+          className={`h-12 rounded-lg px-4 font-semibold ${value === v ? 'bg-card shadow' : 'text-ink-2'}`}>{text}</button>
+      ))}
+    </div>
+  );
 }
 
 function JobRow({ job, note, actions }: { job: SlipJob; note: string; actions: ReactNode }) {

@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultConfig, MENU_V1, normalizeConfig, unitPriceSen } from '../../domain/index';
 import type { LineConfig } from '../../domain/index';
+import { extraConfig, extraNote } from '../../domain/extras';
 import { buildRunnerSlip, RunnerSlipSource } from '../../domain/runnerSlip';
 import { COLUMNS, displayWidth, encodeGb18030, encodeLines, encodeRunnerSlip, layoutRunnerSlip, layoutTestPage, PrintLine, previewLines } from './escpos';
 
@@ -80,6 +81,31 @@ test('要求太多时折行，下一行不以「·」开头', () => {
   for (const l of lines) assert.ok(width(l) <= 32);
 });
 
+for (const paper of [58, 80] as const) {
+  test(`${paper}mm 加料单：「给哪一碗」比一行还长也整句印出，从「·」处折行`, () => {
+    const bowl = { ...cfg({ productKind: 'dry_noodle', size: 'medium', noodleType: 'mee_poh', spice: 'less', note: '不要番茄酱' }, 'red'), serviceMode: 'takeaway' as const };
+    const note = extraNote(menu, bowl);
+    const extra = { ...extraConfig('char_siew'), note };
+    const lines = layoutRunnerSlip(slip({ extraOnly: true, lines: [{ config: extra, quantity: 1, unitPriceSen: 200 }] }), paper);
+    const text = previewLines(lines);
+    const detail = text.filter((t) => t.startsWith('   '));
+    assert.ok(detail.length >= 2, text.join('\n'));
+    assert.equal(detail.map((d) => d.trim()).join(' · '), note, '一个字都不少');
+    for (const d of detail) assert.ok(!d.trimStart().startsWith('·'), d);
+    for (const l of lines) assert.ok(width(l) <= COLUMNS[paper], `${previewLines([l])[0]} 宽 ${width(l)}`);
+  });
+}
+
+test('一个词比一行还长：逐字折开，一个字都不少', () => {
+  const base = slip();
+  const long = '客人说面要煮软一点汤要另外装不要放葱花';
+  const lines = layoutRunnerSlip({ ...base, lines: [{ ...base.lines[0], detail: [{ text: long }] }] }, 58);
+  const detail = previewLines(lines).filter((t) => t.startsWith('   '));
+  assert.equal(detail.length, 2, detail.join('\n'));
+  assert.equal(detail.map((d) => d.trim()).join(''), long);
+  for (const l of lines) assert.ok(width(l) <= 32);
+});
+
 test('补打写在最上面；同牌加单的说明在牌号下面', () => {
   const text = previewLines(layoutRunnerSlip(slip({ sharedToken: true }, 1), 80));
   assert.equal(text[0].trim(), '补打 2');
@@ -87,8 +113,8 @@ test('补打写在最上面；同牌加单的说明在牌号下面', () => {
   assert.equal(text[tokenAt + 1], '同牌加单 · 和前面的 12 号一起送');
 });
 
-test('字节：初始化、中文模式、黑底表头、牌号放大、中文编码、走纸切纸', () => {
-  const bytes = encodeRunnerSlip(slip({ serviceMode: 'takeaway' }), 80);
+test('字节：初始化、中文模式、黑底表头、牌号放大、中文编码；自动切刀时走纸切纸', () => {
+  const bytes = encodeRunnerSlip(slip({ serviceMode: 'takeaway' }), 80, 'auto');
   assert.deepEqual([...bytes.slice(0, 4)], [0x1b, 0x40, 0x1c, 0x26]);
   assert.ok(has(bytes, [0x1d, 0x42, 1]), '黑底开');
   assert.ok(has(bytes, [0x1d, 0x42, 0]), '黑底关');
@@ -98,11 +124,27 @@ test('字节：初始化、中文模式、黑底表头、牌号放大、中文�
   assert.ok(bytes.length < 2000, `数据量小，蓝牙很快传完：${bytes.length} 字节`);
 });
 
-test('测试条：中文样字、纸宽、提示都在，也会切纸', () => {
-  const lines = layoutTestPage({ width: 80, at: '14:30', deviceName: 'XP-N160II' });
-  const text = previewLines(lines).join('\n');
-  assert.ok(text.includes('打印测试') && text.includes('干捞面 面薄 走青 不要番茄酱') && text.includes('80mm') && text.includes('XP-N160II'));
-  for (const l of lines) assert.ok(width(l) <= 48);
-  const bytes = encodeLines(lines);
-  assert.deepEqual([...bytes.slice(-4)], [0x1d, 0x56, 66, 0]);
+test('手撕（默认）：不发切纸指令，多走几行纸', () => {
+  for (const bytes of [encodeRunnerSlip(slip(), 58), encodeRunnerSlip(slip(), 58, 'tear')]) {
+    assert.ok(!has(bytes, [0x1d, 0x56]), '没有切纸指令：没切刀的便宜机器不认会印乱码');
+    assert.deepEqual([...bytes.slice(-3)], [0x1b, 0x64, 5]);
+  }
 });
+
+for (const paper of [80, 58] as const) {
+  test(`测试条 ${paper}mm：中文样字、纸宽、切纸、整行虚线和提示都在，每行不超宽`, () => {
+    for (const cut of ['tear', 'auto'] as const) {
+      const lines = layoutTestPage({ width: paper, cut, at: '14:30', deviceName: 'XP-N160II' });
+      const text = previewLines(lines);
+      const all = text.join('\n');
+      assert.ok(all.includes('打印测试') && all.includes('干捞面 面薄 走青 不要番茄酱') && all.includes(`${paper}mm`) && all.includes('XP-N160II'));
+      assert.equal(text.filter((t) => t === '-'.repeat(COLUMNS[paper])).length, 2, '两条正好一行宽的虚线');
+      assert.ok(all.includes('虚线断成两行 = 纸宽选错了'));
+      assert.ok(all.includes(cut === 'auto' ? '自动切刀' : '手撕'));
+      assert.ok(all.includes(cut === 'auto' ? '下面应该自动切开' : '从这里撕下'));
+      for (const l of lines) assert.ok(width(l) <= COLUMNS[paper], `${previewLines([l])[0]} 宽 ${width(l)}`);
+      const bytes = encodeLines(lines, cut);
+      assert.equal(has(bytes, [0x1d, 0x56, 66, 0]), cut === 'auto');
+    }
+  });
+}

@@ -84,8 +84,10 @@ function spread(left: Segment[], right: Segment[], cols: number, style: Omit<Seg
 }
 
 /**
- * 按宽度折行；一段太长时在段内按字折开。
- * lead 是段前的连接符（例如「 · 」），只在不是行首时才写，免得折行后一行以「·」开头。
+ * 按宽度折行，一个字都不丢。
+ * - lead 是段前的连接符（例如「 · 」），只在不是行首时才写，免得折行后一行以「·」开头。
+ * - 一段比一行还长（例如加料单的「给 黑酱面 · 中 · 面薄 · 少辣」）：先按「 · 」拆开，从「·」处断行，不把词劈成两半；
+ *   拆完还放不下的词才逐字折开。
  */
 function wrapSegs(segs: (Segment & { lead?: string })[], cols: number, indent = ''): PrintLine[] {
   const lines: PrintLine[] = [];
@@ -100,37 +102,45 @@ function wrapSegs(segs: (Segment & { lead?: string })[], cols: number, indent = 
     if (width > base) lines.push({ segs: cur });
     reset();
   };
+  const add = (seg: Segment, w: number) => {
+    cur.push(seg);
+    width += w;
+  };
   reset();
-  for (const { lead, ...seg } of segs) {
+  const parts = segs.flatMap((s) =>
+    segWidth(s) > cols - base && s.text.includes(' · ')
+      ? s.text.split(' · ').map((text, i) => ({ ...s, text, lead: i === 0 ? s.lead : ' · ' }))
+      : [s],
+  );
+  for (const { lead, ...seg } of parts) {
     const sw = segWidth(seg);
     const lw = lead && width > base ? displayWidth(lead) : 0;
     if (width + lw + sw <= cols) {
-      if (lw) cur.push({ text: lead! });
-      cur.push(seg);
-      width += lw + sw;
+      // 连接符跟这段一样高，放大的字旁边「·」不会掉在底下。
+      if (lw) add({ text: lead!, h: seg.h }, lw);
+      add(seg, sw);
       continue;
     }
-    if (width > base && sw <= cols - base) {
-      push();
-      cur.push(seg);
-      width += sw;
+    push();
+    if (base + sw <= cols) {
+      add(seg, sw);
       continue;
     }
-    // 段本身太长：逐字放。
+    // 一个词比一行还长：逐字折开。
     let piece = '';
+    let pw = 0;
     for (const ch of seg.text) {
       const cw = displayWidth(ch) * (seg.w ?? 1);
-      if (width + displayWidth(piece) * (seg.w ?? 1) + cw > cols) {
-        if (piece) cur.push({ ...seg, text: piece });
+      if (piece && width + pw + cw > cols) {
+        add({ ...seg, text: piece }, pw);
         push();
         piece = '';
+        pw = 0;
       }
       piece += ch;
+      pw += cw;
     }
-    if (piece) {
-      cur.push({ ...seg, text: piece });
-      width += displayWidth(piece) * (seg.w ?? 1);
-    }
+    if (piece) add({ ...seg, text: piece }, pw);
   }
   push();
   return lines;
@@ -165,7 +175,10 @@ export function layoutRunnerSlip(slip: RunnerSlip, width: PaperWidth): PrintLine
   return out;
 }
 
-export function layoutTestPage(info: { width: PaperWidth; at: string; deviceName: string }): PrintLine[] {
+/**
+ * 测试条：中文样字、纸宽、切纸方式。上下两条虚线正好一行宽：纸宽选成 80mm 却装在 58mm 机上，虚线会断成两行，一眼看得出。
+ */
+export function layoutTestPage(info: { width: PaperWidth; at: string; deviceName: string; cut: CutMode }): PrintLine[] {
   const cols = COLUMNS[info.width];
   const rule: PrintLine = { segs: [{ text: '-'.repeat(cols) }] };
   return [
@@ -175,11 +188,13 @@ export function layoutTestPage(info: { width: PaperWidth; at: string; deviceName
     rule,
     ...spread([{ text: '打印机' }], [{ text: info.deviceName }], cols),
     ...spread([{ text: '纸宽' }], [{ text: `${info.width}mm` }], cols),
+    ...spread([{ text: '切纸' }], [{ text: info.cut === 'auto' ? '自动切刀' : '手撕' }], cols),
     ...spread([{ text: '时间' }], [{ text: info.at }], cols),
     rule,
-    { segs: [{ text: '在出餐口收到这张 = 蓝牙够远', bold: true }], align: 'center' },
+    { segs: [{ text: '虚线断成两行 = 纸宽选错了', bold: true }], align: 'center' },
+    { segs: [{ text: '在出餐口收到这张 = 蓝牙够远' }], align: 'center' },
     { segs: [{ text: '中文清楚 = 有中文字库' }], align: 'center' },
-    { segs: [{ text: '下面应该自动切开' }], align: 'center' },
+    { segs: [{ text: info.cut === 'auto' ? '下面应该自动切开' : '从这里撕下' }], align: 'center' },
   ];
 }
 
@@ -195,7 +210,13 @@ const GS = 0x1d;
 const FS = 0x1c;
 const ALIGN = { left: 0, center: 1, right: 2 } as const;
 
-export function encodeLines(lines: PrintLine[]): Uint8Array {
+/**
+ * 切纸方式：auto 是有自动切刀的台式机（打完走纸、切开）；tear 是没切刀、手撕的便携机（只多走几行纸，不发切纸指令——
+ * 有些便宜机器不认这条指令，会多印出几个乱码）。
+ */
+export type CutMode = 'auto' | 'tear';
+
+export function encodeLines(lines: PrintLine[], cut: CutMode = 'tear'): Uint8Array {
   const out: number[] = [ESC, 0x40, FS, 0x26]; // 初始化；进入中文模式
   let align: keyof typeof ALIGN = 'left';
   let size = 0;
@@ -232,9 +253,13 @@ export function encodeLines(lines: PrintLine[]): Uint8Array {
     setBold(false);
   }
   if (align !== 'left') out.push(ESC, 0x61, 0);
-  out.push(ESC, 0x64, 4); // 走纸到切刀
-  out.push(GS, 0x56, 66, 0); // 切纸
+  if (cut === 'auto') {
+    out.push(ESC, 0x64, 4); // 走纸到切刀
+    out.push(GS, 0x56, 66, 0); // 切纸
+  } else {
+    out.push(ESC, 0x64, 5); // 手撕：多走几行，最后一行露出撕纸口
+  }
   return Uint8Array.from(out);
 }
 
-export const encodeRunnerSlip = (slip: RunnerSlip, width: PaperWidth) => encodeLines(layoutRunnerSlip(slip, width));
+export const encodeRunnerSlip = (slip: RunnerSlip, width: PaperWidth, cut: CutMode = 'tear') => encodeLines(layoutRunnerSlip(slip, width), cut);

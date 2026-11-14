@@ -21,6 +21,15 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    // 送餐单打印的开关还关着，只有老板会用到打印机面板。
+    id: '2026-11-14-printer-58mm', date: '2026-11-14', roles: ['owner'],
+    title: { zh: '送餐单打印支持 58mm 手撕的便携打印机', en: 'Order slips work with 58mm tear-off portable printers' },
+    items: [
+      { zh: '打印机面板多了「切纸：手撕 / 自动切刀」，纸宽和切纸默认是 58mm、手撕。用 80mm 带切刀的台式机，就在面板里改成 80mm、自动切刀。', en: 'The printer panel has a new “Cutting: Tear / Auto cutter” choice; paper width and cutting default to 58mm and Tear. For an 80mm desktop printer with a cutter, change them to 80mm and Auto cutter in the panel.' },
+      { zh: '测试条上会印出纸宽和切纸方式，还有一句提示：虚线断成两行，就是纸宽选错了。连接说明也写上了便携机要一直插电、多备纸卷。', en: 'The test strip now prints the paper width and cutting mode, with a hint: if the dashed line breaks onto two lines, the paper width is wrong. “How to connect” now says to keep a portable printer plugged in and to keep spare rolls.' },
+    ],
+  },
+  {
     // 总开关默认关着，收银现在看不到任何变化，所以先只给老板看；打开、员工要用时再补一条给收银。
     id: '2026-11-13-runner-slip', date: '2026-11-13', roles: ['owner'],
     title: { zh: '新增送餐单打印（默认关着）', en: 'New: order slip printing (off by default)' },

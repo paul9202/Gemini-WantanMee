@@ -19,15 +19,17 @@ class FakeLink implements PrinterLink {
   id = 'dev-1';
   name = 'XP-N160II';
   printed: string[][] = [];
+  bytes: Uint8Array[] = [];
   failNext: 'connect' | 'write' | null = null;
   private cbs: (() => void)[] = [];
   connected = () => true;
-  async write(_bytes: Uint8Array, preview?: string[]) {
+  async write(bytes: Uint8Array, preview?: string[]) {
     const f = this.failNext;
     this.failNext = null;
     if (f === 'connect') throw new PrinterLinkError('CONNECT_FAILED');
     if (f === 'write') throw new PrinterLinkError('WRITE_FAILED');
     this.printed.push(preview ?? []);
+    this.bytes.push(bytes);
   }
   disconnect() {}
   onDisconnect(cb: () => void) {
@@ -168,6 +170,42 @@ test('写到一半出错：这张标没打出来（可能打出半张），后�
   assert.equal(job(m, 'order:a')?.status, 'failed');
   assert.equal(job(m, 'order:a')?.problem, 'WRITE_FAILED');
   assert.equal(m.getState().link, 'lost');
+});
+
+const hasCut = (b: Uint8Array) => [...b].some((x, i) => x === 0x1d && b[i + 1] === 0x56);
+
+test('默认 58mm、手撕：送餐单按 32 格排、不发切纸指令；改成 80mm、自动切刀后照新设置打', async () => {
+  const { m, link, settingsNow } = setup();
+  assert.deepEqual([DEFAULT_SETTINGS.width, DEFAULT_SETTINGS.cut], [58, 'tear']);
+  await m.connect();
+  await m.enqueue('order:a', slip(12), { label: '#a' });
+  await flush();
+  assert.ok(link.printed[0].includes('-'.repeat(32)), '58mm 一行 32 格');
+  assert.equal(hasCut(link.bytes[0]), false);
+  m.setWidth(80);
+  m.setCut('auto');
+  assert.deepEqual([settingsNow().width, settingsNow().cut], [80, 'auto'], '设置存回本机');
+  await m.enqueue('order:b', slip(15), { label: '#b' });
+  await flush();
+  assert.ok(link.printed[1].includes('-'.repeat(48)), '80mm 一行 48 格');
+  assert.equal(hasCut(link.bytes[1]), true);
+});
+
+test('测试打印按当前纸宽和切纸方式打', async () => {
+  const { m, link } = setup();
+  await m.connect();
+  await m.testPrint();
+  assert.ok(link.printed[0].some((l) => l.includes('手撕')));
+  assert.equal(hasCut(link.bytes[0]), false);
+});
+
+test('旧版存下的设置没有切纸字段：照手撕打，不发切纸指令；纸宽照旧', async () => {
+  const { m, link } = setup({ settings: { enabled: true, deviceId: 'dev-1', deviceName: 'XP', width: 80, cut: undefined as unknown as 'tear' } });
+  await m.connect();
+  await m.enqueue('order:a', slip(12), { label: '#a' });
+  await flush();
+  assert.equal(hasCut(link.bytes[0]), false);
+  assert.ok(link.printed[0].includes('-'.repeat(48)), '存下的 80mm 不被默认值盖掉');
 });
 
 test('页面重开：没打完的旧任务标没打出来，不自动补打；能连回上次的打印机就直接连上', async () => {

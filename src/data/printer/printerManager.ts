@@ -6,7 +6,7 @@
  * - 页面重开后不自动补打旧任务，同样标「没打出来」。
  */
 import { resumesOnReconnect, RunnerSlip, slipMark } from '../../domain/runnerSlip';
-import { encodeLines, layoutRunnerSlip, layoutTestPage, PaperWidth, previewLines } from './escpos';
+import { CutMode, encodeLines, layoutRunnerSlip, layoutTestPage, PaperWidth, previewLines } from './escpos';
 import type { PrinterLink } from './ble';
 import { PrinterLinkError } from './ble';
 
@@ -17,9 +17,15 @@ export interface PrinterSettings {
   deviceName: string | null;
   autoPrint: boolean;
   width: PaperWidth;
+  /** 有自动切刀就切；没有就手撕（不发切纸指令）。 */
+  cut: CutMode;
 }
 
-export const DEFAULT_SETTINGS: PrinterSettings = { enabled: false, deviceId: null, deviceName: null, autoPrint: true, width: 80 };
+/**
+ * 默认 58mm、手撕：58mm 的排版放到 80mm 机上只是窄一点，80mm 的排版放到 58mm 机上每行都会断开；
+ * 不发切纸指令对有切刀的机器只是不切，对没切刀的机器却可能多印出乱码。所以默认选两者里不会出错的那个，用 80mm 带切刀的机器再在面板里改。
+ */
+export const DEFAULT_SETTINGS: PrinterSettings = { enabled: false, deviceId: null, deviceName: null, autoPrint: true, width: 58, cut: 'tear' };
 
 /** off：没启用；needs_tap：要员工点一下连接；connecting；ready；lost：断开了（同一页面里会自动重试）。 */
 export type LinkState = 'off' | 'needs_tap' | 'connecting' | 'ready' | 'lost';
@@ -132,7 +138,7 @@ export function createPrinterManager(deps: PrinterDeps) {
         const lines = layoutRunnerSlip({ ...job.slip, mark: slipMark(prints, job.reconciled) }, state.settings.width);
         const started = deps.now();
         try {
-          await link.write(encodeLines(lines), previewLines(lines));
+          await link.write(encodeLines(lines, state.settings.cut), previewLines(lines));
         } catch (e) {
           // 连不上：任务放回去排着，等重连；写到一半出错：标没打出来，让收银决定要不要补打（可能已经打出半张）。
           const code = e instanceof PrinterLinkError ? e.code : 'WRITE_FAILED';
@@ -205,6 +211,9 @@ export function createPrinterManager(deps: PrinterDeps) {
     setWidth(width: PaperWidth) {
       setSettings({ width });
     },
+    setCut(cut: CutMode) {
+      setSettings({ cut });
+    },
 
     /** 下单、加料、断网接单、核对确认后调用。同一张单打过就不再自动打。 */
     async enqueue(key: string, slip: RunnerSlip, opts: { label: string; reconciled?: boolean }): Promise<void> {
@@ -239,10 +248,10 @@ export function createPrinterManager(deps: PrinterDeps) {
 
     async testPrint(): Promise<void> {
       if (!link) return;
-      const lines = layoutTestPage({ width: state.settings.width, at: new Date(deps.now()).toLocaleString('zh-CN', { hour12: false }), deviceName: state.settings.deviceName ?? '' });
+      const lines = layoutTestPage({ width: state.settings.width, cut: state.settings.cut, at: new Date(deps.now()).toLocaleString('zh-CN', { hour12: false }), deviceName: state.settings.deviceName ?? '' });
       const started = deps.now();
       try {
-        await link.write(encodeLines(lines), previewLines(lines));
+        await link.write(encodeLines(lines, state.settings.cut), previewLines(lines));
         set({ link: 'ready', lastWriteMs: deps.now() - started, error: null });
       } catch (e) {
         set({ error: e instanceof PrinterLinkError ? e.code : 'WRITE_FAILED' });
