@@ -11,7 +11,7 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { toHttpsError } from './core/errors';
 import { createOrder } from './commands/createOrder';
 import { lifecycleCommand } from './commands/lifecycle';
-import { ackKitchenTicket, openShift, releaseToken } from './commands/front';
+import { ackKitchenTicket, openShift, releaseToken, renewOfflineCapability } from './commands/front';
 import { assignRegister, getOperationResult, inviteMember, manageMember, setPayOnServe, setSlipPrinting } from './commands/admin';
 import { publishBom, publishMenu } from './commands/catalog';
 import { routeManualOrderToKitchen, syncOfflineEvents } from './commands/offline';
@@ -61,6 +61,7 @@ function command(handler: Handler, opts: CallableOptions = {}) {
 export const createOrderCmd = command(createOrder);
 export const getOperationResultCmd = command(getOperationResult);
 export const openShiftCmd = command(openShift);
+export const renewOfflineCapabilityCmd = command(renewOfflineCapability);
 export const releaseTokenCmd = command(releaseToken);
 export const ackKitchenTicketCmd = command(ackKitchenTicket);
 export const startOrderCmd = command((d, u, x) => lifecycleCommand(d, 'startOrder', u, x));

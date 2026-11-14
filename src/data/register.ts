@@ -5,7 +5,7 @@
  */
 import { useCallback } from 'react';
 import { storePath } from './firebase/client';
-import { useLiveDoc } from './firebase/live';
+import { useLiveDoc, useOnline } from './firebase/live';
 import { allocateSequence, seqKey } from './local/idb';
 import { useOfflineRuntime } from './offline/runtime';
 import { useSession } from '../app/session';
@@ -29,6 +29,7 @@ export type RegisterStatus = 'loading' | 'not_configured' | 'not_this_device' | 
 export function useRegister() {
   const { config, deviceId, user } = useSession();
   const rt = useOfflineRuntime();
+  const online = useOnline();
   const registerId = config?.activeRegisterId ?? null;
   const reg = useLiveDoc<RegisterDoc>(registerId ? storePath(`registers/${registerId}`) : null);
   const shift = useLiveDoc<ShiftDoc>(reg.data?.shiftId ? storePath(`shifts/${reg.data.shiftId}`) : null);
@@ -46,7 +47,8 @@ export function useRegister() {
   else if (!registerId || !regData) status = 'not_configured';
   else if (regData.activeDeviceId !== deviceId) status = 'not_this_device';
   else if (!regData.shiftId || !shiftData || shiftData.status !== 'open') status = shift.loading && !snap ? 'loading' : 'no_shift';
-  else if (fromSnapshot && Date.now() > shiftData.offlineCapabilityExpiresAtMs) status = 'offline_expired';
+  // 断网时资格过期就不再接离线单（以前只在离线重开 App 时检查，正在用的收银机会照样接单，同步后全部进待核对）。
+  else if ((fromSnapshot || !online || rt.manualOffline) && Date.now() > shiftData.offlineCapabilityExpiresAtMs) status = 'offline_expired';
 
   const claim = registerId && regData && deviceId ? { deviceId, registerId, registerEpoch: regData.epoch } : null;
   const serverApplied = regData?.lastAppliedSequence ?? 0;

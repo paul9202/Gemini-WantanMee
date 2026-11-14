@@ -21,7 +21,7 @@ import { formatClock } from '../../domain/timing';
 import { DEFAULT_KITCHEN_LINK, kitchenHealth } from '../../domain/kitchenLink';
 import { useHeartbeat } from '../../data/heartbeat';
 import { db, storePath } from '../../data/firebase/client';
-import { CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
+import { call, CommandFailure, newOperationId, submit } from '../../data/firebase/commands';
 import { useLiveDoc, useLiveQuery, useNow, useOnline } from '../../data/firebase/live';
 import { reasonText } from '../../data/firebase/reasons';
 import { commitOfflineOrder, kvGet, kvSet, PendingOp, putPendingOp, seqKey } from '../../data/local/idb';
@@ -224,6 +224,22 @@ export function PosPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board, joinTarget, tokensQ.loading, rt.snapshot]);
 
+  // 离线营业资格自动续期（2026-11-14 修）：有网时，剩不到 20 小时就续到「现在 + 24 小时」。
+  // 以前只有开班给 24 小时，班次一直不关就会过期，断线时接的单全部进「待老板核对」。每 15 分钟看一次，失败下次再试。
+  const [renewTick, setRenewTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setRenewTick((n) => n + 1), 15 * 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const renewing = useRef(false);
+  useEffect(() => {
+    if (offlineMode || reg.fromSnapshot || reg.status !== 'ready' || !reg.claim || !reg.shift || renewing.current) return;
+    if (reg.shift.offlineCapabilityExpiresAtMs - Date.now() > 20 * 60 * 60_000) return;
+    renewing.current = true;
+    void call('renewOfflineCapability', { operationId: newOperationId(), ...reg.claim }).catch(() => undefined).finally(() => { renewing.current = false; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offlineMode, reg.status, reg.fromSnapshot, reg.shift?.offlineCapabilityExpiresAtMs, reg.claim?.registerEpoch, renewTick]);
+
   // 联网且数据来自服务器时，持续保存离线营业快照（开档时的「离线可用」准备）。
   useEffect(() => {
     if (offlineMode || usingSnapshot || reg.fromSnapshot || reg.status !== 'ready' || !tokensFromServer) return;
@@ -236,7 +252,7 @@ export function PosPage() {
     });
     // 只在服务器数据变化时保存。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offlineMode, usingSnapshot, reg.status, reg.serverApplied, reg.shiftId, reg.claim?.registerEpoch, tokensFromServer, tokensQ.data, config, member]);
+  }, [offlineMode, usingSnapshot, reg.status, reg.serverApplied, reg.shiftId, reg.shift?.offlineCapabilityExpiresAtMs, reg.claim?.registerEpoch, tokensFromServer, tokensQ.data, config, member]);
 
   const unpaid = useUnpaidOrders(menu ? (c) => lineName(menu, c, lang) : undefined);
   const lastOrder = useLiveDoc<{ kitchenAckAtMs: number | null; fulfillmentStatus: string; manualHandoffAtMs?: number | null; paymentState?: string }>(

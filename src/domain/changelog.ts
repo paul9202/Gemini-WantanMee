@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-14-offline-renew', date: '2026-11-14', roles: FRONT,
+    title: { zh: '断线时离线接的单，不会再被卡进「待老板核对」', en: 'Orders taken offline no longer get stuck in “To review”' },
+    items: [
+      { zh: '主收银机有网时会自动续期离线营业资格（每次续 24 小时），不用再重新开班。以前班次一直不关，资格过期后断线接的单都要老板逐条核对。', en: 'The main register now renews its offline allowance (24 hours) automatically while online — no need to reopen the shift. Before, if the shift stayed open for days, orders taken during an outage all needed the owner to review them.' },
+      { zh: '真的断网超过 24 小时时，收银页会直接提示改用纸单，而不是照样接单、同步后才发现问题。', en: 'If the register really is offline for more than 24 hours, it now tells you to use paper tickets straight away instead of taking orders that fail later.' },
+    ],
+  },
+  {
     id: '2026-11-14-owner-today', date: '2026-11-14', roles: ['owner'],
     title: { zh: '「经营」改成今天、用料、成本、账目四页', en: 'Owner pages are now Today, Ingredients, Costs and Accounts' },
     items: [

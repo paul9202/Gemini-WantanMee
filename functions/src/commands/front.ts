@@ -56,6 +56,30 @@ export async function openShift(db: Firestore, uid: string | undefined, raw: unk
 }
 
 /**
+ * 续期离线营业资格（2026-11-14 修）：主收银机有网时定时调用，把当前班次的离线资格延到「现在 + 24 小时」。
+ * 以前只有开班才给 24 小时；班次一直不关（例如 11/5 开到 11/14），资格早就过期，断线时接的单全部进「待老板核对」。
+ * 只续期本机正在用的班次；不是主收银机、班次没开都拒绝，校验与开班相同。
+ */
+export async function renewOfflineCapability(db: Firestore, uid: string | undefined, raw: unknown) {
+  const o = obj(raw, ['storeId', 'operationId', ...REGISTER_CLAIM_FIELDS]);
+  const input = { storeId: storeId(o), operationId: uuid(o, 'operationId'), claim: parseRegisterClaim(o) };
+  return runCommand(db, {
+    type: 'renewOfflineCapability', storeId: input.storeId, operationId: input.operationId, uid, roles: ['cashier', 'owner'], payload: input,
+    run: async ({ tx, store, nowMs }) => {
+      const config = await loadStoreConfig(tx, store);
+      const reg = await requireActiveRegister(tx, store, config, input.claim);
+      const shiftId = reg.shiftId as string | null | undefined;
+      const shift = shiftId ? (await tx.get(store.shift(shiftId))).data() : undefined;
+      if (!shiftId || !shift || shift.status !== 'open' || shift.registerId !== input.claim.registerId) throw new CommandError('INVALID_TRANSITION', '没有营业中的班次，请先开班');
+      const offlineCapabilityExpiresAtMs = nowMs + OFFLINE_CAPABILITY_MS;
+      tx.update(store.shift(shiftId), { offlineCapabilityExpiresAtMs, offlineRenewedAtMs: nowMs });
+      tx.update(store.register(input.claim.registerId), { lastSeenAtMs: nowMs });
+      return { result: { shiftId, offlineCapabilityExpiresAtMs }, audit: { entityId: shiftId, before: { offlineCapabilityExpiresAtMs: shift.offlineCapabilityExpiresAtMs }, after: { offlineCapabilityExpiresAtMs } } };
+    },
+  });
+}
+
+/**
  * 旧版待回收牌（awaiting_return，改版前出餐的单）：前台确认实体牌已收回后逐张释放，留审计。
  * 新流程出餐 / 取消即自动释放，不会再产生待回收牌。
  */

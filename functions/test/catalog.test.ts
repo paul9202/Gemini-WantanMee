@@ -177,3 +177,14 @@ test('换算与收档点数：范围检查；点数写入营业日；小结在�
   assert.equal(sum.plain.length, 3);
   assert.equal(sum.status, 'disabled', 'AI 记成本没开时不调用模型，只给白话');
 });
+
+test('离线资格续期：主收银机有网时把班次资格延到现在 + 24 小时；不是主收银机被拒', async () => {
+  const f = await setupStore();
+  const shiftRef = admin().doc(`stores/${f.storeId}/shifts/${f.shiftId}`);
+  await shiftRef.update({ offlineCapabilityExpiresAtMs: Date.now() - 60_000 });
+  assert.equal(await f.cashier.code('renewOfflineCapability', { storeId: f.storeId, operationId: uuid(), ...f.claim, deviceId: 'dev-other' }), 'REGISTER_REVOKED');
+  const before = Date.now();
+  const r = await f.cashier.call<{ offlineCapabilityExpiresAtMs: number }>('renewOfflineCapability', { storeId: f.storeId, operationId: uuid(), ...f.claim });
+  assert.ok(r.offlineCapabilityExpiresAtMs >= before + 24 * 3600_000 - 5_000);
+  assert.equal((await shiftRef.get()).data()!.offlineCapabilityExpiresAtMs, r.offlineCapabilityExpiresAtMs);
+});
