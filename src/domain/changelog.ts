@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-14-auto-close', date: '2026-11-14', roles: ['owner'],
+    title: { zh: '不用再手动日结，系统每天自动关账', en: 'No more manual day close — the system closes each day automatically' },
+    items: [
+      { zh: '每天凌晨 5 点，系统自动把前一天的账关掉。还没登记的收款、离线待核对会写明结转，之后补登记照样算。', en: 'Every day at 5 am the system closes the previous day. Unregistered payments and offline items to review are carried forward with a note, and later registrations still count.' },
+      { zh: '今天页不再显示「收档日结」和日结提醒。想提前关账或做更正，还可以到「账目 · 日结（自动）」。', en: 'Today no longer shows the close-day button or reminder. To close early or make a correction, go to Accounts · Close day (auto).' },
+    ],
+  },
+  {
     id: '2026-11-14-offline-renew', date: '2026-11-14', roles: FRONT,
     title: { zh: '断线时离线接的单，不会再被卡进「待老板核对」', en: 'Orders taken offline no longer get stuck in “To review”' },
     items: [

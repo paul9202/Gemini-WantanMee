@@ -120,7 +120,7 @@ export function OverviewPage() {
   if (tokensQ.data.length) attention.push({ icon: 'list', tone: 'plain', title: `旧版遗留 ${tokensQ.data.length} 张餐牌待回收`, sub: `餐牌 ${tokensQ.data.map((t) => t.number).sort((a, b) => a - b).join('、')} · 改版前的记录；新流程出餐即自动释放`, action: { label: '查看', go: () => navigate('/pos') } });
   if (short.length) attention.push({ icon: 'box', tone: 'bad', title: `${short.map((e) => e.name).join('、')}明天不够`, sub: '收档后记得订 / 买；进货后拍进货单就会更新', action: { label: '看用料', go: () => navigate('/owner/materials') } });
   if (pending.length) attention.push({ icon: 'edit', tone: 'warn', title: `${pending.length} 项成本还没核实`, sub: `${pending.join('、')} · 核实后「赚了多少」更准`, action: { label: '看成本', go: () => navigate('/owner/costs') } });
-  if (summary && !closed && (usage?.orders ?? 0) > 0) attention.push({ icon: 'check', tone: 'plain', title: isToday ? '今天还没日结' : `${dateLabel}还没日结`, sub: outstanding.length ? '先处理待登记收款再关账' : `${usage?.orders ?? 0} 单 · 收档后核对一下就能关账`, action: { label: '日结', go: () => navigate('/owner/close'), primary: true } });
+  // 2026-11-14 起每天凌晨系统自动关账，不再提醒老板日结。
 
   return (
     <div className="mx-auto max-w-[1440px] p-4 pb-8 lg:p-8">
@@ -141,9 +141,9 @@ export function OverviewPage() {
             </label>
           </div>
           <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); reviews.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
-          <button type="button" onClick={() => navigate('/owner/close')} className={`flex h-14 items-center gap-2 rounded-xl px-5 font-bold ${closed ? 'border border-line bg-card text-ok' : 'bg-brand text-[#fff8e8]'}`}>
-            <Icon name="check" size={18} />{closed ? '已关账' : '收档日结'}
-          </button>
+          <span className={`flex h-14 items-center gap-2 rounded-xl px-4 text-[14px] font-semibold ${closed ? 'bg-ok-bg text-ok' : 'bg-subtle text-ink-2'}`} title="每天凌晨 5 点系统自动关前一天的账">
+            <Icon name="check" size={18} />{closed ? '已关账' : isToday ? '凌晨自动关账' : '等自动关账'}
+          </span>
         </div>
       </div>
 

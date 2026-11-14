@@ -170,6 +170,7 @@ export function ClosePage() {
         {localUnsynced > 0 && <span className="rounded-lg bg-danger-bg px-2 py-1 text-sm font-semibold text-danger">本机未同步 {localUnsynced} 条</span>}
         <button type="button" onClick={day.refresh} className="ml-auto h-10 rounded-lg border border-control px-3 font-semibold">刷新</button>
       </div>
+      <p className="mb-4 flex items-start gap-2 rounded-xl bg-ok-bg px-4 py-3 text-[14px] text-ok"><b>不用手动日结了。</b><span className="text-ink">每天凌晨 5 点，系统会自动关前一天的账；还没登记的收款、离线待核对会写明结转，之后补登记照样算。这里只在想提前关账或做更正时用。</span></p>
       {msg && <p role={msg.ok ? 'status' : 'alert'} className={`mb-3 rounded-lg px-3 py-2 ${msg.ok ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>{msg.text}</p>}
       {day.error && <p role="alert" className="mb-3 rounded-lg bg-danger-bg px-3 py-2 text-danger">读取失败：{day.error}</p>}
       {!d && <p className="text-ink-2">正在载入…</p>}

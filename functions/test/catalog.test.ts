@@ -188,3 +188,27 @@ test('离线资格续期：主收银机有网时把班次资格延到现在 + 24
   assert.ok(r.offlineCapabilityExpiresAtMs >= before + 24 * 3600_000 - 5_000);
   assert.equal((await shiftRef.get()).data()!.offlineCapabilityExpiresAtMs, r.offlineCapabilityExpiresAtMs);
 });
+
+test('自动关账：把今天之前没关的营业日关掉（有待登记收款也照关并写明结转）；已关的跳过；停用时不关', async () => {
+  const { autoCloseBusinessDays } = await import('../src/commands/close');
+  const f = await setupStore();
+  const o = await placeOrder(f, { tokenNumber: 5 });
+  const order = (await admin().doc(`stores/${f.storeId}/orders/${o.result.orderId}`).get()).data()!;
+  const date = order.businessDate as string;
+  const tomorrow = Date.now() + 24 * 3600_000;
+  await admin().doc(`stores/${f.storeId}/config/autoClose`).set({ enabled: false });
+  assert.deepEqual(await autoCloseBusinessDays(admin(), f.storeId, tomorrow), { closed: [], skipped: 'disabled' });
+  await admin().doc(`stores/${f.storeId}/config/autoClose`).delete();
+  assert.deepEqual((await autoCloseBusinessDays(admin(), f.storeId, Date.now())).closed, [], '今天还没过完，不关');
+  const r = await autoCloseBusinessDays(admin(), f.storeId, tomorrow);
+  assert.deepEqual(r.closed, [date]);
+  const day = (await admin().doc(`stores/${f.storeId}/businessDays/${date}`).get()).data()!;
+  assert.equal(day.state, 'closed');
+  assert.equal(day.closeMode, 'auto');
+  const v = (await admin().doc(`stores/${f.storeId}/dailyReports/${date}/versions/1`).get()).data()!;
+  assert.equal(v.closedBy, 'system');
+  assert.match(v.exceptionReason, /系统自动关账：待登记收款 1 单/);
+  assert.equal(v.unpaidCarriedForward.count, 1);
+  assert.deepEqual((await autoCloseBusinessDays(admin(), f.storeId, tomorrow)).closed, [], '已关的不再关');
+  assert.equal(await f.owner.code('closeBusinessDay', { storeId: f.storeId, operationId: uuid(), businessDate: date, acknowledgeExceptions: false }), 'DAY_CLOSED');
+});

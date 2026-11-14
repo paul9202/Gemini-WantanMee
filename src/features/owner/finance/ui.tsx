@@ -11,7 +11,7 @@ export const FINANCE_PAGES: { route: Route; label: string; icon: IconName }[] = 
   { route: '/owner/finance/expenses', label: '日常开支', icon: 'receipt' },
   { route: '/owner/finance/goals', label: '经营目标', icon: 'target' },
   { route: '/owner/finance/startup', label: '开档成本', icon: 'store' },
-  { route: '/owner/close', label: '日结关账', icon: 'check' },
+  { route: '/owner/close', label: '日结（自动）', icon: 'check' },
   { route: '/owner/review', label: '待核对', icon: 'shield' },
 ];
 

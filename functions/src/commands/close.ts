@@ -9,13 +9,15 @@
  * - 跨日补登记的收款计入登记日的账本，不改写原营业日的冻结报表。
  */
 import { Firestore, Transaction } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
 import { DEFAULT_FIXED_COST, FixedCostPolicy } from '../../../src/domain/finance';
 import type { ExpenseLinkDoc } from '../../../src/domain/costing';
-import { isDateString } from '../../../src/domain/businessDay';
+import { addDays, businessDateOf, isDateString } from '../../../src/domain/businessDay';
 import { closeFigures, closeFiguresV2, CloseOrderRow, isCloseFiguresV2, LedgerDocs } from '../../../src/domain/ledger';
-import { runCommand, StoreRefs } from '../core/command';
+import { runCommand, storeRefs, StoreRefs } from '../core/command';
 import { CommandError } from '../core/errors';
 import { bad, bool, int, obj, optInt, optStr, storeId, uuid } from '../core/input';
+import { loadStoreConfig } from '../core/store';
 
 async function readDay(tx: Transaction, store: StoreRefs, date: string) {
   const q = <T>(name: string, field = 'businessDate') => tx.get(store.root.collection(name).where(field, '==', date)).then((s) => s.docs.map((d) => ({ id: d.id, ...d.data() }) as T));
@@ -81,32 +83,95 @@ export async function closeBusinessDay(db: Firestore, uid: string | undefined, r
   return runCommand(db, {
     type: 'closeBusinessDay', storeId: input.storeId, operationId: input.operationId, uid, roles: ['owner'], payload: input,
     run: async ({ tx, store, nowMs, actor }) => {
-      const daySnap = await tx.get(store.businessDay(input.businessDate));
-      const day = daySnap.data();
-      if (day && day.state !== 'open') throw new CommandError('DAY_CLOSED', '该营业日已关账，请使用更正版本');
-      const reportSnap = await tx.get(store.dailyReport(input.businessDate));
-      const { docs, orders, unpaid } = await readDay(tx, store, input.businessDate);
-      const exceptions = await exceptionsFor(tx, store, orders, unpaid);
-      const fixed = await fixedPolicy(tx, store);
-      if (hasExceptions(exceptions) && !(input.acknowledgeExceptions && input.exceptionReason && input.exceptionReason.trim().length >= 2)) {
-        throw new CommandError('CLOSE_EXCEPTIONS', '有未处理事项，请确认并写明原因后再关账', { exceptions });
-      }
-      const figures = closeFiguresV2(docs, orders, unpaid, input.businessDate, fixed);
-      const version = ((reportSnap.data()?.latestVersion as number) ?? 0) + 1;
-      tx.create(store.dailyReportVersion(input.businessDate, version), {
-        version, businessDate: input.businessDate, kind: 'close', figures, exceptions, exceptionReason: input.exceptionReason, note: input.note,
-        // 未登记收款明确结转：金额与订单清单随快照冻结，之后补登记计入登记日。
-        unpaidCarriedForward: { count: figures.unpaid.count, totalSen: figures.unpaid.totalSen, reason: exceptions.unpaidOrders.length ? input.exceptionReason : null },
-        ledgerWatermark: watermark(docs), fixedCostPolicy: fixed, closedBy: actor.uid, closedAtMs: nowMs, restates: null,
-      });
-      tx.set(store.dailyReport(input.businessDate), { businessDate: input.businessDate, latestVersion: version, status: 'closed', closedAtMs: nowMs, pendingAdjustments: 0 }, { merge: true });
-      tx.set(store.businessDay(input.businessDate), { state: 'closed', closedVersion: version, closedAtMs: nowMs, pendingAdjustments: 0, receiptSeq: (day?.receiptSeq as number) ?? 0 }, { merge: true });
+      const r = await closeDayTx(tx, store, input.businessDate, nowMs, actor.uid, { mode: 'manual', note: input.note, acknowledge: input.acknowledgeExceptions, exceptionReason: input.exceptionReason });
       return {
-        result: { businessDate: input.businessDate, version, figures, exceptions },
-        audit: { entityId: `day-${input.businessDate}`, after: { version, netRegisteredSen: figures.netRegisteredSen, unpaidSen: figures.unpaid.totalSen } },
+        result: { businessDate: input.businessDate, version: r.version, figures: r.figures, exceptions: r.exceptions },
+        audit: { entityId: `day-${input.businessDate}`, after: { version: r.version, netRegisteredSen: r.figures.netRegisteredSen, unpaidSen: r.figures.unpaid.totalSen } },
       };
     },
   });
+}
+
+/**
+ * 关账核心（手动日结与每天自动关账共用）。所有读在写之前。
+ * - manual：有例外必须老板确认并写原因，否则拒绝。
+ * - auto：不拦；例外照样冻结在快照里，原因写明「系统自动关账」，未登记收款结转（不当作已收、不丢弃）。
+ */
+export async function closeDayTx(
+  tx: Transaction, store: StoreRefs, date: string, nowMs: number, closedBy: string,
+  opts: { mode: 'manual' | 'auto'; note: string; acknowledge?: boolean; exceptionReason?: string | null },
+) {
+  const daySnap = await tx.get(store.businessDay(date));
+  const day = daySnap.data();
+  if (day && day.state !== 'open') throw new CommandError('DAY_CLOSED', '该营业日已关账，请使用更正版本');
+  const reportSnap = await tx.get(store.dailyReport(date));
+  const { docs, orders, unpaid } = await readDay(tx, store, date);
+  const exceptions = await exceptionsFor(tx, store, orders, unpaid);
+  const fixed = await fixedPolicy(tx, store);
+  const has = hasExceptions(exceptions);
+  if (opts.mode === 'manual' && has && !(opts.acknowledge && opts.exceptionReason && opts.exceptionReason.trim().length >= 2)) {
+    throw new CommandError('CLOSE_EXCEPTIONS', '有未处理事项，请确认并写明原因后再关账', { exceptions });
+  }
+  const exceptionReason = opts.mode === 'auto'
+    ? (has ? `系统自动关账：${autoExceptionText(exceptions)}，已结转；之后补登记或核对会记成关账后的调整` : null)
+    : opts.exceptionReason ?? null;
+  const figures = closeFiguresV2(docs, orders, unpaid, date, fixed);
+  const version = ((reportSnap.data()?.latestVersion as number) ?? 0) + 1;
+  tx.create(store.dailyReportVersion(date, version), {
+    version, businessDate: date, kind: 'close', mode: opts.mode, figures, exceptions, exceptionReason, note: opts.note,
+    // 未登记收款明确结转：金额与订单清单随快照冻结，之后补登记计入登记日。
+    unpaidCarriedForward: { count: figures.unpaid.count, totalSen: figures.unpaid.totalSen, reason: exceptions.unpaidOrders.length ? exceptionReason : null },
+    ledgerWatermark: watermark(docs), fixedCostPolicy: fixed, closedBy, closedAtMs: nowMs, restates: null,
+  });
+  tx.set(store.dailyReport(date), { businessDate: date, latestVersion: version, status: 'closed', closedAtMs: nowMs, pendingAdjustments: 0, closeMode: opts.mode }, { merge: true });
+  tx.set(store.businessDay(date), { state: 'closed', closedVersion: version, closedAtMs: nowMs, closeMode: opts.mode, pendingAdjustments: 0, receiptSeq: (day?.receiptSeq as number) ?? 0 }, { merge: true });
+  return { version, figures, exceptions };
+}
+
+function autoExceptionText(e: Awaited<ReturnType<typeof exceptionsFor>>): string {
+  return [
+    e.unpaidOrders.length ? `待登记收款 ${e.unpaidOrders.length} 单` : '', e.unfinishedOrders.length ? `未出餐 ${e.unfinishedOrders.length} 单` : '',
+    e.refundDue.length ? `应退款 ${e.refundDue.length} 单` : '', e.offlineReviews.length ? `离线待核对 ${e.offlineReviews.length} 条` : '',
+    e.awaitingTokens.length ? `待回收餐牌 ${e.awaitingTokens.length} 张` : '',
+  ].filter(Boolean).join('、');
+}
+
+/** 自动关账最多往回看几天（之前没关的旧日子也一起关，按日期从早到晚）。 */
+export const AUTO_CLOSE_LOOKBACK_DAYS = 31;
+
+/**
+ * 每天自动关账（2026-11-14 起，老板不用再手动日结）：把今天之前所有仍未关账的营业日按日期关掉。
+ * config/autoClose.enabled === false 时停用（默认开）。每天一个事务，已关的跳过，可以重复跑。审计记为系统（actorUid: 'system'）。
+ */
+export async function autoCloseBusinessDays(db: Firestore, storeId: string, nowMs = Date.now()): Promise<{ closed: string[]; skipped: string | null }> {
+  const store = storeRefs(db, storeId);
+  const flag = (await store.root.collection('config').doc('autoClose').get()).data();
+  if (flag?.enabled === false) return { closed: [], skipped: 'disabled' };
+  const cfg = await store.configPublic.get();
+  if (!cfg.exists) return { closed: [], skipped: 'not_configured' };
+  const today = await db.runTransaction(async (tx) => businessDateOf(nowMs, (await loadStoreConfig(tx, store)).businessDay));
+  const open = await store.root.collection('businessDays').where('state', '==', 'open').get();
+  const dates = open.docs.map((d) => d.id).filter((d) => isDateString(d) && d < today && d >= addDays(today, -AUTO_CLOSE_LOOKBACK_DAYS)).sort();
+  const closed: string[] = [];
+  for (const date of dates) {
+    const ok = await db.runTransaction(async (tx) => {
+      const at = Date.now();
+      try {
+        const r = await closeDayTx(tx, store, date, at, 'system', { mode: 'auto', note: '系统自动关账' });
+        const id = `auto-close-${date}-${randomUUID().slice(0, 8)}`;
+        tx.create(store.audit(id), {
+          operationId: id, action: 'autoCloseBusinessDay', actorUid: 'system', actorRole: 'system', entityId: `day-${date}`, before: null,
+          after: { version: r.version, netRegisteredSen: r.figures.netRegisteredSen, unpaidSen: r.figures.unpaid.totalSen }, atMs: at,
+        });
+        return true;
+      } catch (e) {
+        if (e instanceof CommandError && e.reasonCode === 'DAY_CLOSED') return false;
+        throw e;
+      }
+    });
+    if (ok) closed.push(date);
+  }
+  return { closed, skipped: null };
 }
 
 /** 更正版本：用当前账本（含关账后迟到的调整）重算，写新版本；旧版本保持不变。 */

@@ -18,7 +18,7 @@ import { routeManualOrderToKitchen, syncOfflineEvents } from './commands/offline
 import { resolveOfflineReview } from './commands/review';
 import { markNotPaid, recordGroupPayment, recordPayment, reinstateWrittenOff, reversePayment, writeOffPayment } from './commands/payment';
 import { recordCashMovement, recordExpense, recordWastage, voidLedgerEntry } from './commands/ledger';
-import { closeBusinessDay, restateBusinessDay } from './commands/close';
+import { autoCloseBusinessDays, closeBusinessDay, restateBusinessDay } from './commands/close';
 import { heartbeatDevice, recordManualHandoff } from './commands/kitchenLink';
 import {
   addIngredient, addStartupCost, correctStartupCost, createNextGoal, finishBatch, recordExistingBatch, recordIngredientPurchase, recordPlanExpense,
@@ -160,5 +160,14 @@ export const cleanupCostDraftsDaily = onSchedule({ schedule: 'every day 05:00', 
   for (const s of stores) {
     const r = await cleanupExpiredDrafts(db, s.id, Date.now(), deleteAttachments);
     if (r.expired) console.log(`cost draft cleanup ${s.id}: ${r.expired}`);
+  }
+});
+
+/** 每天自动关账（2026-11-14 起）：营业日 04:00 切换之后，把之前没关的营业日自动关掉；config/autoClose.enabled=false 可停用。 */
+export const autoCloseDaily = onSchedule({ schedule: 'every day 05:10', timeZone: 'Asia/Kuala_Lumpur' }, async () => {
+  const stores = await db.collection('stores').listDocuments();
+  for (const s of stores) {
+    const r = await autoCloseBusinessDays(db, s.id);
+    if (r.closed.length || r.skipped) console.log(`auto close ${s.id}: closed ${r.closed.join(',') || 'none'}${r.skipped ? ` (skipped: ${r.skipped})` : ''}`);
   }
 });
