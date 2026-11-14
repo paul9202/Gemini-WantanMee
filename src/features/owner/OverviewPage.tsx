@@ -8,12 +8,13 @@
  */
 import { ReactNode, useState } from 'react';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
-import { addDays, businessDateOf, DateRange, daysInMonth, wallClock } from '../../domain/businessDay';
+import { addDays, businessDateOf, DateRange, daysInMonth, lastNDays, wallClock } from '../../domain/businessDay';
 import { DEFAULT_FIXED_COST, FixedCostPolicy, monthlyFixedSen, summarizePeriod } from '../../domain/finance';
 import { ballsText, DEFAULT_EXPENSE_PLAN, ExpenseLinkDoc, monthOf, paybackStatus, PlanExpense, StartupCostDoc, startupSummary } from '../../domain/costing';
 import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, ledgerEvents, orderServiceStats, receiptsTrend, registeredBreakdown } from '../../domain/ledger';
 import { costUnitsToSen, formatRM } from '../../domain/money';
 import { materialUsage, UsageOrder } from '../../domain/usage';
+import { firstBusinessDay } from '../../domain/periods';
 import { OVERDUE_MS } from '../../domain/timing';
 import { db, storePath } from '../../data/firebase/client';
 import { useLiveQuery, useNow } from '../../data/firebase/live';
@@ -21,10 +22,11 @@ import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
 import { Icon, Photo } from '../../ui/visual';
 import type { IconName } from '../../ui/iconSymbols';
-import { CALIBRATION_ZH, download, loadActiveBom, loadDailyBallsTarget, loadLedger, loadOpenReviews, orderPaymentOverview, useLoad } from './data';
+import { CALIBRATION_ZH, download, loadActiveBom, loadDailyBallsTarget, loadLedger, loadOpenReviews, loadOrdersRange, orderPaymentOverview, useLoad } from './data';
 import { BarList, minutes, OwnerTabs, pct, Section } from './ui';
 import { useStock } from './StockSection';
 import { SummaryCard } from './SummaryCard';
+import { RecentSection } from './RecentSection';
 
 const WEEKDAY = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 const weekdayOf = (date: string) => WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()];
@@ -45,6 +47,7 @@ export function OverviewPage() {
   const cur = useLoad(() => (date ? loadLedger(range) : Promise.resolve(null)), `cur-${key}`);
   const before = useLoad(() => (date ? loadLedger(lastWeek) : Promise.resolve(null)), `lastweek-${key}`);
   const all = useLoad(() => (today ? loadLedger(null) : Promise.resolve(null)), `all-${today}`);
+  const recentOrders = useLoad(() => (today ? loadOrdersRange(lastNDays(today, 30)) : Promise.resolve(null)), `orders30-${today}`);
   const reviews = useLoad(loadOpenReviews, 'reviews');
   const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data() as { fixedCostPolicy: FixedCostPolicy } | undefined, 'finance');
   const bom = useLoad(() => loadActiveBom(config?.activeBomVersion), `bom-${config?.activeBomVersion}`);
@@ -84,6 +87,8 @@ export function OverviewPage() {
     startupTotalSen: startup.totalSen, receiptsSen: all.data.docs.payments.reduce((s, p) => s + p.amountSen, 0), refundsSen: all.data.docs.refunds.reduce((s, r) => s + r.amountSen, 0),
     expenses: all.data.docs.expenses as PlanExpense[], plan: payInputs.data.plan, startupRentByMonth: startup.rentByMonth, currentMonth: monthOf(today), links: payInputs.data.links,
   }) : null;
+  const allEvents = all.data ? ledgerEvents(all.data.docs) : null;
+  const firstDay = all.data ? firstBusinessDay([...all.data.docs.payments.map((p) => p.businessDate), ...(recentOrders.data ?? []).map((o) => o.businessDate)]) : null;
   const openReviews = reviews.data ?? [];
   const reviewAmount = openReviews.reduce((s, r) => s + (r.amountSen ?? 0), 0);
   const overdue = kitchenQ.data.filter((t) => t.kitchenRouting === 'digital' && now - t.acceptedAtEffectiveMs >= OVERDUE_MS);
@@ -140,7 +145,7 @@ export function OverviewPage() {
               <input type="date" value={date} max={today} onChange={(e) => setPicked(e.target.value || null)} className="ml-1 w-[8.5rem] bg-transparent text-sm" />
             </label>
           </div>
-          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); reviews.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
+          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); recentOrders.refresh(); reviews.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
           <span className={`flex h-14 items-center gap-2 rounded-xl px-4 text-[14px] font-semibold ${closed ? 'bg-ok-bg text-ok' : 'bg-subtle text-ink-2'}`} title="每天凌晨 5 点系统自动关前一天的账">
             <Icon name="check" size={18} />{closed ? '已关账' : isToday ? '凌晨自动关账' : '等自动关账'}
           </span>
@@ -210,6 +215,9 @@ export function OverviewPage() {
         </section>
         )}
       </div>
+
+      <RecentSection today={today} viewing={date} onPick={(d) => { setPicked(d === today ? null : d); document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' }); }} events={allEvents} orders={recentOrders.data ?? null} firstDay={firstDay} fixed={fixed}
+        loading={all.loading || recentOrders.loading} />
 
       {/* 面量 + 卖得最好 */}
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">

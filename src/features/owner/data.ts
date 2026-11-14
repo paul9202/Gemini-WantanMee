@@ -148,3 +148,8 @@ export async function loadStockInputs(today: string): Promise<{ days: DayUsage[]
   for (let d = from; d < to; d = addDays(d, 1)) days.push({ date: d, usage: materialUsage(orders.filter((o) => o.businessDate === d)) });
   return { days, batches, counts, sources };
 }
+
+/** 一段营业日的订单（今天页「最近的生意」算单数、碗数、粒面、卖最多用）。 */
+export async function loadOrdersRange(range: DateRange): Promise<(UsageOrder & { businessDate: string })[]> {
+  return fetchAll<UsageOrder & { businessDate: string }>('orders', ...inRange('businessDate', range));
+}

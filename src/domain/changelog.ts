@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-14-recent-days', date: '2026-11-14', roles: ['owner'],
+    title: { zh: '今天页加了「最近的生意」：近 7 天和近 30 天', en: 'Today now shows recent business: last 7 and 30 days' },
+    items: [
+      { zh: '近 7 天、近 30 天各一张卡：收入、约赚、日均、单数碗数粒面、最好的一天、卖最多，还会和前一段比多了还是少了。', en: 'One card each for the last 7 and 30 days: income, estimated profit, daily average, orders, bowls and noodle balls, best day, top seller, and how it compares with the period before.' },
+      { zh: '下面的柱子是每天收入，点卡片换 7 天或 30 天，点柱子就看那一天。开档前的日子不算。', en: 'The bars below show income per day. Tap a card to switch between 7 and 30 days, or tap a bar to open that day. Days before opening are not counted.' },
+    ],
+  },
+  {
     id: '2026-11-14-auto-close', date: '2026-11-14', roles: ['owner'],
     title: { zh: '不用再手动日结，系统每天自动关账', en: 'No more manual day close — the system closes each day automatically' },
     items: [
