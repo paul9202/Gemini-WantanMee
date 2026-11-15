@@ -55,3 +55,17 @@ test('近 30 天开档不到 30 天：只算开档以来，标记 clipped，不�
   assert.equal(p.profitSen, 20_000 - 10 * 1_000);
   assert.equal(p.compare, null);
 });
+
+test('扣工钱：开门的日子按天扣；账目里记的工资在有人的日子加回', async () => {
+  const { applyLaborOps, EMPTY_LABOR } = await import('./labor');
+  const r = applyLaborOps(EMPTY_LABOR, [{ op: 'add', id: 'w', name: '阿明', from: '2026-11-01', kind: 'daily', amountSen: 7_000 }]);
+  assert.ok(r.ok);
+  const events = [pay('2026-11-10', 30_000), pay('2026-11-12', 50_000)];
+  const base = periodFigures({ events, orders: [], end: '2026-11-14', days: 7, firstDay: '2026-11-01', fixed })!;
+  const withLabor = periodFigures({ events, orders: [], end: '2026-11-14', days: 7, firstDay: '2026-11-01', fixed, labor: r.plan })!;
+  assert.equal(withLabor.laborSen, 14_000, '只开了 2 天');
+  assert.equal(withLabor.profitSen, base.profitSen - 14_000);
+  assert.equal(withLabor.days.find((d) => d.date === '2026-11-10')!.profitSen, base.days.find((d) => d.date === '2026-11-10')!.profitSen - 7_000);
+  const dedup = periodFigures({ events, orders: [], end: '2026-11-14', days: 7, firstDay: '2026-11-01', fixed, labor: r.plan, wageOverlap: () => 14_000 })!;
+  assert.equal(dedup.profitSen, base.profitSen);
+});

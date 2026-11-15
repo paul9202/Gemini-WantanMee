@@ -4,6 +4,7 @@ import {
   monthlyPlanRows, monthOf, opexAccrualSen, paybackStatus, PlanExpense, Sen, startupSummary,
 } from '../../../domain';
 import type { FinanceData } from './data';
+import { laborForRange, wageExpenseOverlapSen } from '../../../domain/labor';
 
 export const sumSen = <T,>(xs: T[], f: (x: T) => number) => xs.reduce((s, x) => s + f(x), 0);
 
@@ -23,6 +24,8 @@ export interface RangeFigures {
   estimatedProfitSen: Sen;
   fixedSen: Sen;
   opexSen: Sen;
+  /** 请人工钱（成本页填）；账目里同一天的工资付款已从 opexSen 去掉，不重复扣。 */
+  laborSen: Sen;
   fixedFromPlan: boolean;
   balls: number;
 }
@@ -40,15 +43,19 @@ export function rangeFigures(d: FinanceData, range: DateRange, policy: BusinessD
   const consumption = { costSen: coverage.costSen, completeBatches: coverage.completeBatches, pendingBatches: coverage.pendingBatches };
   const fixedSen = fixedCostForRange(d.fixedPolicy, range);
   // 营业费用扣除已归属到月租 / 电费 / 开档项目的部分，避免与固定费用摊销重复。
-  const opexSen = sumSen(active.filter((e) => e.category === 'opex' && inRange(e.accrualDate, range)), (e) => opexAccrualSen(e, d.links));
+  const wageDup = wageExpenseOverlapSen(d.labor, active, range, (e) => opexAccrualSen(e, d.links));
+  const opexSen = sumSen(active.filter((e) => e.category === 'opex' && inRange(e.accrualDate, range)), (e) => opexAccrualSen(e, d.links)) - wageDup;
+  // 按天的工钱只算开门的日子（有订单或有收款）。订单只载入近期，早于 recentStart 的日子看收款。
+  const openDates = new Set([...d.orders.filter((o) => o.fulfillmentStatus !== 'cancelled').map((o) => o.businessDate), ...pay.map((p) => p.businessDate)]);
+  const laborSen = laborForRange(d.labor, range, (date) => openDates.has(date));
   const bomUnits = sumSen(d.costEvents.filter((c) => inRange(c.businessDate, range)), (c) => c.costUnits)
     + sumSen(d.wastage.filter((w) => w.status === 'active' && !w.alreadyAllocated && inRange(w.businessDate, range)), (w) => w.costUnits);
   const complete = coverage.state === 'complete';
   return {
     receiptsNetSen, paidOutSen, paidPurchasesSen, paidDailySen: paidOutSen - paidPurchasesSen, balanceSen: receiptsNetSen - paidOutSen, consumption, coverage,
-    profitSen: complete ? receiptsNetSen - consumption.costSen - fixedSen - opexSen : null,
-    estimatedProfitSen: receiptsNetSen - costUnitsToSen(bomUnits) - fixedSen - opexSen,
-    fixedSen, opexSen, fixedFromPlan: Boolean(d.fixedPolicy.schedule),
+    profitSen: complete ? receiptsNetSen - consumption.costSen - fixedSen - laborSen - opexSen : null,
+    estimatedProfitSen: receiptsNetSen - costUnitsToSen(bomUnits) - fixedSen - laborSen - opexSen,
+    fixedSen, opexSen, laborSen, fixedFromPlan: Boolean(d.fixedPolicy.schedule),
     balls: doughHalfUnits(d.orders.filter((o) => inRange(o.businessDate, range))),
   };
 }

@@ -8,20 +8,24 @@ import { ballsText } from '../../domain/costing';
 import type { FixedCostPolicy, LedgerEvent } from '../../domain/finance';
 import { formatRM } from '../../domain/money';
 import { DatedOrder, PeriodFigures, periodFigures } from '../../domain/periods';
+import type { DateRange } from '../../domain/businessDay';
+import type { LaborPlan } from '../../domain/labor';
+import type { Sen } from '../../domain/money';
 import { Icon } from '../../ui/visual';
 
 const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
 const wd = (date: string) => WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()];
 const md = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8))}`;
 
-export function RecentSection({ today, viewing, onPick, events, orders, firstDay, fixed, loading }: {
+export function RecentSection({ today, viewing, onPick, events, orders, firstDay, fixed, labor, wageOverlap, loading }: {
   today: string; viewing: string; onPick: (date: string) => void;
-  events: LedgerEvent[] | null; orders: DatedOrder[] | null; firstDay: string | null; fixed: FixedCostPolicy; loading: boolean;
+  events: LedgerEvent[] | null; orders: DatedOrder[] | null; firstDay: string | null; fixed: FixedCostPolicy;
+  labor: LaborPlan | null; wageOverlap: (range: DateRange) => Sen; loading: boolean;
 }) {
   const [chart, setChart] = useState<7 | 30>(7);
-  const ready = events !== null && orders !== null;
-  const p7 = ready ? periodFigures({ events, orders, end: today, days: 7, firstDay, fixed }) : null;
-  const p30 = ready ? periodFigures({ events, orders, end: today, days: 30, firstDay, fixed }) : null;
+  const ready = events !== null && orders !== null && labor !== null;
+  const p7 = ready ? periodFigures({ events, orders, end: today, days: 7, firstDay, fixed, labor, wageOverlap }) : null;
+  const p30 = ready ? periodFigures({ events, orders, end: today, days: 30, firstDay, fixed, labor, wageOverlap }) : null;
   const shown = chart === 7 ? p7 : p30;
 
   return (
@@ -69,7 +73,7 @@ function PeriodCard({ label, p, on, onClick }: { label: string; p: PeriodFigures
         ) : <span className="text-ink-2">{p.clipped ? '刚开档，还没有前一段可以比' : '前一段没有生意，先不比'}</span>}
       </div>
       <dl className="mt-3 grid grid-cols-2 gap-2 border-t border-line pt-3 text-[14px] tabular-nums">
-        <div><dt className="text-[12px] text-ink-2">约赚（估算）</dt><dd className={`font-bold ${p.profitSen < 0 ? 'text-danger' : 'text-ok'}`}>{p.profitSen < 0 ? '亏 ' : ''}{formatRM(Math.abs(p.profitSen))}</dd></div>
+        <div><dt className="text-[12px] text-ink-2">约赚（估算{p.laborSen ? ` · 已扣工钱 ${formatRM(p.laborSen)}` : ''}）</dt><dd className={`font-bold ${p.profitSen < 0 ? 'text-danger' : 'text-ok'}`}>{p.profitSen < 0 ? '亏 ' : ''}{formatRM(Math.abs(p.profitSen))}</dd></div>
         <div><dt className="text-[12px] text-ink-2">日均收入</dt><dd className="font-bold">{p.avgNetSen === null ? '—' : formatRM(p.avgNetSen)} <span className="text-[12px] font-normal text-ink-2">营业 {p.openDays} 天</span></dd></div>
         <div className="col-span-2 flex flex-wrap gap-x-3"><span><b>{p.orders}</b> 单</span><span><b>{p.bowls}</b> 碗</span><span><b>{ballsText(p.noodleHalf)}</b> 粒面</span></div>
       </dl>
@@ -118,7 +122,7 @@ function DayBars({ p, today, viewing, onPick }: { p: PeriodFigures; today: strin
         })}
       </div>
       {p.best && <figcaption className="mt-3 flex items-start gap-1.5 text-[13px] text-ink-2"><Icon name="info" size={15} className="mt-0.5 shrink-0" />
-        <span>{md(p.best.date)} 周{wd(p.best.date)}最好（{formatRM(p.best.netSen)}，{p.best.orders} 单）。约赚已扣理论材料成本和每天摊的租金电费（休息日也摊），不含工资和税。</span>
+        <span>{md(p.best.date)} 周{wd(p.best.date)}最好（{formatRM(p.best.netSen)}，{p.best.orders} 单）。约赚已扣理论材料成本、每天摊的租金电费（休息日也摊）和成本页填的工钱，不含税。</span>
       </figcaption>}
     </figure>
   );

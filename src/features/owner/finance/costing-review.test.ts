@@ -30,7 +30,7 @@ function finance(p: Partial<FinanceData>): FinanceData {
     plan: DEFAULT_EXPENSE_PLAN, sales: { unit: 'dough_ball', dailyBalls: 50, monthly: {}, dailyHistory: [] }, goalsConfig: {}, startupSeeded: true,
     fixedPolicy: DEFAULT_FIXED_COST, ingredients: [], batches: [], startup: [], goals: [], expenses: [], refunds: [], orders: [], costEvents: [], wastage: [],
     recentStart: '2026-10-19', payments: [{ id: 'p', orderId: 'o', businessDate: '2026-10-25', method: 'unspecified', amountSen: 10_000, occurredAtMs: 0 }],
-    links: [], coverage: { requiredIngredientIds: [], confirmedAtMs: null }, ...p,
+    links: [], coverage: { requiredIngredientIds: [], confirmedAtMs: null }, labor: { workers: [] }, ...p,
   } as FinanceData;
 }
 
@@ -207,4 +207,19 @@ test('日结口径（summarizePeriod / ledgerEvents）同样扣除已归属的�
   assert.equal(s([rentLink(50_000)]).otherOpexSen, 30_000);
   assert.equal(s([rentLink(80_000, 'cancelled')]).otherOpexSen, 80_000);
   assert.equal(s([]).otherOpexSen, 80_000, '没有归属资料时与原来一致');
+});
+
+test('请人工钱：账目经营利润扣开门日的工钱；同一天记的工资付款不重复扣', async () => {
+  const { rangeFigures } = await import('./model');
+  const labor = { workers: [{ id: 'w', name: '阿明', from: '2026-10-01', to: null, rates: [{ from: '2026-10-01', kind: 'daily' as const, amountSen: 7_000 }], absences: [] }] };
+  const day = { start: '2026-10-25', endExclusive: '2026-10-26' };
+  const policy = { timeZone: 'Asia/Kuala_Lumpur', cutoverMinutes: 240 };
+  const base = rangeFigures(finance({}), day, policy, 0);
+  const withLabor = rangeFigures(finance({ labor }), day, policy, 0);
+  assert.equal(withLabor.laborSen, 7_000);
+  assert.equal(withLabor.estimatedProfitSen, base.estimatedProfitSen - 7_000);
+  const wageExpense = { id: 'e', category: 'opex', description: '工资', amountSen: 7_000, paidSen: 7_000, paymentSource: 'drawer', businessDate: '2026-10-25', accrualDate: '2026-10-25', status: 'active', occurredAtMs: 0, correctionOf: null, planItem: 'wage' } as FinanceData['expenses'][number];
+  const both = rangeFigures(finance({ labor, expenses: [wageExpense] }), day, policy, 0);
+  assert.equal(both.estimatedProfitSen, withLabor.estimatedProfitSen, '工钱只扣一次');
+  assert.equal(both.opexSen, 0);
 });

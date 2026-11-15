@@ -212,3 +212,24 @@ test('自动关账：把今天之前没关的营业日关掉（有待登记收�
   assert.deepEqual((await autoCloseBusinessDays(admin(), f.storeId, tomorrow)).closed, [], '已关的不再关');
   assert.equal(await f.owner.code('closeBusinessDay', { storeId: f.storeId, operationId: uuid(), businessDate: date, acknowledgeExceptions: false }), 'DAY_CLOSED');
 });
+
+test('请人工钱：加人、改工钱从某天起、换人一次完成、请假；收银员不能改；错的改动整批不写', async () => {
+  const f = await setupStore();
+  const ref = admin().doc(`stores/${f.storeId}/config/labor`);
+  const up = (ops: unknown[], who = f.owner) => who.call<{ workers: number; added: string[] }>('updateLabor', { storeId: f.storeId, operationId: uuid(), ops });
+  assert.equal(await f.cashier.code('updateLabor', { storeId: f.storeId, operationId: uuid(), ops: [{ op: 'add', name: '阿明', from: '2026-11-05', kind: 'daily', amountSen: 7000 }] }), 'FORBIDDEN');
+  const a = await up([{ op: 'add', name: '阿明', from: '2026-11-05', kind: 'daily', amountSen: 7000 }]);
+  const w1 = a.added[0];
+  await up([{ op: 'rate', workerId: w1, from: '2026-12-01', kind: 'daily', amountSen: 8000 }, { op: 'absent', workerId: w1, date: '2026-11-12', absent: true }]);
+  let doc = (await ref.get()).data()!;
+  assert.deepEqual(doc.workers[0].rates.map((r: { amountSen: number }) => r.amountSen), [7000, 8000]);
+  assert.deepEqual(doc.workers[0].absences, ['2026-11-12']);
+  assert.equal(await f.owner.code('updateLabor', { storeId: f.storeId, operationId: uuid(), ops: [{ op: 'end', workerId: w1, lastDay: '2026-11-30' }, { op: 'rate', workerId: w1, from: '2026-10-01', kind: 'daily', amountSen: 1 }] }), 'INVALID_ARGUMENT');
+  assert.equal((await ref.get()).data()!.workers[0].to, null, '整批失败时什么都不改');
+  const b = await up([{ op: 'end', workerId: w1, lastDay: '2026-11-30' }, { op: 'add', name: '阿芳', from: '2026-12-01', kind: 'monthly', amountSen: 180000 }]);
+  assert.equal(b.workers, 2);
+  doc = (await ref.get()).data()!;
+  assert.equal(doc.workers[0].to, '2026-11-30');
+  assert.deepEqual(doc.workers[0].rates.map((r: { amountSen: number }) => r.amountSen), [7000], '做到 11/30 以后的工钱段去掉');
+  assert.equal(doc.workers[1].rates[0].kind, 'monthly');
+});

@@ -44,7 +44,7 @@ export function OverviewTab({ data, today, nowMs, policy, open }: TabProps) {
           {f.coverage.state !== 'complete' ? <span className="text-2xl">待核算</span> : <><span className="mr-1.5 text-[13px] font-medium">RM</span>{formatRM(f.consumption.costSen).replace('RM', '')}</>}
         </Metric>
         <Metric label="经营利润" icon="target" value={f.profitSen}
-          sub={f.profitSen !== null ? '周期平均分摊口径：收款 − 食材 − 固定费用分摊 − 其他营业费用' : `成本未证实完整。暂估 ${formatRM(f.estimatedProfitSen)}（按理论用量${f.fixedFromPlan ? '' : '，固定费用按旧设定'}），仅供参考`} />
+          sub={f.profitSen !== null ? `周期平均分摊口径：收款 − 食材 − 固定费用分摊${f.laborSen ? ` − 工钱 ${formatRM(f.laborSen)}` : ''} − 其他营业费用` : `成本未证实完整。暂估 ${formatRM(f.estimatedProfitSen)}（按理论用量${f.fixedFromPlan ? '' : '，固定费用按旧设定'}），仅供参考`} />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(300px,1fr)]">

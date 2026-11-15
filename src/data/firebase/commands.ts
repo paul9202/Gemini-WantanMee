@@ -19,7 +19,7 @@ export type CommandName =
   | 'linkExpense' | 'unlinkExpense' | 'setCostCoverage' | 'completeGoal' | 'archiveGoal'
   | 'createCostDraft' | 'commitCostDraft' | 'completePurchaseUsage' | 'setAiCostEnabled'
   | 'setPayOnServe' | 'setSlipPrinting' | 'markNotPaid'
-  | 'acceptUnitCosts' | 'setCostConversions' | 'recordStockCount' | 'renewOfflineCapability';
+  | 'acceptUnitCosts' | 'setCostConversions' | 'recordStockCount' | 'renewOfflineCapability' | 'updateLabor';
 
 export class CommandFailure extends Error {
   constructor(

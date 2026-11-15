@@ -64,7 +64,7 @@ export function ExpensesTab({ data, today, open, run, busy }: TabProps) {
           <Item icon="plug" title="冰箱额外电费" tag={<Tag>固定费用</Tag>} desc="每月固定 RM100，与租金分开显示。"
             price={formatRM(plan.fridgeMonthlySen)} unit="/ 月" action={fixedAction(rows.fridge_power)} />
           <Item icon="users" title="员工工资" tag={<Tag tone={plan.staff.enabled ? 'green' : 'gold'}>{plan.staff.enabled ? '已启用' : '未招聘'}</Tag>}
-            desc={`日薪暂定 ${formatRM(plan.staff.dailyBudgetSen)}；招到人后按实际出勤记录。`}
+            desc={data.labor.workers.length ? '工钱已在「成本 · 请人工钱」填好，「赚了多少」按那里算。这里记的工资付款只算现金支出，同一天不会再扣一次。' : `日薪暂定 ${formatRM(plan.staff.dailyBudgetSen)}；招到人后按实际出勤记录。也可以到「成本 · 请人工钱」填，「赚了多少」会每天扣。`}
             extra={<label className="mt-3 flex min-h-11 items-center gap-2 text-sm">
               <button type="button" role="switch" aria-checked={plan.staff.enabled} aria-label="启用员工工资" disabled={busy} onClick={() => void toggleStaff()}
                 className={`relative h-7 w-12 rounded-full ${plan.staff.enabled ? 'bg-ok' : 'bg-[#c5cbbf]'}`}><span className={`absolute top-1 h-5 w-5 rounded-full bg-white transition-all ${plan.staff.enabled ? 'left-6' : 'left-1'}`} /></button>

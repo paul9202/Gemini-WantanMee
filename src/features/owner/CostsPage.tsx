@@ -22,6 +22,7 @@ import { CALIBRATION_ZH, loadActiveBom, loadCostSources, loadLedger, loadStockIn
 import { failureText, useRunner } from './finance/data';
 import { Btn, Dialog, inputCls, Toast } from './finance/ui';
 import { OwnerTabs } from './ui';
+import { LaborSection } from './LaborSection';
 
 const COLORS: Record<string, string> = { thin_egg: 'bg-ok', mee_poh: 'bg-ok/60', wanton: 'bg-[#c9a35a]', char_siew: 'bg-brand/80', dry_base: 'bg-[#8f948a]', soup_base: 'bg-[#7fa6c6]', packaging: 'bg-[#cfd2c6]' };
 const GROUPS: { id: BowlMarginRow['group']; label: string; photo?: string }[] = [
@@ -186,11 +187,13 @@ export function CostsPage() {
                   ))}
                 </tbody>
               </table>
-              {revenueSen > 0 && <p className="mt-3 text-[13px] text-ink-2">今天订单金额 {formatRM(revenueSen)}，扣掉材料约赚 {formatRM(revenueSen - totalSen)}（{Math.round(((revenueSen - totalSen) / revenueSen) * 100)}%），还没扣租金电费。</p>}
+              {revenueSen > 0 && <p className="mt-3 text-[13px] text-ink-2">今天订单金额 {formatRM(revenueSen)}，扣掉材料约赚 {formatRM(revenueSen - totalSen)}（{Math.round(((revenueSen - totalSen) / revenueSen) * 100)}%），还没扣租金电费和工钱。</p>}
             </>
           )}
         </section>
       </div>
+
+      {today && <LaborSection today={today} isOpen={(d) => (d === today ? (usage?.orders ?? 0) > 0 : (stockQ.data?.days.find((x) => x.date === d)?.usage.orders ?? 0) > 0)} />}
 
       <section className="rounded-2xl border border-line bg-card p-5 shadow-card lg:p-6">
         <div className="mb-1 flex flex-wrap items-baseline gap-2"><h3 className="text-lg font-bold">每碗赚多少</h3><span className="text-sm text-ink-2">现在的卖价 − 材料成本 · 按上面的单价算</span></div>

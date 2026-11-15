@@ -15,6 +15,8 @@ import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, ledgerEven
 import { costUnitsToSen, formatRM } from '../../domain/money';
 import { materialUsage, UsageOrder } from '../../domain/usage';
 import { firstBusinessDay } from '../../domain/periods';
+import { EMPTY_LABOR, laborForDate, wageExpenseOverlapSen } from '../../domain/labor';
+import { opexAccrualSen } from '../../domain/costing';
 import { OVERDUE_MS } from '../../domain/timing';
 import { db, storePath } from '../../data/firebase/client';
 import { useLiveQuery, useNow } from '../../data/firebase/live';
@@ -22,7 +24,7 @@ import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
 import { Icon, Photo } from '../../ui/visual';
 import type { IconName } from '../../ui/iconSymbols';
-import { CALIBRATION_ZH, download, loadActiveBom, loadDailyBallsTarget, loadLedger, loadOpenReviews, loadOrdersRange, orderPaymentOverview, useLoad } from './data';
+import { CALIBRATION_ZH, download, loadActiveBom, loadDailyBallsTarget, loadLaborPlan, loadLedger, loadOpenReviews, loadOrdersRange, orderPaymentOverview, useLoad } from './data';
 import { BarList, minutes, OwnerTabs, pct, Section } from './ui';
 import { useStock } from './StockSection';
 import { SummaryCard } from './SummaryCard';
@@ -49,6 +51,7 @@ export function OverviewPage() {
   const all = useLoad(() => (today ? loadLedger(null) : Promise.resolve(null)), `all-${today}`);
   const recentOrders = useLoad(() => (today ? loadOrdersRange(lastNDays(today, 30)) : Promise.resolve(null)), `orders30-${today}`);
   const reviews = useLoad(loadOpenReviews, 'reviews');
+  const laborQ = useLoad(loadLaborPlan, 'labor');
   const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data() as { fixedCostPolicy: FixedCostPolicy } | undefined, 'finance');
   const bom = useLoad(() => loadActiveBom(config?.activeBomVersion), `bom-${config?.activeBomVersion}`);
   const target = useLoad(loadDailyBallsTarget, 'balls-target');
@@ -101,6 +104,15 @@ export function OverviewPage() {
   const ballsTarget = target.data ?? 50;
   const delta = summary && lastSummary && lastSummary.netReceiptsSen > 0 ? summary.netReceiptsSen - lastSummary.netReceiptsSen : null;
   const closed = day.data?.state === 'closed';
+  // 请人工钱（成本页填）：按天的开门做生意才算；账目里已记的工资在有人的日子不再重复扣。
+  const labor = laborQ.data ?? (laborQ.error ? EMPTY_LABOR : null);
+  const dayOpen = (usage?.orders ?? 0) > 0 || (summary?.netReceiptsSen ?? 0) !== 0;
+  const dayLabor = labor ? laborForDate(labor, date, dayOpen) : null;
+  const wageDup = labor && cur.data ? wageExpenseOverlapSen(labor, cur.data.docs.expenses, range, (e) => opexAccrualSen(e, cur.data!.docs.expenseLinks ?? [])) : 0;
+  const profitSen = summary ? summary.estimatedProfitSen - (dayLabor?.totalSen ?? 0) + wageDup : 0;
+  const otherOpexSen = summary ? summary.otherOpexSen - wageDup : 0;
+  const hasLabor = Boolean(labor && labor.workers.length);
+  const wageOverlap = (r: DateRange) => (labor && all.data ? wageExpenseOverlapSen(labor, all.data.docs.expenses, r, (e) => opexAccrualSen(e, all.data!.docs.expenseLinks ?? [])) : 0);
   const stockShown = isToday ? stock.estimates.filter((e) => e.status !== null) : [];
   const short = stockShown.filter((e) => e.status === 'short');
   const dateLabel = date ? `${Number(date.slice(5, 7))}月${Number(date.slice(8))}日 ${weekdayOf(date)}` : '';
@@ -145,7 +157,7 @@ export function OverviewPage() {
               <input type="date" value={date} max={today} onChange={(e) => setPicked(e.target.value || null)} className="ml-1 w-[8.5rem] bg-transparent text-sm" />
             </label>
           </div>
-          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); recentOrders.refresh(); reviews.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
+          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); recentOrders.refresh(); reviews.refresh(); laborQ.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
           <span className={`flex h-14 items-center gap-2 rounded-xl px-4 text-[14px] font-semibold ${closed ? 'bg-ok-bg text-ok' : 'bg-subtle text-ink-2'}`} title="每天凌晨 5 点系统自动关前一天的账">
             <Icon name="check" size={18} />{closed ? '已关账' : isToday ? '凌晨自动关账' : '等自动关账'}
           </span>
@@ -172,17 +184,18 @@ export function OverviewPage() {
 
         <section className="min-w-0 rounded-2xl bg-ok p-5 text-white shadow-card lg:p-6">
           <div className="flex items-center gap-2 text-[15px] font-semibold text-white/85"><Icon name="chart" size={20} />赚了多少<span className="ml-auto rounded-full bg-white/15 px-2 py-0.5 text-[12px] font-bold">估算</span></div>
-          <Big prefix={summary && summary.estimatedProfitSen < 0 ? '亏 RM' : '约 RM'} value={summary ? formatRM(Math.abs(summary.estimatedProfitSen)).replace('RM', '') : '…'} light />
+          <Big prefix={summary && profitSen < 0 ? '亏 RM' : '约 RM'} value={summary && labor ? formatRM(Math.abs(profitSen)).replace('RM', '') : '…'} light />
           {summary && (
             <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-[14px] tabular-nums text-white/90">
               <dt>收入</dt><dd className="text-right">{formatRM(summary.netReceiptsSen)}</dd>
               <dt className="flex flex-wrap items-center gap-1.5">− 材料成本{pending.length > 0 && <span className="rounded-full bg-warn-bg px-1.5 text-[11px] font-bold text-warn">含 {pending.length} 项未核实</span>}</dt>
               <dd className="text-right">{formatRM(costUnitsToSen(summary.allocatedCostUnits + summary.wastageCostUnits))}</dd>
               <dt>− 租金电费 <span className="text-white/65">（每月 {formatRM(monthlyFixed)} ÷ {daysInMonth(y, m)} 天）</span></dt><dd className="text-right">{formatRM(summary.fixedCostSen)}</dd>
-              {summary.otherOpexSen > 0 && <><dt>− 煤气、杂费等</dt><dd className="text-right">{formatRM(summary.otherOpexSen)}</dd></>}
+              {dayLabor && dayLabor.lines.length > 0 && <><dt>− 工钱 <span className="text-white/65">（{laborNote(dayLabor.lines)}）</span></dt><dd className="text-right">{formatRM(dayLabor.totalSen)}</dd></>}
+              {otherOpexSen > 0 && <><dt>− 煤气、杂费等</dt><dd className="text-right">{formatRM(otherOpexSen)}</dd></>}
             </dl>
           )}
-          <div className="mt-3 border-t border-white/20 pt-3 text-[13px] text-white/80">{summary && summary.otherOpexSen === 0 ? '煤气、杂费这天没有记 · ' : ''}不含工资和税 · 按已登记收款算</div>
+          <div className="mt-3 border-t border-white/20 pt-3 text-[13px] text-white/80">{summary && otherOpexSen === 0 ? '煤气、杂费这天没有记 · ' : ''}{hasLabor ? '工钱按成本页填的算 · 不含税' : <button type="button" onClick={() => navigate('/owner/costs')} className="underline underline-offset-2">还没扣工钱，到成本页填</button>}{' · '}按已登记收款算</div>
         </section>
 
         {stockShown.length > 0 ? (
@@ -217,7 +230,7 @@ export function OverviewPage() {
       </div>
 
       <RecentSection today={today} viewing={date} onPick={(d) => { setPicked(d === today ? null : d); document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' }); }} events={allEvents} orders={recentOrders.data ?? null} firstDay={firstDay} fixed={fixed}
-        loading={all.loading || recentOrders.loading} />
+        labor={labor} wageOverlap={wageOverlap} loading={all.loading || recentOrders.loading || laborQ.loading} />
 
       {/* 面量 + 卖得最好 */}
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
@@ -361,6 +374,11 @@ export function OverviewPage() {
       )}
     </div>
   );
+}
+
+/** 「阿明 RM70」「阿芳没来」「按天，开门后才算」 */
+function laborNote(lines: { name: string; kind: string; sen: number; absent: boolean; closed: boolean }[]): string {
+  return lines.map((l) => (l.kind === 'daily' && l.absent ? `${l.name}没来` : l.kind === 'daily' && l.closed ? `${l.name}，开门后才算` : `${l.name}${l.kind === 'monthly' ? ' 月薪摊' : ''} ${formatRM(l.sen)}`)).join('、');
 }
 
 function Big({ prefix, value, light }: { prefix: string; value: string; light?: boolean }) {

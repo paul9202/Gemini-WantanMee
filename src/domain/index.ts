@@ -28,3 +28,4 @@ export * from './costInsights';
 export * from './usage';
 export * from './costSources';
 export * from './periods';
+export * from './labor';

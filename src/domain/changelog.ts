@@ -21,6 +21,15 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-15-labor', date: '2026-11-15', roles: ['owner'],
+    title: { zh: '成本里可以填请人的工钱，随时能改', en: 'Staff wages can now be set in Costs, and changed any time' },
+    items: [
+      { zh: '到「成本 · 请人工钱」填每天或每月多少钱。改工钱从你选的那天起算，之前的日子还按旧工钱，算过的「赚了多少」不会变。', en: 'Set a daily or monthly wage in Costs · Staff wages. A change starts from the day you pick; earlier days keep the old wage, so past profit does not change.' },
+      { zh: '可以换人、同时请两个人、记某天没来（那天不算工钱），也可以从日薪改成月薪。', en: 'You can replace someone, have two helpers, mark a day someone did not come (no wage that day), or switch from daily to monthly pay.' },
+      { zh: '「今天」页的「赚了多少」多一行「工钱」，和租金电费一样单独列出；近 7 天、近 30 天和账目也一起扣。', en: 'Profit on Today now has its own wages line, like rent and power; the 7- and 30-day cards and Accounts deduct it too.' },
+    ],
+  },
+  {
     id: '2026-11-14-recent-days', date: '2026-11-14', roles: ['owner'],
     title: { zh: '今天页加了「最近的生意」：近 7 天和近 30 天', en: 'Today now shows recent business: last 7 and 30 days' },
     items: [

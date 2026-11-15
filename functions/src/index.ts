@@ -30,6 +30,7 @@ import { cleanupExpiredDrafts } from './aiCost/drafts';
 import { deleteAttachments } from './aiCost/receiptStorage';
 import { previewStoreReset, resetStoreForOpening } from './commands/goLive';
 import { acceptUnitCosts, estimateUnitCosts, getDailySummary, recordStockCount, setCostConversions } from './commands/costSources';
+import { updateLabor } from './commands/labor';
 import { defineSecret } from 'firebase-functions/params';
 import { getStorage } from 'firebase-admin/storage';
 
@@ -136,6 +137,7 @@ export const getCostAnalysisCmd = command(getCostAnalysis, AI_LONG);
 export const acceptUnitCostsCmd = command(acceptUnitCosts);
 export const setCostConversionsCmd = command(setCostConversions);
 export const recordStockCountCmd = command(recordStockCount);
+export const updateLaborCmd = command(updateLabor);
 export const estimateUnitCostsCmd = command(estimateUnitCosts, AI_LONG);
 export const getDailySummaryCmd = command(getDailySummary, AI_LONG);
 

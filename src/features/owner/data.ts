@@ -9,6 +9,7 @@ import { DEFAULT_SALES_TARGETS } from '../../domain/costing';
 import { addDays } from '../../domain/businessDay';
 import { CostSourcesDoc, DayUsage, EMPTY_COST_SOURCES, StockBatch, StockCountDoc } from '../../domain/costSources';
 import { materialUsage, UsageOrder } from '../../domain/usage';
+import { LaborPlan, laborPlanOf } from '../../domain/labor';
 import type { DateRange } from '../../domain/businessDay';
 import type { CloseOrderRow, LedgerDocs, OrderReportRow } from '../../domain/ledger';
 import type { Sen } from '../../domain/money';
@@ -152,4 +153,9 @@ export async function loadStockInputs(today: string): Promise<{ days: DayUsage[]
 /** 一段营业日的订单（今天页「最近的生意」算单数、碗数、粒面、卖最多用）。 */
 export async function loadOrdersRange(range: DateRange): Promise<(UsageOrder & { businessDate: string })[]> {
   return fetchAll<UsageOrder & { businessDate: string }>('orders', ...inRange('businessDate', range));
+}
+
+/** 请人工钱设定（config/labor）；没设过就是没请人。 */
+export async function loadLaborPlan(): Promise<LaborPlan> {
+  return laborPlanOf((await getDoc(doc(db, storePath('config/labor')))).data());
 }

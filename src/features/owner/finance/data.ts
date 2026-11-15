@@ -3,6 +3,7 @@
  * 单店数据量小，首版直接全量读取支出 / 收款 / 退款以计算回本；订单、成本事件只读近期区间。
  * 所有数字由领域函数计算，没有示例数据。
  */
+import { LaborPlan, laborPlanOf } from '../../../domain/labor';
 import { useState } from 'react';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { db, storePath } from '../../../data/firebase/client';
@@ -44,6 +45,8 @@ export interface FinanceData {
   /** AI 记成本：采购明细（用量待补 / 已建库存）与来源凭证（原话、收据图片路径、分摊与差额）。 */
   purchaseDetails: PurchaseDetailDoc[];
   costReceipts: CostReceiptDoc[];
+  /** 请人工钱（成本页填，2026-11-15）。 */
+  labor: LaborPlan;
 }
 
 export interface PurchaseDetailDoc {
@@ -60,8 +63,8 @@ export interface CostReceiptDoc {
 export async function loadFinance(recentStart: string): Promise<FinanceData> {
   const cfg = (name: string) => getDoc(doc(db, storePath(`config/${name}`))).then((s) => s.data());
   const since = where('businessDate', '>=', recentStart);
-  const [plan, goals, startupCfg, finance, coverageCfg, links, custom, batches, startup, goalDocs, expenses, payments, refunds, orders, costEvents, wastage, purchaseDetails, costReceipts] = await Promise.all([
-    cfg('expensePlan'), cfg('goals'), cfg('startup'), cfg('finance'), cfg('costCoverage'), all<ExpenseLinkDoc>('expenseLinks'),
+  const [plan, goals, startupCfg, finance, coverageCfg, laborCfg, links, custom, batches, startup, goalDocs, expenses, payments, refunds, orders, costEvents, wastage, purchaseDetails, costReceipts] = await Promise.all([
+    cfg('expensePlan'), cfg('goals'), cfg('startup'), cfg('finance'), cfg('costCoverage'), cfg('labor'), all<ExpenseLinkDoc>('expenseLinks'),
     all<Ingredient & { active?: boolean }>('ingredients'), all<BatchDoc>('ingredientBatches'), all<StartupCostDoc>('startupCosts'), all<GoalDoc>('goals'),
     all<ExpenseDoc>('expenses'), all<PaymentDoc>('payments'), all<RefundDoc>('refunds'),
     all<OrderReportRow>('orders', since), all<CostEventDoc>('costEvents', since), all<WastageDoc>('wastage', since),
@@ -76,6 +79,7 @@ export async function loadFinance(recentStart: string): Promise<FinanceData> {
     ingredients: [...BUILT_IN_INGREDIENTS, ...custom.filter((i) => i.active !== false).map((i) => ({ ...i, builtIn: false }))],
     links, coverage: { ...DEFAULT_COST_COVERAGE, ...((coverageCfg?.coverage as CostCoverage | undefined) ?? {}) },
     batches, startup, goals: goalDocs.sort((a, b) => a.createdAtMs - b.createdAtMs), expenses, payments, refunds, orders, costEvents, wastage, recentStart, purchaseDetails, costReceipts,
+    labor: laborPlanOf(laborCfg),
   };
 }
 
