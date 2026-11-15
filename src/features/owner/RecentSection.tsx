@@ -9,24 +9,26 @@ import type { FixedCostPolicy, LedgerEvent } from '../../domain/finance';
 import { formatRM } from '../../domain/money';
 import { DatedOrder, PeriodFigures, periodFigures } from '../../domain/periods';
 import type { DateRange } from '../../domain/businessDay';
-import type { LaborPlan } from '../../domain/labor';
 import type { Sen } from '../../domain/money';
+import type { LaborPlan } from '../../domain/labor';
 import { Icon } from '../../ui/visual';
 
 const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
 const wd = (date: string) => WEEKDAY[new Date(`${date}T00:00:00Z`).getUTCDay()];
 const md = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8))}`;
 
-export function RecentSection({ today, viewing, onPick, events, orders, firstDay, fixed, labor, wageOverlap, loading }: {
-  today: string; viewing: string; onPick: (date: string) => void;
-  events: LedgerEvent[] | null; orders: DatedOrder[] | null; firstDay: string | null; fixed: FixedCostPolicy;
-  labor: LaborPlan | null; wageOverlap: (range: DateRange) => Sen; loading: boolean;
+type Src = { events: LedgerEvent[]; orders: DatedOrder[]; labor: LaborPlan; wageOverlap: (range: DateRange) => Sen };
+
+/** src7：近 14 天的账本（打开就有）；src30：近 60 天（老板点了「近 30 天」才读）。 */
+export function RecentSection({ today, viewing, onPick, firstDay, fixed, src7, src30, want30, onWant30, loading, loading30, error }: {
+  today: string; viewing: string; onPick: (date: string) => void; firstDay: string | null; fixed: FixedCostPolicy;
+  src7: Src | null; src30: Src | null; want30: boolean; onWant30: () => void; loading: boolean; loading30: boolean; error: string | null;
 }) {
   const [chart, setChart] = useState<7 | 30>(7);
-  const ready = events !== null && orders !== null && labor !== null;
-  const p7 = ready ? periodFigures({ events, orders, end: today, days: 7, firstDay, fixed, labor, wageOverlap }) : null;
-  const p30 = ready ? periodFigures({ events, orders, end: today, days: 30, firstDay, fixed, labor, wageOverlap }) : null;
-  const shown = chart === 7 ? p7 : p30;
+  const ready = src7 !== null && !loading;
+  const p7 = ready ? periodFigures({ ...src7, end: today, days: 7, firstDay, fixed }) : null;
+  const p30 = ready && src30 ? periodFigures({ ...src30, end: today, days: 30, firstDay, fixed }) : null;
+  const shown = chart === 30 && p30 ? p30 : p7;
 
   return (
     <section className="mb-5 min-w-0 rounded-2xl border border-line bg-card p-5 shadow-card lg:p-6">
@@ -34,14 +36,26 @@ export function RecentSection({ today, viewing, onPick, events, orders, firstDay
         <h3 className="text-lg font-bold">最近的生意</h3>
         <span className="text-sm text-ink-2">截至今天 {md(today)}（今天算到现在）· 收入按已登记收款 · 点卡片换天数，点柱子看那一天</span>
       </div>
-      {!ready ? <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-ink-2">{loading ? '正在载入…' : '读取失败，请按刷新'}</p>
-        : !p7 && !p30 ? <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-ink-2">还没有生意记录</p> : (
+      {!ready ? <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-ink-2">{error ? `读取失败：${error}，请按刷新` : '正在载入…'}</p>
+        : !p7 ? <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-ink-2">还没有生意记录</p> : (
         <>
           <div className="grid gap-3 md:grid-cols-2">
-            {p7 && <PeriodCard label="近 7 天" p={p7} on={chart === 7} onClick={() => setChart(7)} />}
-            {p30 && <PeriodCard label="近 30 天" p={p30} on={chart === 30} onClick={() => setChart(30)} />}
+            <PeriodCard label="近 7 天" p={p7} on={shown === p7} onClick={() => setChart(7)} />
+            {p30 ? <PeriodCard label="近 30 天" p={p30} on={shown === p30} onClick={() => setChart(30)} />
+              : (
+                <button type="button" disabled={want30 && loading30} onClick={() => { onWant30(); setChart(30); }}
+                  className="flex min-h-[160px] min-w-0 flex-col items-start justify-center gap-2 rounded-2xl border-2 border-dashed border-line bg-card p-4 text-left hover:border-ink-2/40 lg:p-5">
+                  <b className="text-[17px]">近 30 天</b>
+                  {want30 && loading30 ? <span className="text-[14px] text-ink-2">正在算…</span> : (
+                    <>
+                      <span className="inline-flex h-11 items-center gap-1.5 rounded-xl bg-ink px-4 text-[14px] font-bold text-white"><Icon name="chart" size={16} />点一下看近 30 天</span>
+                      <span className="text-[13px] text-ink-2">要多读一个月的记录，平时不读，省一点流量费。</span>
+                    </>
+                  )}
+                </button>
+              )}
           </div>
-          {shown && <DayBars p={shown} today={today} viewing={viewing} onPick={onPick} />}
+          <DayBars p={shown!} today={today} viewing={viewing} onPick={onPick} />
         </>
       )}
     </section>

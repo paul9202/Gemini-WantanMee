@@ -5,16 +5,19 @@
  * - 第二阶段：有进货记录时第三张卡改成「材料够不够」（StockSection 同一算法）；页尾加收档小结（SummaryCard）。
  * - 收款明细、出餐效率、回本等原有细账收在页尾「细账」里，不删。
  * 所有数字都来自账本；无数据时显示空态，不放示例数字。
+ * 读数据（2026-11-15，省 Firestore 读取）：打开时只读近 14 天账本一次（今天、上周同一天、近 7 天和前 7 天都从这里切）；
+ * 近 30 天、细账里的回本进度（要开档以来全部记录）、收档小结都等老板点了才读；材料够不够只有记过进货才读订单。
  */
 import { ReactNode, useState } from 'react';
-import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, query, where } from 'firebase/firestore';
 import { addDays, businessDateOf, DateRange, daysInMonth, lastNDays, wallClock } from '../../domain/businessDay';
 import { DEFAULT_FIXED_COST, FixedCostPolicy, monthlyFixedSen, summarizePeriod } from '../../domain/finance';
-import { ballsText, DEFAULT_EXPENSE_PLAN, ExpenseLinkDoc, monthOf, paybackStatus, PlanExpense, StartupCostDoc, startupSummary } from '../../domain/costing';
-import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, ledgerEvents, orderServiceStats, receiptsTrend, registeredBreakdown } from '../../domain/ledger';
+import { ballsText, monthOf, paybackStatus, PlanExpense, startupSummary } from '../../domain/costing';
+import { csvExpenses, csvOrders, csvPayments, csvSummary, csvWastage, LedgerDocs, ledgerEvents, OrderReportRow, orderServiceStats, receiptsTrend, registeredBreakdown } from '../../domain/ledger';
 import { costUnitsToSen, formatRM } from '../../domain/money';
 import { materialUsage, UsageOrder } from '../../domain/usage';
-import { firstBusinessDay } from '../../domain/periods';
+import type { DatedOrder } from '../../domain/periods';
+import type { LaborPlan } from '../../domain/labor';
 import { EMPTY_LABOR, laborForDate, wageExpenseOverlapSen } from '../../domain/labor';
 import { opexAccrualSen } from '../../domain/costing';
 import { OVERDUE_MS } from '../../domain/timing';
@@ -24,9 +27,9 @@ import { navigate } from '../../app/router';
 import { useSession } from '../../app/session';
 import { Icon, Photo } from '../../ui/visual';
 import type { IconName } from '../../ui/iconSymbols';
-import { CALIBRATION_ZH, download, loadActiveBom, loadDailyBallsTarget, loadLaborPlan, loadLedger, loadOpenReviews, loadOrdersRange, orderPaymentOverview, useLoad } from './data';
+import { CALIBRATION_ZH, download, loadActiveBom, loadDailyBallsTarget, loadFirstBusinessDay, loadLaborPlan, loadLedger, loadOpenReviews, loadPaybackInputs, orderPaymentOverview, sliceLedger, useLoad } from './data';
 import { BarList, minutes, OwnerTabs, pct, Section } from './ui';
-import { useStock } from './StockSection';
+import { useStockIfTracked } from './StockSection';
 import { SummaryCard } from './SummaryCard';
 import { RecentSection } from './RecentSection';
 
@@ -45,22 +48,30 @@ export function OverviewPage() {
   const range: DateRange = { start: date || '2000-01-01', endExclusive: addDays(date || '2000-01-01', 1) };
   const lastWeek: DateRange = { start: addDays(range.start, -7), endExclusive: addDays(range.start, -6) };
   const key = `${today}-${date}`;
-  // 门店配置载入前营业日为空：先不查询。
-  const cur = useLoad(() => (date ? loadLedger(range) : Promise.resolve(null)), `cur-${key}`);
-  const before = useLoad(() => (date ? loadLedger(lastWeek) : Promise.resolve(null)), `lastweek-${key}`);
-  const all = useLoad(() => (today ? loadLedger(null) : Promise.resolve(null)), `all-${today}`);
-  const recentOrders = useLoad(() => (today ? loadOrdersRange(lastNDays(today, 30)) : Promise.resolve(null)), `orders30-${today}`);
+  // 门店配置载入前营业日为空：先不查询。近 14 天读一次；看的日子在这 14 天内就直接切，不再查询。
+  const recentRange: DateRange | null = today ? lastNDays(today, 14) : null;
+  const inRecent = (r: DateRange) => Boolean(recentRange && r.start >= recentRange.start && r.endExclusive <= recentRange.endExclusive);
+  const recent = useLoad(() => (recentRange ? loadLedger(recentRange) : Promise.resolve(null)), `recent14-${today}`);
+  const curOwn = useLoad(() => (date && !inRecent(range) ? loadLedger(range) : Promise.resolve(null)), `cur-${key}`);
+  const beforeOwn = useLoad(() => (date && !inRecent(lastWeek) ? loadLedger(lastWeek) : Promise.resolve(null)), `lastweek-${key}`);
+  const fromRecent = (r: DateRange, own: typeof curOwn) => (inRecent(r)
+    ? { data: recent.data ? sliceLedger(recent.data, r) : null, loading: recent.loading, error: recent.error, loadedAt: recent.loadedAt }
+    : own);
+  const cur = fromRecent(range, curOwn);
+  const before = fromRecent(lastWeek, beforeOwn);
+  // 近 30 天（连前 30 天比较共 60 天）等老板点了才读。
+  const [want30, setWant30] = useState(false);
+  const long = useLoad(() => (want30 && today ? loadLedger(lastNDays(today, 60)) : Promise.resolve(null)), `long60-${today}-${want30}`);
+  const firstDayQ = useLoad(loadFirstBusinessDay, 'first-business-day');
+  // 回本进度要开档以来全部记录：打开「细账」才读。
+  const [showDetails, setShowDetails] = useState(false);
+  const payInputs = useLoad(() => (showDetails ? loadPaybackInputs() : Promise.resolve(null)), `payback-${showDetails}`);
   const reviews = useLoad(loadOpenReviews, 'reviews');
   const laborQ = useLoad(loadLaborPlan, 'labor');
   const finance = useLoad(async () => (await getDoc(doc(db, storePath('config/finance')))).data() as { fixedCostPolicy: FixedCostPolicy } | undefined, 'finance');
   const bom = useLoad(() => loadActiveBom(config?.activeBomVersion), `bom-${config?.activeBomVersion}`);
   const target = useLoad(loadDailyBallsTarget, 'balls-target');
   const day = useLoad(async () => (date ? (await getDoc(doc(db, storePath(`businessDays/${date}`)))).data() as { state?: string } | undefined : undefined), `day-${key}`);
-  const payInputs = useLoad(async () => ({
-    startup: (await getDocs(collection(db, storePath('startupCosts')))).docs.map((d) => d.data() as StartupCostDoc),
-    plan: { ...DEFAULT_EXPENSE_PLAN, ...((await getDoc(doc(db, storePath('config/expensePlan')))).data()?.plan ?? {}) },
-    links: (await getDocs(collection(db, storePath('expenseLinks')))).docs.map((d) => d.data() as ExpenseLinkDoc),
-  }), 'payback-inputs');
   // 提醒用实时数据：厨房超时单、待登记收款、旧版遗留的待回收餐牌。
   const kitchenQ = useLiveQuery<{ tokenNumber: number; acceptedAtEffectiveMs: number; fulfillmentStatus: string; kitchenRouting: string }>(
     query(collection(db, storePath('kitchenTickets')), where('fulfillmentStatus', 'in', ['queued', 'preparing'])), 'owner-kitchen',
@@ -68,7 +79,7 @@ export function OverviewPage() {
   const unpaidQ = useLiveQuery<{ id: string; receiptNumber: string; tokenNumber: number; totalSen: number; fulfillmentStatus: string; businessDate: string }>(
     query(collection(db, storePath('orders')), where('paymentState', '==', 'unpaid')), 'owner-unpaid',
   );
-  const stock = useStock(today);
+  const stock = useStockIfTracked(today);
   const tokensQ = useLiveQuery<{ number: number; state: string }>(query(collection(db, storePath('tokens')), where('state', '==', 'awaiting_return')), 'owner-tokens');
 
   if (!config) return null;
@@ -85,13 +96,12 @@ export function OverviewPage() {
   const orderPay = cur.data ? orderPaymentOverview(cur.data.orders) : null;
   const outstanding = unpaidQ.data.filter((o) => o.fulfillmentStatus !== 'cancelled');
   const outstandingSen = outstanding.reduce((s, o) => s + o.totalSen, 0);
-  const startup = startupSummary(payInputs.data?.startup ?? []);
-  const payback = all.data && payInputs.data ? paybackStatus({
-    startupTotalSen: startup.totalSen, receiptsSen: all.data.docs.payments.reduce((s, p) => s + p.amountSen, 0), refundsSen: all.data.docs.refunds.reduce((s, r) => s + r.amountSen, 0),
-    expenses: all.data.docs.expenses as PlanExpense[], plan: payInputs.data.plan, startupRentByMonth: startup.rentByMonth, currentMonth: monthOf(today), links: payInputs.data.links,
+  const pi = payInputs.data;
+  const startup = pi ? startupSummary(pi.startup) : null;
+  const payback = pi && startup ? paybackStatus({
+    startupTotalSen: startup.totalSen, receiptsSen: pi.receiptsSen, refundsSen: pi.refundsSen,
+    expenses: pi.expenses as PlanExpense[], plan: pi.plan, startupRentByMonth: startup.rentByMonth, currentMonth: monthOf(today), links: pi.links,
   }) : null;
-  const allEvents = all.data ? ledgerEvents(all.data.docs) : null;
-  const firstDay = all.data ? firstBusinessDay([...all.data.docs.payments.map((p) => p.businessDate), ...(recentOrders.data ?? []).map((o) => o.businessDate)]) : null;
   const openReviews = reviews.data ?? [];
   const reviewAmount = openReviews.reduce((s, r) => s + (r.amountSen ?? 0), 0);
   const overdue = kitchenQ.data.filter((t) => t.kitchenRouting === 'digital' && now - t.acceptedAtEffectiveMs >= OVERDUE_MS);
@@ -112,7 +122,8 @@ export function OverviewPage() {
   const profitSen = summary ? summary.estimatedProfitSen - (dayLabor?.totalSen ?? 0) + wageDup : 0;
   const otherOpexSen = summary ? summary.otherOpexSen - wageDup : 0;
   const hasLabor = Boolean(labor && labor.workers.length);
-  const wageOverlap = (r: DateRange) => (labor && all.data ? wageExpenseOverlapSen(labor, all.data.docs.expenses, r, (e) => opexAccrualSen(e, all.data!.docs.expenseLinks ?? [])) : 0);
+  const src7 = periodSource(recent.data, labor);
+  const src30 = periodSource(long.data, labor);
   const stockShown = isToday ? stock.estimates.filter((e) => e.status !== null) : [];
   const short = stockShown.filter((e) => e.status === 'short');
   const dateLabel = date ? `${Number(date.slice(5, 7))}月${Number(date.slice(8))}日 ${weekdayOf(date)}` : '';
@@ -157,7 +168,7 @@ export function OverviewPage() {
               <input type="date" value={date} max={today} onChange={(e) => setPicked(e.target.value || null)} className="ml-1 w-[8.5rem] bg-transparent text-sm" />
             </label>
           </div>
-          <button type="button" onClick={() => { cur.refresh(); before.refresh(); all.refresh(); recentOrders.refresh(); reviews.refresh(); laborQ.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
+          <button type="button" onClick={() => { recent.refresh(); curOwn.refresh(); beforeOwn.refresh(); if (want30) long.refresh(); if (showDetails) payInputs.refresh(); stock.refresh(); reviews.refresh(); laborQ.refresh(); day.refresh(); }} aria-label="刷新" className="flex h-14 w-14 items-center justify-center rounded-xl border border-line bg-card"><Icon name="refresh" size={20} /></button>
           <span className={`flex h-14 items-center gap-2 rounded-xl px-4 text-[14px] font-semibold ${closed ? 'bg-ok-bg text-ok' : 'bg-subtle text-ink-2'}`} title="每天凌晨 5 点系统自动关前一天的账">
             <Icon name="check" size={18} />{closed ? '已关账' : isToday ? '凌晨自动关账' : '等自动关账'}
           </span>
@@ -229,8 +240,8 @@ export function OverviewPage() {
         )}
       </div>
 
-      <RecentSection today={today} viewing={date} onPick={(d) => { setPicked(d === today ? null : d); document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' }); }} events={allEvents} orders={recentOrders.data ?? null} firstDay={firstDay} fixed={fixed}
-        labor={labor} wageOverlap={wageOverlap} loading={all.loading || recentOrders.loading || laborQ.loading} />
+      <RecentSection today={today} viewing={date} onPick={(d) => { setPicked(d === today ? null : d); document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' }); }} firstDay={firstDayQ.data ?? null} fixed={fixed}
+        src7={src7} src30={src30} want30={want30} onWant30={() => setWant30(true)} loading={recent.loading || laborQ.loading || firstDayQ.loading} loading30={long.loading} error={recent.error ?? long.error} />
 
       {/* 面量 + 卖得最好 */}
       <div className="mb-5 grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
@@ -325,10 +336,10 @@ export function OverviewPage() {
         </Section>
       </div>
 
-      {date && <SummaryCard date={date} isToday={isToday} />}
+      {date && (usage?.orders ?? 0) > 0 && <SummaryCard date={date} isToday={isToday} />}
 
       {!loading && summary && svc && orderPay && (
-        <details className="group mt-5 rounded-2xl border border-line bg-card p-5 shadow-card">
+        <details onToggle={(e) => { if (e.currentTarget.open) setShowDetails(true); }} className="group mt-5 rounded-2xl border border-line bg-card p-5 shadow-card">
           <summary className="flex min-h-14 cursor-pointer list-none items-center gap-2 font-bold"><Icon name="chevron-right" size={18} className="transition-transform group-open:rotate-90" />细账：收款明细、出餐速度、回本进度、导出</summary>
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <Section title="收款明细" hint="订单金额按订单营业日；收款按登记日">
@@ -358,7 +369,7 @@ export function OverviewPage() {
               </div>
             </Section>
             <Section title="回本进度（参考）" hint="收回开档总投入" actions={<button type="button" onClick={() => navigate('/owner/finance/goals')} className="h-10 rounded-lg border border-line px-3 text-sm">经营目标</button>}>
-              {!payback ? <p className="text-ink-2">正在载入…</p> : payback.state === 'pending' ? <p className="text-ink-2">待核算：{payback.pendingReasons.join('；')}。</p> : (
+              {payInputs.error ? <p role="alert" className="text-danger">读取失败：{payInputs.error}</p> : !payback ? <p className="text-ink-2">正在载入…</p> : payback.state === 'pending' ? <p className="text-ink-2">待核算：{payback.pendingReasons.join('；')}。</p> : (
                 <>
                   <div className="h-3 rounded bg-subtle"><div className="h-3 rounded bg-ok" style={{ width: `${payback.barRatio * 100}%` }} /></div>
                   <p className="mt-2 text-sm tabular-nums">已收回 <b className={payback.recoveredSen < 0 ? 'text-danger' : ''}>{formatRM(payback.recoveredSen)}</b> · 开档总投入 {formatRM(payback.targetSen)} · 进度 <b>{pct(payback.ratio)}</b> · 还差 {formatRM(payback.remainingSen)}</p>
@@ -374,6 +385,15 @@ export function OverviewPage() {
       )}
     </div>
   );
+}
+
+/** 给「最近的生意」用：账本事件、订单、账目里和工钱重复的工资。 */
+function periodSource(d: { docs: LedgerDocs; orders: OrderReportRow[] } | null, labor: LaborPlan | null) {
+  if (!d || !labor) return null;
+  return {
+    events: ledgerEvents(d.docs), orders: d.orders as unknown as DatedOrder[], labor,
+    wageOverlap: (r: DateRange) => wageExpenseOverlapSen(labor, d.docs.expenses, r, (e) => opexAccrualSen(e, d.docs.expenseLinks ?? [])),
+  };
 }
 
 /** 「阿明 RM70」「阿芳没来」「按天，开门后才算」 */

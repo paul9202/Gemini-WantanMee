@@ -21,6 +21,13 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-15-today-lighter', date: '2026-11-15', roles: ['owner'],
+    title: { zh: '今天页打开更快、更省', en: 'Today page opens faster and reads less' },
+    items: [
+      { zh: '打开今天页只读最近两个星期的记录。近 30 天、收档小结、细账里的回本进度，要点一下才去读。', en: 'Today now reads only the last two weeks. The last 30 days, the closing summary and payback progress in Details load when you tap them.' },
+    ],
+  },
+  {
     id: '2026-11-15-labor', date: '2026-11-15', roles: ['owner'],
     title: { zh: '成本里可以填请人的工钱，随时能改', en: 'Staff wages can now be set in Costs, and changed any time' },
     items: [

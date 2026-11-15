@@ -6,7 +6,7 @@ import { useState } from 'react';
 import { CONVERSION_ZH, ConversionKey, conversionOf, CostSourcesDoc, DEFAULT_CONVERSIONS, isValidConversion, StockEstimate, stockEstimates } from '../../domain/costSources';
 import { Icon, Photo } from '../../ui/visual';
 import { navigate } from '../../app/router';
-import { loadStockInputs, useLoad } from './data';
+import { loadStockBase, loadStockDays, loadStockInputs, useLoad } from './data';
 import { useRunner } from './finance/data';
 import { Btn, Dialog, inputCls, Toast } from './finance/ui';
 
@@ -24,6 +24,19 @@ export function useStock(today: string) {
   const q = useLoad(() => (today ? loadStockInputs(today) : Promise.resolve(null)), `stock-${today}`);
   const estimates = q.data ? stockEstimates({ ...q.data, today }) : [];
   return { estimates, sources: q.data?.sources ?? null, loading: q.loading, error: q.error, refresh: q.refresh };
+}
+
+/**
+ * 今天页用：先读进货批次、点数、单价来源（文件很少）；有要算剩余的材料（有进货或点过数）才去读近 35 天订单。
+ * 没记进货时不多读任何订单。
+ */
+export function useStockIfTracked(today: string) {
+  const base = useLoad(() => (today ? loadStockBase() : Promise.resolve(null)), `stock-base-${today}`);
+  const probe = base.data ? stockEstimates({ ...base.data, days: [], today }) : [];
+  const tracked = probe.some((e) => e.status !== null);
+  const days = useLoad(() => (tracked ? loadStockDays(today) : Promise.resolve(null)), `stock-days-${today}-${tracked}`);
+  const estimates = base.data && days.data ? stockEstimates({ ...base.data, days: days.data, today }) : [];
+  return { estimates, refresh: () => { base.refresh(); days.refresh(); } };
 }
 
 export function StockSection({ today }: { today: string }) {

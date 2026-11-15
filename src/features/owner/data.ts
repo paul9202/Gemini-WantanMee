@@ -3,9 +3,9 @@
  * 首版直接读账本，不依赖 dailyStats 缓存；数据量变大后再加可重建的汇总缓存。
  */
 import { useCallback, useEffect, useState } from 'react';
-import { collection, doc, getDoc, getDocs, query, where, QueryConstraint } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, where, QueryConstraint } from 'firebase/firestore';
 import { BOM_V1, BOM_VERSIONS, BomVersion } from '../../domain/bom';
-import { DEFAULT_SALES_TARGETS } from '../../domain/costing';
+import { DEFAULT_EXPENSE_PLAN, DEFAULT_SALES_TARGETS, ExpenseLinkDoc, ExpensePlan, StartupCostDoc } from '../../domain/costing';
 import { addDays } from '../../domain/businessDay';
 import { CostSourcesDoc, DayUsage, EMPTY_COST_SOURCES, StockBatch, StockCountDoc } from '../../domain/costSources';
 import { materialUsage, UsageOrder } from '../../domain/usage';
@@ -138,24 +138,58 @@ export async function loadCostSources(): Promise<CostSourcesDoc> {
  * 35 天够涵盖「近 30 天第一次进货」起点和前三周同一天。
  */
 export async function loadStockInputs(today: string): Promise<{ days: DayUsage[]; batches: StockBatch[]; counts: StockCountDoc[]; sources: CostSourcesDoc }> {
-  const from = addDays(today, -35), to = addDays(today, 1);
-  const [orders, batches, counts, sources] = await Promise.all([
-    fetchAll<UsageOrder & { businessDate: string }>('orders', where('businessDate', '>=', from), where('businessDate', '<', to)),
-    fetchAll<StockBatch>('ingredientBatches'),
-    fetchAll<StockCountDoc>('stockCounts'),
-    loadCostSources(),
-  ]);
-  const days: DayUsage[] = [];
-  for (let d = from; d < to; d = addDays(d, 1)) days.push({ date: d, usage: materialUsage(orders.filter((o) => o.businessDate === d)) });
-  return { days, batches, counts, sources };
+  const [base, days] = await Promise.all([loadStockBase(), loadStockDays(today)]);
+  return { ...base, days };
 }
 
-/** 一段营业日的订单（今天页「最近的生意」算单数、碗数、粒面、卖最多用）。 */
-export async function loadOrdersRange(range: DateRange): Promise<(UsageOrder & { businessDate: string })[]> {
-  return fetchAll<UsageOrder & { businessDate: string }>('orders', ...inRange('businessDate', range));
+/** 进货批次、收档点数、单价来源（文件很少）。今天页先读这些，有要算剩余的材料才去读订单。 */
+export async function loadStockBase(): Promise<{ batches: StockBatch[]; counts: StockCountDoc[]; sources: CostSourcesDoc }> {
+  const [batches, counts, sources] = await Promise.all([fetchAll<StockBatch>('ingredientBatches'), fetchAll<StockCountDoc>('stockCounts'), loadCostSources()]);
+  return { batches, counts, sources };
+}
+
+/** 近 35 天每天的用量（由订单算）。 */
+export async function loadStockDays(today: string): Promise<DayUsage[]> {
+  const from = addDays(today, -35), to = addDays(today, 1);
+  const orders = await fetchAll<UsageOrder & { businessDate: string }>('orders', where('businessDate', '>=', from), where('businessDate', '<', to));
+  const days: DayUsage[] = [];
+  for (let d = from; d < to; d = addDays(d, 1)) days.push({ date: d, usage: materialUsage(orders.filter((o) => o.businessDate === d)) });
+  return days;
 }
 
 /** 请人工钱设定（config/labor）；没设过就是没请人。 */
 export async function loadLaborPlan(): Promise<LaborPlan> {
   return laborPlanOf((await getDoc(doc(db, storePath('config/labor')))).data());
+}
+
+/** 开档日：最早一笔收款的营业日（只读 1 条）。 */
+export async function loadFirstBusinessDay(): Promise<string | null> {
+  const snap = await getDocs(query(collection(db, storePath('payments')), orderBy('businessDate'), limit(1)));
+  return (snap.docs[0]?.data().businessDate as string | undefined) ?? null;
+}
+
+/** 从已载入的一段账本里切出更短的一段（不再查询）。 */
+export function sliceLedger(d: { docs: LedgerDocs; orders: OrderReportRow[] }, r: DateRange): { docs: LedgerDocs; orders: OrderReportRow[] } {
+  const inR = (x: string) => x >= r.start && x < r.endExclusive;
+  return {
+    docs: {
+      payments: d.docs.payments.filter((x) => inR(x.businessDate)), refunds: d.docs.refunds.filter((x) => inR(x.businessDate)),
+      costEvents: d.docs.costEvents.filter((x) => inR(x.businessDate)), wastage: d.docs.wastage.filter((x) => inR(x.businessDate)),
+      expenses: d.docs.expenses.filter((x) => inR(x.businessDate) || inR(x.accrualDate)), cashMovements: d.docs.cashMovements.filter((x) => inR(x.businessDate)),
+      writeOffs: (d.docs.writeOffs ?? []).filter((x) => inR((x as { businessDate: string }).businessDate)), expenseLinks: d.docs.expenseLinks,
+    },
+    orders: d.orders.filter((o) => inR(o.businessDate)),
+  };
+}
+
+/** 回本进度要的全部历史（只在打开「细账」时读）：开档以来的收款、退款、支出，开档投入、支出计划、支出归属。 */
+export async function loadPaybackInputs(): Promise<{ receiptsSen: Sen; refundsSen: Sen; expenses: LedgerDocs['expenses']; startup: StartupCostDoc[]; plan: ExpensePlan; links: ExpenseLinkDoc[] }> {
+  const [payments, refunds, expenses, startup, planDoc, links] = await Promise.all([
+    fetchAll<LedgerDocs['payments'][number]>('payments'), fetchAll<LedgerDocs['refunds'][number]>('refunds'), fetchAll<LedgerDocs['expenses'][number]>('expenses'),
+    fetchAll<StartupCostDoc>('startupCosts'), getDoc(doc(db, storePath('config/expensePlan'))), fetchAll<ExpenseLinkDoc>('expenseLinks'),
+  ]);
+  return {
+    receiptsSen: payments.reduce((s, p) => s + p.amountSen, 0), refundsSen: refunds.reduce((s, r) => s + r.amountSen, 0), expenses, startup,
+    plan: { ...DEFAULT_EXPENSE_PLAN, ...(planDoc.data()?.plan ?? {}) }, links,
+  };
 }
