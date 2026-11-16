@@ -61,14 +61,14 @@ for (const paper of [80, 58] as const) {
   });
 }
 
-test('牌号放大 8 倍居中；面薄黑底；没有付款字样', () => {
+test('牌号放大 8 倍居中；面薄和细面一样普通字（不黑底）；没有付款字样', () => {
   const lines = layoutRunnerSlip(slip(), 80);
   const token = lines.find((l) => l.segs.some((s) => s.text === '12' && s.w === 8));
   assert.ok(token && token.align === 'center');
   const meePoh = lines.flatMap((l) => l.segs).find((s) => s.text.trim() === '面薄');
-  assert.ok(meePoh?.inv, '面薄黑底');
+  assert.ok(meePoh && !meePoh.inv, '面薄不黑底：小字黑底在实机上糊成一块');
   const text = previewLines(lines).join('\n');
-  assert.ok(text.includes('   面薄  · 少辣 · 走青 · 加叉烧') || text.includes(' 面薄 '), text);
+  assert.ok(text.includes('   面薄 · 少辣 · 走青 · 加叉烧'), text);
   assert.ok(!/要收|已付|不用收/.test(text));
 });
 

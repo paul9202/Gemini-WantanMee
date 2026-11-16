@@ -24,7 +24,7 @@ export const SAMPLE_SLIPS: readonly SampleSlipDef[] = [
   { id: 'dine_in', token: 81, title: { zh: '堂食 · 两碗', en: 'Dine-in · 2 bowls' }, check: { zh: '表头、金额靠右、合计放大', en: 'Header, amounts on the right, big total' } },
   { id: 'takeaway', token: 82, title: { zh: '打包', en: 'Takeaway' }, check: { zh: '整条黑底印得黑不黑', en: 'Is the black header bar solid?' } },
   { id: 'mixed', token: 83, title: { zh: '堂食 + 打包', en: 'Dine-in + takeaway' }, check: { zh: '行前面的黑底「打包」', en: 'Black “打包” tag before a line' } },
-  { id: 'many', token: 84, title: { zh: '要求很多', en: 'Many requests' }, check: { zh: '面薄黑底、净面加框、长要求换行不丢字', en: 'Mee pok in black, kosong boxed, long requests wrap without losing words' } },
+  { id: 'many', token: 84, title: { zh: '要求很多', en: 'Many requests' }, check: { zh: '净面加框、面薄写清楚、长要求换行不丢字', en: 'Kosong boxed, mee pok readable, long requests wrap without losing words' } },
   { id: 'shared', token: 85, title: { zh: '同牌加单', en: 'Same-token add-on' }, check: { zh: '牌号下面的说明框', en: 'Note box under the token' } },
   { id: 'extra', token: 86, title: { zh: '加料', en: 'Extra' }, check: { zh: '很短的一张，撕纸口够不够', en: 'A very short slip: enough paper to tear?' } },
   { id: 'offline', token: 87, title: { zh: '断网单', en: 'Offline order' }, check: { zh: '整条黑底「后厨屏上没有」', en: 'Black “not on kitchen screen” bar' } },

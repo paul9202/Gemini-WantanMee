@@ -21,6 +21,13 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-slip-meepok-plain', date: '2026-11-16', roles: FRONT,
+    title: { zh: '送餐单上的「面薄」改成普通字', en: '“面薄” on order slips is now plain text' },
+    items: [
+      { zh: '送餐单上「面薄」原来是黑底白字，有的打印机印出来糊成一块看不清，现在和「细面」一样写普通字。后厨屏照旧把面薄单独标出来。', en: 'On order slips, “面薄” (mee pok) was white on black and some printers smudged it; it is now plain text like “细面”. The kitchen screen still highlights mee pok.' },
+    ],
+  },
+  {
     id: '2026-11-16-review-clears', date: '2026-11-16', roles: FRONT,
     title: { zh: '老板核对过的离线记录，收银机会自己清掉', en: 'Offline records the owner has reviewed now clear on the register' },
     items: [

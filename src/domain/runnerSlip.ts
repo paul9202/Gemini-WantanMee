@@ -2,7 +2,8 @@
  * 送餐单（2026-11-12）：收银下单后在出餐口打一张纸单，送面的人照着对号送。纯函数，只决定写什么，排版与打印在 data/printer。
  * - 只用订单现有字段：牌号、堂食/打包、接单时间、票号（断网单写临时号）、每行品名、要求、数量、每行金额与合计。
  * - 不写付款状态（要收 / 已付）、付款方式、成本：纸单金额是订单金额，客人付没付看后厨卡片。
- * - 面种、要求的写法和收据同一个规则（modifierNamesZh）；面薄、净面、混合单里的打包用黑底标出。
+ * - 面种、要求的写法和收据同一个规则（modifierNamesZh）；净面加框、混合单里的打包用黑底标出。
+ *   面薄和细面一样写普通字（2026-11-16 实机：小字黑底在便宜打印机上糊成一块看不清）；后厨屏照旧强调面薄。
  * - 干捞云吞的酱料收据没写，这里补上：断网时厨师照纸单做。
  * - 加料行写下单时自动生成的「给 …」备注；同牌加单、吃完再加、加料各有一句说明。
  * - 补打写「补打 N」；结果不明、核对后才确认接单的单写「核对后补打」。
@@ -45,8 +46,8 @@ export interface RunnerSlipLine {
   name: string;
   /** 品名前面的标记：混合单里的打包（黑底）、净面（框）。 */
   tags: { text: string; outline?: boolean }[];
-  /** 品名下面的小字，按顺序：面种（面薄黑底）、干捞云吞的酱料、要求；加料是「给 …」。 */
-  detail: { text: string; strong?: boolean }[];
+  /** 品名下面的小字，按顺序：面种、干捞云吞的酱料、要求；加料是「给 …」。 */
+  detail: { text: string }[];
   amountSen: number;
 }
 
@@ -84,9 +85,8 @@ function slipLine(menu: MenuVersion, l: RunnerSlipSource['lines'][number], order
   const tags: RunnerSlipLine['tags'] = [];
   if (orderMode === 'mixed' && mode === 'takeaway') tags.push({ text: '打包' });
   if (c.isKosong) tags.push({ text: '净面', outline: true });
-  // 面薄约占一成，容易凭习惯煮成细面：和后厨屏一样单独强调。
   const detail: RunnerSlipLine['detail'] = [
-    ...(c.noodleType ? [{ text: NOODLE_TYPE_NAMES[c.noodleType].zh, strong: c.noodleType === 'mee_poh' }] : []),
+    ...(c.noodleType ? [{ text: NOODLE_TYPE_NAMES[c.noodleType].zh }] : []),
     ...(c.productKind === 'dry_wanton' && c.sauce ? [{ text: SAUCE_NAMES[c.sauce].zh }] : []),
     ...modifierNamesZh(menu, c, mode).map((text) => ({ text })),
   ];

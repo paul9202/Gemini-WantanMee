@@ -177,7 +177,7 @@ export function layoutRunnerSlip(slip: RunnerSlip, width: PaperWidth): PrintLine
     name.push({ text: l.name, bold: true, h: 2 });
     out.push(...spread(name, [{ text: slipAmount(l.amountSen), bold: true, h: 2 }], cols, { h: 2 }));
     if (l.detail.length) {
-      const segs = l.detail.map((d) => ({ lead: ' · ', ...(d.strong ? { text: ` ${d.text} `, inv: true, bold: true } : { text: d.text }) }));
+      const segs = l.detail.map((d) => ({ lead: ' · ', text: d.text }));
       out.push(...wrapSegs(segs, cols, '   '));
     }
   }

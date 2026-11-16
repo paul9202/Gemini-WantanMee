@@ -48,10 +48,10 @@ test('每种单的写法和真单一样：打包、混合、断网、加料、�
   assert.equal(build('big').count, 6);
 });
 
-test('要求很多那张：净面加框、面薄强调、要求够多（排版时会折行）', () => {
+test('要求很多那张：净面加框、面薄在最前面、要求够多（排版时会折行）', () => {
   const s = build('many');
   assert.deepEqual(s.lines[0].tags, [{ text: '净面', outline: true }]);
-  assert.deepEqual(s.lines[1].detail[0], { text: '面薄', strong: true });
+  assert.deepEqual(s.lines[1].detail[0], { text: '面薄' });
   assert.ok(s.lines[1].detail.length >= 6, s.lines[1].detail.map((d) => d.text).join(' · '));
 });
 

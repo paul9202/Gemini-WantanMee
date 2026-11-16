@@ -35,11 +35,10 @@ test('堂食：牌号、时间、品名、面种在前、要求、每行金额�
   assert.equal(s.time, '14:32', '按门店时区写接单时间');
   assert.equal(s.token, 12);
   assert.equal(s.lines[0].name, '黑酱面 · 中');
-  assert.deepEqual(s.lines[0].detail[0], { text: '面薄', strong: true }, '面薄写在最前面并强调');
+  assert.deepEqual(s.lines[0].detail[0], { text: '面薄' }, '面薄写在最前面，和细面一样普通字（不再黑底）');
   assert.deepEqual(details(s, 0), ['面薄', '少辣', '走青', '加叉烧']);
   assert.equal(s.lines[0].amountSen, 1100, '中碗 9.00 + 加叉烧 2.00');
   assert.deepEqual(details(s, 1), ['细面'], '细面照写，不强调');
-  assert.equal(s.lines[1].detail[0].strong, false);
   assert.equal(s.totalSen, 1800);
   assert.equal(s.ref, '#261112-037');
   assert.equal(s.count, 2);
