@@ -1,5 +1,5 @@
 /**
- * 试打清单：7 项各自什么时候算过；样单记一次；换了打印机从头来。
+ * 试打清单：8 项各自什么时候算过；样单记一次；换了打印机从头来。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,17 +7,18 @@ import { SAMPLE_SLIPS } from '../../domain/sampleSlips';
 import { emptyTrial, loadTrial, saveTrial, TRIAL_CHECKS, trialChecks, trialPassed, trialPassedCount, withSample } from './trial';
 import type { TrialRecord } from './trial';
 
-test('什么都没试：7 项都没过', () => {
+test('什么都没试：8 项都没过', () => {
   const r = emptyTrial('dev-1');
-  assert.equal(TRIAL_CHECKS.length, 7);
+  assert.equal(TRIAL_CHECKS.length, 8);
   assert.equal(trialPassedCount(r), 0);
   assert.equal(trialPassed(r), false);
 });
 
 test('测试条的答案：只有「好的那个答案」才算过', () => {
-  const c = trialChecks({ ...emptyTrial('dev-1'), chinese: 'ok', width: 'two_lines', tail: 'ok', received: 'no' });
+  const c = trialChecks({ ...emptyTrial('dev-1'), chinese: 'ok', width: 'two_lines', spacing: 'overlap', tail: 'ok', received: 'no' });
   assert.equal(c.chinese, true);
   assert.equal(c.width, false, '断成两行不算过');
+  assert.equal(c.spacing, false, '大字压住下一行不算过');
   assert.equal(c.tail, true);
   assert.equal(c.received, false);
 });
@@ -40,7 +41,7 @@ test('连打要老板确认 5 张都完整才算过；断开演练做完就算�
 });
 
 test('全部过了', () => {
-  let r: TrialRecord = { ...emptyTrial('dev-1'), chinese: 'ok', width: 'ok', tail: 'ok', received: 'ok', rush: { totalMs: 1, maxMs: 1, whole: true }, drill: { ms: 1, manual: false } };
+  let r: TrialRecord = { ...emptyTrial('dev-1'), chinese: 'ok', width: 'ok', spacing: 'ok', tail: 'ok', received: 'ok', rush: { totalMs: 1, maxMs: 1, whole: true }, drill: { ms: 1, manual: false } };
   for (const s of SAMPLE_SLIPS) r = withSample(r, s.id);
   assert.equal(trialPassed(r), true);
 });

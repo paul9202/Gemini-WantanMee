@@ -205,6 +205,7 @@ export function layoutTestPage(info: { width: PaperWidth; at: string; deviceName
     ...spread([{ text: '时间' }], [{ text: info.at }], cols),
     rule,
     { segs: [{ text: '虚线断成两行 = 纸宽选错了', bold: true }], align: 'center' },
+    { segs: [{ text: '大字压住虚线 = 行距改加大', bold: true }], align: 'center' },
     { segs: [{ text: '在出餐口收到这张 = 蓝牙够远' }], align: 'center' },
     { segs: [{ text: '中文清楚 = 有中文字库' }], align: 'center' },
     { segs: [{ text: info.cut === 'auto' ? '下面应该自动切开' : '从这里撕下' }], align: 'center' },
@@ -229,12 +230,29 @@ const ALIGN = { left: 0, center: 1, right: 2 } as const;
  */
 export type CutMode = 'auto' | 'tear';
 
-export function encodeLines(lines: PrintLine[], cut: CutMode = 'tear'): Uint8Array {
+/**
+ * 行距（2026-11-16 实机）：有的便宜机器打完两倍高的一行，只往下走普通一行的距离，下一行的小字压在大字下半截上。
+ * 所以每行换行前用 ESC 3 n 写明这一行走多少点：普通字 24 点高、两倍高 48 点高，再留一点空。
+ * 中文最多两倍高，牌号这种更大的字照两倍算：真能放到 8 倍的机器按规范会自己走够字高。
+ * wide 是给还压着的机器留的余地（试打印的测试条会问）。
+ */
+export type LineSpacing = 'normal' | 'wide';
+export const LINE_DOTS: Record<LineSpacing, { normal: number; tall: number }> = {
+  normal: { normal: 30, tall: 56 },
+  wide: { normal: 36, tall: 68 },
+};
+
+export function encodeLines(lines: PrintLine[], cut: CutMode = 'tear', spacing: LineSpacing = 'normal'): Uint8Array {
   const out: number[] = [ESC, 0x40, FS, 0x26]; // 初始化；进入中文模式
   let align: keyof typeof ALIGN = 'left';
   let size = 0;
   let inv = false;
   let bold = false;
+  let feed = -1;
+  const setFeed = (dots: number) => {
+    if (dots !== feed) out.push(ESC, 0x33, dots);
+    feed = dots;
+  };
   const setSize = (w: number, h: number) => {
     const n = ((Math.min(8, Math.max(1, w)) - 1) << 4) | (Math.min(8, Math.max(1, h)) - 1);
     if (n === size) return;
@@ -261,11 +279,14 @@ export function encodeLines(lines: PrintLine[], cut: CutMode = 'tear'): Uint8Arr
       out.push(...encodeGb18030(s.text));
     }
     setInv(false);
+    const tall = line.segs.some((s) => (s.h ?? 1) >= 2);
+    setFeed(tall ? LINE_DOTS[spacing].tall : LINE_DOTS[spacing].normal);
     out.push(0x0a);
     setSize(1, 1);
     setBold(false);
   }
   if (align !== 'left') out.push(ESC, 0x61, 0);
+  setFeed(LINE_DOTS[spacing].normal); // 最后走纸按普通行距算，撕纸口长短不变
   if (cut === 'auto') {
     out.push(ESC, 0x64, 4); // 走纸到切刀
     out.push(GS, 0x56, 66, 0); // 切纸
@@ -275,4 +296,4 @@ export function encodeLines(lines: PrintLine[], cut: CutMode = 'tear'): Uint8Arr
   return Uint8Array.from(out);
 }
 
-export const encodeRunnerSlip = (slip: RunnerSlip, width: PaperWidth, cut: CutMode = 'tear') => encodeLines(layoutRunnerSlip(slip, width), cut);
+export const encodeRunnerSlip = (slip: RunnerSlip, width: PaperWidth, cut: CutMode = 'tear', spacing: LineSpacing = 'normal') => encodeLines(layoutRunnerSlip(slip, width), cut, spacing);

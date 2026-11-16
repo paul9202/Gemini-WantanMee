@@ -131,6 +131,11 @@ export function PrinterSheet({ onClose }: { onClose: () => void }) {
                     <Choice label={tr('切纸', 'Cutting')} value={s.settings.cut} onChange={(c) => printer.setCut(c)}
                       options={[['tear', tr('手撕', 'Tear')], ['auto', tr('自动切刀', 'Auto cutter')]]} />
                   </div>
+                  <div className="flex items-center gap-3 border-b border-line py-4">
+                    <div className="min-w-0 flex-1"><b>{tr('行距', 'Line spacing')}</b><p className="text-[13px] text-ink-2">{tr('大字（品名、合计）压住下面一行小字时，选「加大」', 'If large text (dish names, total) overlaps the line below, choose Wide')}</p></div>
+                    <Choice label={tr('行距', 'Line spacing')} value={s.settings.spacing} onChange={(v) => printer.setSpacing(v)}
+                      options={[['normal', tr('标准', 'Standard')], ['wide', tr('加大', 'Wide')]]} />
+                  </div>
 
                   {failed.length > 0 && (
                     <>

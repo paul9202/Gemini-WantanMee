@@ -1,5 +1,5 @@
 /**
- * 试打清单（2026-11-16）：打印机到货后在主收银平板上试打，7 项都过了再去设置里打开送餐单打印。
+ * 试打清单（2026-11-16）：打印机到货后在主收银平板上试打，8 项都过了再去设置里打开送餐单打印。
  * 只记在这台平板（localStorage），按打印机记：换了一台打印机（ID 不一样）就从头试。
  */
 import { SAMPLE_SLIPS, SampleSlipId } from '../../domain/sampleSlips';
@@ -7,9 +7,11 @@ import { SAMPLE_SLIPS, SampleSlipId } from '../../domain/sampleSlips';
 export interface TrialRecord {
   /** 试的是哪台打印机（蓝牙设备 ID）。 */
   printerId: string | null;
-  /** 测试条的 4 个问题。 */
+  /** 测试条的 5 个问题。 */
   chinese?: 'ok' | 'bad';
   width?: 'ok' | 'two_lines' | 'two_thirds';
+  /** 大字的下一行有没有压在大字上（行距）。 */
+  spacing?: 'ok' | 'overlap';
   tail?: 'ok' | 'junk';
   received?: 'ok' | 'no';
   /** 打出来过的样单。 */
@@ -20,13 +22,16 @@ export interface TrialRecord {
   drill?: { ms: number; manual: boolean };
 }
 
-export type TrialCheckId = 'chinese' | 'width' | 'tail' | 'received' | 'samples' | 'rush' | 'drill';
-export const TRIAL_CHECKS: readonly TrialCheckId[] = ['chinese', 'width', 'tail', 'received', 'samples', 'rush', 'drill'];
+export type TrialCheckId = 'chinese' | 'width' | 'spacing' | 'tail' | 'received' | 'samples' | 'rush' | 'drill';
+export const TRIAL_CHECKS: readonly TrialCheckId[] = ['chinese', 'width', 'spacing', 'tail', 'received', 'samples', 'rush', 'drill'];
+/** 测试条那几题。 */
+export const STRIP_CHECKS: readonly TrialCheckId[] = ['chinese', 'width', 'spacing', 'tail', 'received'];
 
 export function trialChecks(r: TrialRecord): Record<TrialCheckId, boolean> {
   return {
     chinese: r.chinese === 'ok',
     width: r.width === 'ok',
+    spacing: r.spacing === 'ok',
     tail: r.tail === 'ok',
     received: r.received === 'ok',
     samples: SAMPLE_SLIPS.every((s) => r.samples.includes(s.id)),

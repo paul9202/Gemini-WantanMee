@@ -1,6 +1,6 @@
 /**
  * 试打印（2026-11-16）：打印机到货后，不下真单把打印机试透。从设备页（全店总开关关着也有）和打印机面板打开。
- * ① 测试条 + 4 个问题（答错了直接给办法）② 9 张样单 ③ 连打 5 张 ④ 断开再连；试打清单 7 项都过了再去设置里打开。
+ * ① 测试条 + 5 个问题（答错了直接给办法）② 9 张样单 ③ 连打 5 张 ④ 断开再连；试打清单 8 项都过了再去设置里打开。
  * 样单和真单同一套排版、同一个打印队列，但不建订单、不占牌号、不记打印次数（domain/sampleSlips、printerManager.enqueueTest）。
  * 开店中（总开关打开）也能打测试条和单张样单；连打和断开演练会挡住真单，只在总开关关着时能用。
  */
@@ -11,10 +11,10 @@ import { useLang, useT } from '../../app/i18n';
 import { useMenu } from '../../data/menu';
 import { MENU_V1, MenuVersion } from '../../domain/menu';
 import { buildSampleSlip, SAMPLE_SLIPS, sampleDef, SampleSlipId } from '../../domain/sampleSlips';
-import { layoutRunnerSlip, PaperWidth } from '../../data/printer/escpos';
+import { layoutRunnerSlip, LineSpacing, PaperWidth } from '../../data/printer/escpos';
 import { printer, slipPrintingOn, usePrinter } from '../../data/printer/printer';
 import { SlipJob, testPageLines, TestPrintResult } from '../../data/printer/printerManager';
-import { emptyTrial, loadTrial, saveTrial, TRIAL_CHECKS, TrialCheckId, trialChecks, TrialRecord, trialPassedCount, withSample } from '../../data/printer/trial';
+import { emptyTrial, loadTrial, saveTrial, STRIP_CHECKS, TRIAL_CHECKS, TrialCheckId, trialChecks, TrialRecord, trialPassedCount, withSample } from '../../data/printer/trial';
 import { Choice, linkErrorText } from './PrinterPanel';
 import { PrinterGuideDialog } from './PrinterGuide';
 import { PaperPreview } from './PaperPreview';
@@ -132,6 +132,7 @@ export function TestPrintSheet({ onClose }: { onClose: () => void }) {
         <LinkChip tr={tr} />
         <Choice label={tr('纸宽', 'Paper width')} value={s.settings.width} onChange={(w) => printer.setWidth(w)} options={[[58, '58mm'], [80, '80mm']]} />
         <Choice label={tr('切纸', 'Cutting')} value={s.settings.cut} onChange={(c) => printer.setCut(c)} options={[['tear', tr('手撕', 'Tear')], ['auto', tr('自动切刀', 'Auto cutter')]]} />
+        <Choice label={tr('行距', 'Line spacing')} value={s.settings.spacing} onChange={(v) => printer.setSpacing(v)} options={[['normal', tr('标准行距', 'Standard')], ['wide', tr('加大行距', 'Wide')]]} />
         <button type="button" onClick={() => setGuide(true)} className="h-12 rounded-xl px-2 font-semibold text-ink-2 underline underline-offset-4">{tr('连接说明', 'How to connect')}</button>
       </header>
       {guide && <PrinterGuideDialog onClose={() => setGuide(false)} />}
@@ -150,9 +151,9 @@ export function TestPrintSheet({ onClose }: { onClose: () => void }) {
           ) : (
             <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
               <div className="space-y-2.5">
-                <Item no={1} done={checks.chinese && checks.width && checks.tail && checks.received}
+                <Item no={1} done={STRIP_CHECKS.every((k) => checks[k])}
                   title={tr('① 测试条', '① Test strip')}
-                  sub={tr(`中文、纸宽、切纸、距离 · ${['chinese', 'width', 'tail', 'received'].filter((k) => checks[k as TrialCheckId]).length} / 4 通过`, `Chinese, width, cutting, range · ${['chinese', 'width', 'tail', 'received'].filter((k) => checks[k as TrialCheckId]).length} / 4 passed`)}
+                  sub={tr(`中文、纸宽、行距、切纸、距离 · ${STRIP_CHECKS.filter((k) => checks[k]).length} / ${STRIP_CHECKS.length} 通过`, `Chinese, width, spacing, cutting, range · ${STRIP_CHECKS.filter((k) => checks[k]).length} / ${STRIP_CHECKS.length} passed`)}
                   action={<button type="button" onClick={() => setView('strip')} className="h-12 rounded-lg border border-line px-3 font-semibold">{trial.chinese ? tr('再看', 'Open') : tr('打测试条', 'Print strip')}</button>} />
 
                 <Item no={2} done={checks.samples} open
@@ -232,7 +233,7 @@ export function TestPrintSheet({ onClose }: { onClose: () => void }) {
                   )}
                 </Item>
 
-                <Checklist tr={tr} trial={trial} checks={checks} passed={passed} width={s.settings.width} storeOn={storeOn} isOwner={isOwner}
+                <Checklist tr={tr} trial={trial} checks={checks} passed={passed} width={s.settings.width} spacingSetting={s.settings.spacing} storeOn={storeOn} isOwner={isOwner}
                   onGoSettings={() => { onClose(); navigate('/owner/settings'); }} onReset={() => update(() => emptyTrial(s.settings.deviceId))} />
               </div>
 
@@ -336,10 +337,10 @@ function StripView({ tr, strip, canPrint, onPrint, trial, update }: {
 }) {
   const s = usePrinter();
   const lines = useMemo(() => testPageLines(s.settings, Date.now()), [s.settings]);
-  const answered = trial.chinese || trial.width || trial.tail || trial.received;
+  const answered = trial.chinese || trial.width || trial.spacing || trial.tail || trial.received;
   const ask = (strip !== null && strip !== 'printing' && strip.ok) || Boolean(answered);
   /** 改了设置再打一张：那一题重新答。 */
-  const fixAndReprint = (apply: () => void, clear: 'width' | 'tail') => {
+  const fixAndReprint = (apply: () => void, clear: 'width' | 'spacing' | 'tail') => {
     apply();
     update((r) => ({ ...r, [clear]: undefined }));
     onPrint();
@@ -353,6 +354,10 @@ function StripView({ tr, strip, canPrint, onPrint, trial, update }: {
       ? (w === 58 ? <><p className="min-w-[200px] flex-1"><b>{tr('纸宽选错了。', 'Wrong paper width.')}</b>{tr('这是 80mm 的打印机，现在选的是 58mm。', ' This is an 80mm printer but 58mm is selected.')}</p>{fixBtn(tr('改成 80mm，再打一张', 'Use 80mm and print again'), () => fixAndReprint(() => printer.setWidth(80), 'width'))}</>
         : <p>{tr('已经是 80mm 还只到三分之二：拍照发给开发。', 'Already 80mm and still two-thirds: send a photo to the developer.')}</p>)
       : null;
+  const spacingFix = trial.spacing === 'overlap'
+    ? (s.settings.spacing !== 'wide' ? <><p className="min-w-[200px] flex-1"><b>{tr('行距不够。', 'Not enough line spacing.')}</b>{tr('这台打印机打完大字走得不够远。', ' This printer does not feed far enough after large text.')}</p>{fixBtn(tr('加大行距，再打一张', 'Wider spacing and print again'), () => fixAndReprint(() => printer.setSpacing('wide'), 'spacing'))}</>
+      : <p>{tr('已经加大了还压着：拍照发给开发。', 'Already wide and still overlapping: send a photo to the developer.')}</p>)
+    : null;
   const tailFix = trial.tail === 'junk'
     ? (s.settings.cut === 'auto' ? <><p className="min-w-[200px] flex-1">{tr('打印机没有切刀，却选了「自动切刀」。', 'The printer has no cutter but Auto cutter is selected.')}</p>{fixBtn(tr('改成手撕，再打一张', 'Use Tear and print again'), () => fixAndReprint(() => printer.setCut('tear'), 'tail'))}</>
       : <p>{tr('选的是手撕还多出怪字母：拍照发给开发。', 'Tear is selected and there is still junk: send a photo to the developer.')}</p>)
@@ -373,7 +378,7 @@ function StripView({ tr, strip, canPrint, onPrint, trial, update }: {
             : <span className="font-semibold text-danger">{linkErrorText(strip.code, tr)}</span>)}
           {!canPrint && <span className="text-sm text-ink-2">{tr('先在页头连接打印机', 'Connect the printer at the top first')}</span>}
         </div>
-        <p className="mt-2 text-[13px] text-ink-2">{tr('打完到出餐口拿纸，和左边比一比，回答下面 4 个问题。', 'Fetch the strip at the pass, compare it with the preview, and answer the 4 questions.')}</p>
+        <p className="mt-2 text-[13px] text-ink-2">{tr('打完到出餐口拿纸，和左边比一比，回答下面 5 个问题。', 'Fetch the strip at the pass, compare it with the preview, and answer the 5 questions.')}</p>
         <div className="mt-2">
           <Question disabled={!ask} q={tr('1. 纸上的中文清楚吗？', '1. Is the Chinese text clear?')} value={trial.chinese}
             options={[['ok', tr('清楚', 'Clear')], ['bad', tr('变成问号 / 乱码', 'Question marks / garbage')]]} onPick={(v) => update((r) => ({ ...r, chinese: v }))}
@@ -381,10 +386,12 @@ function StripView({ tr, strip, canPrint, onPrint, trial, update }: {
           <Question disabled={!ask} q={tr('2. 上下两条虚线是什么样？', '2. What do the two dashed lines look like?')} value={trial.width}
             options={[['ok', tr('正好一整行', 'Exactly one full line')], ['two_lines', tr('断成两行', 'Broken onto two lines')], ['two_thirds', tr('只到纸的三分之二', 'Only two-thirds across')]]}
             onPick={(v) => update((r) => ({ ...r, width: v }))} fix={widthFix} />
-          <Question disabled={!ask} q={tr('3. 纸的最后一截？', '3. The end of the paper?')} value={trial.tail}
+          <Question disabled={!ask} q={tr('3. 大字（88 下面那行菜名）和下面的虚线，有没有压在一起？', '3. Does the large line (the dish line under 88) overlap the dashed line below it?')} value={trial.spacing}
+            options={[['ok', tr('分得开', 'Clearly apart')], ['overlap', tr('压在一起', 'Overlapping')]]} onPick={(v) => update((r) => ({ ...r, spacing: v }))} fix={spacingFix} />
+          <Question disabled={!ask} q={tr('4. 纸的最后一截？', '4. The end of the paper?')} value={trial.tail}
             options={[['ok', s.settings.cut === 'auto' ? tr('自动切开了', 'Cut automatically') : tr('好撕，没多东西', 'Easy to tear, nothing extra')], ['junk', tr('多出几个怪字母', 'A few odd letters')]]}
             onPick={(v) => update((r) => ({ ...r, tail: v }))} fix={tailFix} />
-          <Question disabled={!ask} q={tr('4. 在出餐口拿到了吗？', '4. Did it come out at the pass?')} value={trial.received}
+          <Question disabled={!ask} q={tr('5. 在出餐口拿到了吗？', '5. Did it come out at the pass?')} value={trial.received}
             options={[['ok', tr('拿到了', 'Yes')], ['no', tr('没看到', 'No')]]} onPick={(v) => update((r) => ({ ...r, received: v }))}
             fix={trial.received === 'no' ? <p>{tr('看纸卷装反没有（热敏面朝外）、有没有纸；把打印机拿近一点再打一张。还是不行，多半是蓝牙太远或被不锈钢柜挡住。', 'Check the roll is not upside down (heat side out) and has paper; move the printer closer and print again. If it still fails, Bluetooth is too far or blocked by steel.')}</p> : null} />
         </div>
@@ -429,6 +436,7 @@ function SamplePane({ id, tr, txt, menu, timeZone, width, canPrint, busy, remain
 const CHECK_LABEL: Record<TrialCheckId, Text> = {
   chinese: { zh: '中文清楚', en: 'Chinese is clear' },
   width: { zh: '纸宽对', en: 'Paper width is right' },
+  spacing: { zh: '大字不压下一行', en: 'Large text does not overlap' },
   tail: { zh: '纸尾对', en: 'Paper end is right' },
   received: { zh: '出餐口收得到', en: 'Reaches the pass' },
   samples: { zh: `${SAMPLE_SLIPS.length} 张样单都打过`, en: `All ${SAMPLE_SLIPS.length} samples printed` },
@@ -436,12 +444,13 @@ const CHECK_LABEL: Record<TrialCheckId, Text> = {
   drill: { zh: '断开后自动补打', en: 'Reprints after reconnecting' },
 };
 
-function Checklist({ tr, trial, checks, passed, width, storeOn, isOwner, onGoSettings, onReset }: {
-  tr: Tr; trial: TrialRecord; checks: Record<TrialCheckId, boolean>; passed: number; width: number; storeOn: boolean; isOwner: boolean; onGoSettings: () => void; onReset: () => void;
+function Checklist({ tr, trial, checks, passed, width, spacingSetting, storeOn, isOwner, onGoSettings, onReset }: {
+  tr: Tr; trial: TrialRecord; checks: Record<TrialCheckId, boolean>; passed: number; width: number; spacingSetting: LineSpacing; storeOn: boolean; isOwner: boolean; onGoSettings: () => void; onReset: () => void;
 }) {
   const lang = useLang();
   const detail: Partial<Record<TrialCheckId, string>> = {
     width: checks.width ? `${width}mm` : undefined,
+    spacing: checks.spacing ? (spacingSetting === 'wide' ? tr('加大', 'wide') : tr('标准', 'standard')) : undefined,
     samples: `${trial.samples.length} / ${SAMPLE_SLIPS.length}`,
     rush: trial.rush ? tr(`最慢一张 ${sec(trial.rush.maxMs)} 秒`, `slowest ${sec(trial.rush.maxMs)} s`) : undefined,
     drill: trial.drill ? (trial.drill.manual ? tr('要手动连一次', 'needed a manual connect') : tr(`连回用了 ${sec(trial.drill.ms)} 秒`, `back in ${sec(trial.drill.ms)} s`)) : undefined,
@@ -468,7 +477,7 @@ function Checklist({ tr, trial, checks, passed, width, storeOn, isOwner, onGoSet
         <p className="mt-2 rounded-lg bg-subtle p-2.5 text-sm text-ink-2">{tr('全店已经打开送餐单打印，真单照常打印。连打和断开演练要先在设置里关掉才能试。', 'Slip printing is on for the shop; real slips print as usual. Turn it off in Settings to try the rush and disconnect drills.')}</p>
       ) : all ? (
         <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl bg-ok p-3.5 text-white">
-          <p className="min-w-[200px] flex-1"><b className="block text-lg">{tr('7 项都过了', 'All 7 passed')}</b>{tr('打印机可以用了。打开以后，每下一张真单，出餐口就打一张送餐单。', 'The printer is ready. Once switched on, every real order prints a slip at the pass.')}</p>
+          <p className="min-w-[200px] flex-1"><b className="block text-lg">{tr(`${TRIAL_CHECKS.length} 项都过了`, `All ${TRIAL_CHECKS.length} passed`)}</b>{tr('打印机可以用了。打开以后，每下一张真单，出餐口就打一张送餐单。', 'The printer is ready. Once switched on, every real order prints a slip at the pass.')}</p>
           {isOwner
             ? <button type="button" onClick={onGoSettings} className="h-12 rounded-xl bg-white px-4 font-bold text-ok">{tr('去打开送餐单打印 →', 'Turn on slip printing →')}</button>
             : <span className="font-semibold">{tr('请老板在「设置 → 送餐单打印」打开。', 'Ask the owner to turn it on in Settings → Slip printing.')}</span>}

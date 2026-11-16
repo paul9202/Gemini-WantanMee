@@ -8,7 +8,7 @@
  * - 一次只写一张：排队的单和测试条不会同时写，免得两张的内容印混在一起。
  */
 import { resumesOnReconnect, RunnerSlip, slipMark } from '../../domain/runnerSlip';
-import { CutMode, encodeLines, layoutRunnerSlip, layoutTestPage, PaperWidth, previewLines } from './escpos';
+import { CutMode, encodeLines, layoutRunnerSlip, layoutTestPage, LineSpacing, PaperWidth, previewLines } from './escpos';
 import type { PrinterLink } from './ble';
 import { PrinterLinkError } from './ble';
 
@@ -21,13 +21,15 @@ export interface PrinterSettings {
   width: PaperWidth;
   /** 有自动切刀就切；没有就手撕（不发切纸指令）。 */
   cut: CutMode;
+  /** 行距：标准；大字压住下一行的机器选加大（旧版存下的设置没有这个字段，按标准）。 */
+  spacing: LineSpacing;
 }
 
 /**
  * 默认 58mm、手撕：58mm 的排版放到 80mm 机上只是窄一点，80mm 的排版放到 58mm 机上每行都会断开；
  * 不发切纸指令对有切刀的机器只是不切，对没切刀的机器却可能多印出乱码。所以默认选两者里不会出错的那个，用 80mm 带切刀的机器再在面板里改。
  */
-export const DEFAULT_SETTINGS: PrinterSettings = { enabled: false, deviceId: null, deviceName: null, autoPrint: true, width: 58, cut: 'tear' };
+export const DEFAULT_SETTINGS: PrinterSettings = { enabled: false, deviceId: null, deviceName: null, autoPrint: true, width: 58, cut: 'tear', spacing: 'normal' };
 
 /** off：没启用；needs_tap：要员工点一下连接；connecting；ready；lost：断开了（同一页面里会自动重试）。 */
 export type LinkState = 'off' | 'needs_tap' | 'connecting' | 'ready' | 'lost';
@@ -176,7 +178,7 @@ export function createPrinterManager(deps: PrinterDeps) {
         const started = deps.now();
         const l = link;
         try {
-          await exclusive(() => l.write(encodeLines(lines, state.settings.cut), previewLines(lines)));
+          await exclusive(() => l.write(encodeLines(lines, state.settings.cut, state.settings.spacing), previewLines(lines)));
         } catch (e) {
           // 连不上：任务放回去排着，等重连；写到一半出错：标没打出来，让收银决定要不要补打（可能已经打出半张）。
           const code = e instanceof PrinterLinkError ? e.code : 'WRITE_FAILED';
@@ -252,6 +254,9 @@ export function createPrinterManager(deps: PrinterDeps) {
     setCut(cut: CutMode) {
       setSettings({ cut });
     },
+    setSpacing(spacing: LineSpacing) {
+      setSettings({ spacing });
+    },
 
     /** 下单、加料、断网接单、核对确认后调用。同一张单打过就不再自动打。 */
     async enqueue(key: string, slip: RunnerSlip, opts: { label: string; reconciled?: boolean }): Promise<void> {
@@ -306,7 +311,7 @@ export function createPrinterManager(deps: PrinterDeps) {
       try {
         const ms = await exclusive(async () => {
           const started = deps.now();
-          await l.write(encodeLines(lines, state.settings.cut), previewLines(lines));
+          await l.write(encodeLines(lines, state.settings.cut, state.settings.spacing), previewLines(lines));
           return deps.now() - started;
         });
         set({ link: 'ready', lastWriteMs: ms, error: null });

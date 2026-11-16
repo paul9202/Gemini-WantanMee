@@ -178,3 +178,40 @@ test('真单没有测试字样', () => {
   const all = previewLines(layoutRunnerSlip(slip(), 58)).join('\n');
   assert.ok(!all.includes('测试') && !all.includes('不用做'), all);
 });
+
+// ---- 行距（2026-11-16 实机：大字的下一行压在大字下半截上） ----
+
+/** 每个换行前最近一次 ESC 3 设的行距。 */
+function feeds(bytes: Uint8Array): number[] {
+  const out: number[] = [];
+  let cur = -1;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0x1b && bytes[i + 1] === 0x33) { cur = bytes[i + 2]; i += 2; continue; }
+    if (bytes[i] === 0x1b || bytes[i] === 0x1d || bytes[i] === 0x1c) { i += 2; continue; } // 其余三字节指令（ESC a / ESC E / GS B / FS ! / ESC d …）
+    if (bytes[i] === 0x0a) out.push(cur);
+  }
+  return out;
+}
+
+test('每行换行前写明行距：两倍高的行走 56 点，普通行 30 点；加大分别是 68 / 36', () => {
+  const lines: PrintLine[] = [
+    { segs: [{ text: '1  黑酱面 · 中', bold: true, h: 2 }] },
+    { segs: [{ text: '   细面 · 辣' }] },
+    { segs: [{ text: '合计', h: 2 }, { text: ' RM 7.00', w: 2, h: 2 }] },
+    { segs: [{ text: '#261116-001' }] },
+  ];
+  assert.deepEqual(feeds(encodeLines(lines)), [56, 30, 56, 30]);
+  assert.deepEqual(feeds(encodeLines(lines, 'tear', 'wide')), [68, 36, 68, 36]);
+});
+
+test('送餐单：品名、合计这些大字行都多走，最后走纸按普通行距', () => {
+  const lines = layoutRunnerSlip(slip(), 58);
+  const bytes = encodeLines(lines);
+  const f = feeds(bytes);
+  assert.equal(f.length, lines.length);
+  lines.forEach((l, i) => assert.equal(f[i], l.segs.some((s) => (s.h ?? 1) >= 2) ? 56 : 30, previewLines([l])[0]));
+  assert.equal(f.at(-1), 30, '最后一行是小字（单号）：走纸前已经是普通行距，不用再发');
+  const endsTall = encodeLines([{ segs: [{ text: '合计', h: 2 }] }]);
+  assert.deepEqual([...endsTall.slice(-6)], [0x1b, 0x33, 30, 0x1b, 0x64, 5], '最后一行是大字：走纸前改回普通行距，撕纸口长短不变');
+  assert.deepEqual([...bytes.slice(-3)], [0x1b, 0x64, 5], '手撕走纸不变');
+});

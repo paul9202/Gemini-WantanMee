@@ -21,12 +21,20 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-slip-spacing', date: '2026-11-16', roles: FRONT,
+    title: { zh: '送餐单大字不再压住下一行', en: 'Large text on order slips no longer overlaps the next line' },
+    items: [
+      { zh: '品名、合计这些大字的下一行，以前在有的打印机上会压在大字下半截，现在会多留一点空。', en: 'On some printers the line under large text (dish names, total) overlapped it; slips now leave more room.' },
+      { zh: '还压着的话，在打印机面板或试打印页头把「行距」改成「加大」。测试条多了一个问题专门看这个。', en: 'If it still overlaps, set Line spacing to Wide in the printer panel or at the top of Test print. The test strip now has a question for this.' },
+    ],
+  },
+  {
     id: '2026-11-16-printer-trial', date: '2026-11-16', roles: FRONT,
     title: { zh: '送餐单打印机可以先试打：打假单，不碰真单', en: 'Test the slip printer first: test slips only, no real orders' },
     items: [
       { zh: '主收银平板：设备 → 送餐单打印机 → 试打印。可以打测试条、9 种样单（堂食、打包、要求很多、断网单……）、连打 5 张、断开再连。屏幕上先看得到纸上会打成什么样。', en: 'Main register: Device → Order slip printer → Test print. Print a test strip, 9 kinds of sample slip (dine-in, takeaway, many requests, offline…), 5 in a row, and a disconnect drill. The screen shows what the paper will look like first.' },
       { zh: '打出来的都写着「测试 · 不用做」，牌号 81–89：不进订单、不算营业额、不占牌号，后厨屏看不到。设置里的「送餐单打印」还没打开也能试，收银下单不会打印。', en: 'Test slips say “测试 · 不用做” (test, don’t make) and use tokens 81–89: no orders, no sales, no tokens, nothing on the kitchen screen. Works before slip printing is switched on in Settings; real orders do not print.' },
-      { zh: '测试条打完会问 4 个问题，纸宽、切纸选错了一键改好再打。试打清单 7 项都过了，再去设置里打开送餐单打印。', en: 'After the test strip, 4 questions catch a wrong paper width or cutter setting and fix it in one tap. When all 7 checklist items pass, switch slip printing on in Settings.' },
+      { zh: '测试条打完会问 5 个问题，纸宽、行距、切纸选错了一键改好再打。试打清单 8 项都过了，再去设置里打开送餐单打印。', en: 'After the test strip, 5 questions catch a wrong paper width, line spacing or cutter setting and fix it in one tap. When all 8 checklist items pass, switch slip printing on in Settings.' },
     ],
   },
   {
