@@ -143,10 +143,11 @@ export function buildRunnerSlip(menu: MenuVersion, src: RunnerSlipSource, opts: 
 /**
  * 最上面的标记：第一次打不写（核对后才确认接单的写「核对后补打」），之后写「补打 N」。
  * 改单补打写「改单 · 以这张为准」（第二次起写「改单 2」…），这张再补打写「改单 · 补打 N」。
+ * manual：后厨手动补打（2026-11-16）。这台机没打过这张（例如原来那张是别的平板打的、或改单时没连打印机）也写「补打」，不写序号。
  */
-export function slipMark(printIndex: number, reconciled = false, amendNo?: number): string | null {
-  if (amendNo) return printIndex > 0 ? `改单 · 补打 ${printIndex + 1}` : `改单${amendNo > 1 ? ` ${amendNo}` : ''} · 以这张为准`;
-  return printIndex > 0 ? `补打 ${printIndex + 1}` : reconciled ? '核对后补打' : null;
+export function slipMark(printIndex: number, reconciled = false, amendNo?: number, manual = false): string | null {
+  if (amendNo) return printIndex > 0 ? `改单 · 补打 ${printIndex + 1}` : manual ? '改单 · 补打' : `改单${amendNo > 1 ? ` ${amendNo}` : ''} · 以这张为准`;
+  return printIndex > 0 ? `补打 ${printIndex + 1}` : manual ? '补打' : reconciled ? '核对后补打' : null;
 }
 
 /** 每行金额，例如 1100 → "11.00"。 */
@@ -221,15 +222,21 @@ export interface AmendedOrderView {
   items: (LineConfig & { lineId: string; quantity: number; unitPriceSen: number; serviceMode?: ServiceMode })[];
 }
 
+/** 后厨手动补打要用的订单字段：再多接单时间和是不是加料。 */
+export interface OrderSlipView extends AmendedOrderView {
+  acceptedAtEffectiveMs: number;
+  extraOnly?: boolean;
+}
+
 /**
- * 改单补打的内容：订单现在的每一行 + 厨单上的改单说明。时间写改单的时间。
- * 能改的单都在后厨屏上（断网单补同步后也在），所以表头不写「断网单 · 后厨屏上没有」。
+ * 按订单现在的内容排一张送餐单（改单补打和后厨手动补打共用）。
+ * 能改、能补打的单都在后厨屏上（断网单补同步后也在），所以表头不写「断网单 · 后厨屏上没有」。
  */
-export function amendSlipSource(o: AmendedOrderView, t: AmendedTicketView): RunnerSlipSource {
+function orderSource(o: AmendedOrderView & { extraOnly?: boolean }, acceptedAtMs: number, amend?: AmendSlipInfo): RunnerSlipSource {
   return {
     tokenNumber: o.tokenNumber,
     serviceMode: o.serviceMode === 'takeaway' ? 'takeaway' : 'dine_in',
-    acceptedAtMs: t.amendedAtMs,
+    acceptedAtMs,
     receiptNumber: o.receiptNumber,
     offlineReceiptNumber: o.offlineReceiptNumber ?? null,
     source: 'online',
@@ -243,6 +250,24 @@ export function amendSlipSource(o: AmendedOrderView, t: AmendedTicketView): Runn
     totalSen: o.totalSen,
     sharedToken: Boolean(o.sharedToken),
     addOnToToken: o.addOnTo?.tokenNumber ?? null,
-    amend: { no: t.amendCount, summary: t.amendSummary ?? '', marks: t.amendMarks ?? {}, undo: t.amendUndo },
+    ...(o.extraOnly ? { extraOnly: true } : {}),
+    ...(amend ? { amend } : {}),
   };
+}
+
+/** 改单补打的内容：订单现在的每一行 + 厨单上的改单说明。时间写改单的时间。 */
+export function amendSlipSource(o: AmendedOrderView, t: AmendedTicketView): RunnerSlipSource {
+  return orderSource(o, t.amendedAtMs, { no: t.amendCount, summary: t.amendSummary ?? '', marks: t.amendMarks ?? {}, undo: t.amendUndo });
+}
+
+/**
+ * 后厨手动补打（2026-11-16）：打哪一张、写什么。
+ * 改过的单补打最近一次改单那张（带「改了什么」和改 / 加框，记在同一个打印记录里，写「改单 · 补打 N」）；
+ * 没改过的补打原来那张（时间写接单时间）。都按订单现在的内容。
+ */
+export function manualSlip(orderId: string, o: OrderSlipView, t: Partial<AmendedTicketView>): { key: string; source: RunnerSlipSource } {
+  if ((t.amendCount ?? 0) > 0 && typeof t.amendedAtMs === 'number') {
+    return { key: amendSlipKey(orderId, t.amendCount!), source: amendSlipSource(o, t as AmendedTicketView) };
+  }
+  return { key: slipKey({ orderId }), source: orderSource(o, o.acceptedAtEffectiveMs) };
 }

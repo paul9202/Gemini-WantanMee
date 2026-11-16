@@ -6,6 +6,7 @@
  * - 页面重开后不自动补打旧任务，同样标「没打出来」。
  * - 试打印的样单（test）也走这个队列：不看「下单自动打印」开关、不记打印次数（键是 test:…，和真单分开），不能补打。
  * - 一次只写一张：排队的单和测试条不会同时写，免得两张的内容印混在一起。
+ * - 后厨手动补打（printNow）：不看「下单自动打印」开关，按订单现在的内容再打一张，写「补打」。
  */
 import { resumesOnReconnect, RunnerSlip, slipMark } from '../../domain/runnerSlip';
 import { CutMode, encodeLines, layoutRunnerSlip, layoutTestPage, LineSpacing, PaperWidth, previewLines } from './escpos';
@@ -53,6 +54,8 @@ export interface SlipJob {
   prints: number;
   /** 试打印的样单，不是真单。 */
   test?: boolean;
+  /** 后厨手动补打的：这台机没打过也写「补打」。 */
+  manual?: boolean;
 }
 
 /** 测试条打完的结果：用了多久，或错误码。 */
@@ -174,7 +177,7 @@ export function createPrinterManager(deps: PrinterDeps) {
         updateJob(job.key, { status: 'printing' });
         // 测试单不记打印次数，补打标记照样单自己的写法。
         const prints = job.test ? job.prints : await deps.getPrints(job.key).catch(() => job.prints);
-        const lines = layoutRunnerSlip(job.test ? job.slip : { ...job.slip, mark: slipMark(prints, job.reconciled, job.slip.amendNo) }, state.settings.width);
+        const lines = layoutRunnerSlip(job.test ? job.slip : { ...job.slip, mark: slipMark(prints, job.reconciled, job.slip.amendNo, job.manual) }, state.settings.width);
         const started = deps.now();
         const l = link;
         try {
@@ -296,6 +299,25 @@ export function createPrinterManager(deps: PrinterDeps) {
       if (!job || job.test || job.status === 'waiting' || job.status === 'printing') return;
       updateJob(key, { status: 'waiting', problem: undefined, createdAtMs: deps.now() });
       void pump();
+    },
+
+    /**
+     * 后厨手动补打：按订单现在的内容再打一张。不看「下单自动打印」开关，打过也照样打（写「补打 N」）。
+     * 同一张已经排着或正在打就不再排；打印机没连时排着，连上就打。返回 queued / already（已经排着）/ off（这台设备没用打印机）。
+     */
+    printNow(key: string, slip: RunnerSlip, label: string): 'queued' | 'already' | 'off' {
+      if (!state.settings.enabled) return 'off';
+      const old = state.jobs.find((j) => j.key === key);
+      if (old && (old.status === 'waiting' || old.status === 'printing')) return 'already';
+      const job: SlipJob = {
+        key, token: slip.token, label, slip, reconciled: false, createdAtMs: deps.now(), status: 'waiting', prints: old?.prints ?? 0, manual: true,
+      };
+      // 新的排在最前面（打印记录新的在前）；原来那条记录换成这一条。
+      set({ jobs: capJobs([job, ...state.jobs.filter((j) => j.key !== key)]) });
+      persist();
+      if (state.link === 'lost') scheduleRetry();
+      void pump();
+      return 'queued';
     },
 
     /** 没打出来的单，收银决定不打了。 */

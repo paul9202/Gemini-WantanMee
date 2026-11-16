@@ -15,9 +15,11 @@
  * 老板开了「出餐即记收款」时，按「完成出餐」由服务器顺带记收款；底部提示条写服务器实际记下的金额（autoPaidSen），30 秒内撤回出餐，收款一起撤回。
  * 开关关着时服务器不记收款、返回 0，提示条只说已出餐。后厨没有单独的「确认收款」按钮。
  * 后厨路由没有 Shell：在本页提供更新入口；打开期间保持屏幕常亮。
+ * 手动补打送餐单（2026-11-16）：这台平板连着送餐单打印机、全店开着送餐单打印、登录的是老板或收银时，每张卡上有「补打」，
+ * 按订单现在的内容再打一张（改过的单打最近一次改单那张）。后厨账号看不到订单单价，没有这个按钮。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { collection, disableNetwork, enableNetwork, query, where } from 'firebase/firestore';
+import { collection, disableNetwork, doc, enableNetwork, getDoc, query, where } from 'firebase/firestore';
 import { businessDateOf } from '../../domain/businessDay';
 import {
   arrangeKitchen, formatNoodleBalls, kitchenAmount, kitchenFrameTotal, KitchenLine, kitchenLineMode, kitchenRM, kitchenSenPlain, KitchenTicket,
@@ -41,7 +43,9 @@ import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
 import { hasNoCharSiew, hasNoTomato, noteFreeText } from '../../domain/lineItem';
 import { useKdsTheme, useNewTicketChime, useScreenWakeLock } from './prefs';
 import { UpdateNotice, UpdatesDialog } from '../updates/UpdatesPage';
-import { useMenu } from '../../data/menu';
+import { menuForVersion, useMenu } from '../../data/menu';
+import { printer, slipPrintingOn, usePrinter } from '../../data/printer/printer';
+import { buildRunnerSlip, manualSlip, OrderSlipView } from '../../domain/runnerSlip';
 import { AmendLine, amendSettlement, UNDO_AMEND_WINDOW_MS } from '../../domain/amend';
 import { AmendSheet, KitchenCancelDialog, ticketLines } from './AmendSheet';
 
@@ -96,6 +100,12 @@ export function KitchenPage() {
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [amendUndo, setAmendUndo] = useState<AmendUndo | null>(null);
   const menu = useMenu(config?.activeMenuVersion);
+  // 手动补打送餐单：只有连着打印机的老板 / 收银平板（后厨账号读不到订单单价）。
+  const front = member?.role === 'owner' || member?.role === 'cashier';
+  const slipOn = slipPrintingOn(config) && front;
+  const printerState = usePrinter(slipOn);
+  const canReprint = slipOn && printerState.settings.enabled;
+  const [reprinting, setReprinting] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const acked = useRef(new Set<string>());
   // 已点「知道了」的同牌加单 / 加料：只存内存，刷新后重新提醒。
@@ -287,6 +297,36 @@ export function KitchenPage() {
   }
 
   /** 强制 Firestore 重新建立连接；是否恢复以服务器快照为准。 */
+  /** 按订单现在的内容再打一张送餐单。打印出任何问题都只提示，不影响出餐。 */
+  async function reprintSlip(t: Ticket) {
+    if (!config || reprinting) return;
+    setReprinting(t.id);
+    setMessage(null);
+    try {
+      const snap = await getDoc(doc(db, storePath(`orders/${t.id}`)));
+      const o = snap.data() as (OrderSlipView & { menuVersion: string }) | undefined;
+      if (!o) throw new Error('NO_ORDER');
+      const m = menu?.version === o.menuVersion ? menu : (await menuForVersion(o.menuVersion)) ?? menu;
+      if (!m) throw new Error('NO_MENU');
+      const { key, source } = manualSlip(t.id, o, t);
+      const slip = buildRunnerSlip(m, source, { timeZone: config.timeZone, printIndex: 0 });
+      const ref = o.receiptNumber ? `#${o.receiptNumber}` : `${o.tokenNumber} 号`;
+      const r = printer.printNow(key, slip, `${ref} · 后厨补打`);
+      const linked = printer.getState().link === 'ready';
+      setNotice(r === 'already'
+        ? tr(`${t.tokenNumber} 号的送餐单已经在排着打`, `No. ${t.tokenNumber}'s slip is already queued`)
+        : r === 'off'
+          ? tr('这台平板没连送餐单打印机', 'This tablet has no slip printer')
+          : linked
+            ? tr(`${t.tokenNumber} 号送餐单补打中，去出餐口拿`, `Reprinting No. ${t.tokenNumber}'s slip at the pass`)
+            : tr(`${t.tokenNumber} 号已排上，打印机连上就打`, `No. ${t.tokenNumber} queued — prints when the printer connects`));
+    } catch {
+      setMessage(tr('补打没成功：读不到这张单，检查网络后再试', 'Reprint failed: could not load the order. Check the connection and try again.'));
+    } finally {
+      setReprinting(null);
+    }
+  }
+
   async function reconnect() {
     setReconnecting(true);
     try {
@@ -431,6 +471,8 @@ export function KitchenPage() {
               now, today: date, disabled: stale || busyId !== null, onAct: act, openIds: queuedIds,
               // 改单要用当前菜单算价；菜单还没载入时先不给按钮。
               onAmend: menu ? (x: Ticket) => { setMessage(null); setAmending({ id: x.id, version: x.version }); } : undefined,
+              onReprint: canReprint ? (x: Ticket) => void reprintSlip(x) : undefined,
+              reprintingId: reprinting,
             };
             // 碗卡不再补「＋加料」：加料有自己的卡、自己的金额（还没出的碗和它的加料总在同一个框，框上合计已含）。
             // 两处都写同一笔，送餐的人会收两次；出餐时也只各记各的。
@@ -624,7 +666,7 @@ function AmountTag({ t, framed, extras }: { t: Ticket; framed: boolean; extras: 
 type Extras = { sen: number; count: number; unknown: number };
 const NO_EXTRAS: Extras = { sen: 0, count: 0, unknown: 0 };
 
-function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, onAmend, anchorId, openIds, framed = false, extras }: {
+function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, onAmend, onReprint, reprintingId, anchorId, openIds, framed = false, extras }: {
   /** sameToken：要在卡片上标出的同牌单数（含本单）；在框里的卡片传 1，不重复标。anchorId：提醒横幅滚动的目标。openIds：队列里还没出餐的单（加料卡据此判断那碗出了没有）。 */
   t: Ticket; sameToken: number; now: number; today: string; disabled: boolean; busy: boolean; anchorId?: string; openIds: ReadonlySet<string>;
   /** framed：在同牌框里，金额改小字。extras：这碗还挂着没出的加料金额。 */
@@ -632,6 +674,9 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, onAmend, 
   onAct: (name: Action, t: TicketRef, extra?: ActExtra) => void;
   /** 打开改单（菜单没载入时为 undefined，不显示按钮）。 */
   onAmend?: (t: Ticket) => void;
+  /** 补打送餐单（这台平板没连打印机时为 undefined，不显示按钮）。reprintingId：正在读哪张单。 */
+  onReprint?: (t: Ticket) => void;
+  reprintingId?: string | null;
 }) {
   const tr = useT();
   const [rejectReason, setRejectReason] = useState<string | null>(null);
@@ -650,6 +695,9 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, onAmend, 
   const ref: TicketRef = { id: t.id, version: t.version, tokenNumber: t.tokenNumber, receiptNumber: t.receiptNumber };
   // 只有人工开工（旧流程 startOrder）才显示具体开工时刻。自动开工每张都一样，不再占一行（让位给金额，1280×800 一屏多看几张）。
   const manualStart = t.startedSource === 'manual' && t.startedAtMs != null ? t.startedAtMs : null;
+  const canAmend = Boolean(onAmend) && !t.extraOnly && t.kitchenRouting === 'digital';
+  // 有改单 / 补打按钮时它们靠右，堂食 / 打包跟在金额后面；没有按钮时堂食 / 打包靠右。
+  const actions = !frozen && (canAmend || Boolean(onReprint));
   return (
     <article id={anchorId} className={`flex scroll-mt-28 flex-col overflow-hidden rounded-2xl border bg-kds-card ${frozen ? 'border-[#e0735c]' : u.border}`} aria-label={tr(`${t.tokenNumber}号`, `No. ${t.tokenNumber}`)}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-kds-line px-5 pt-2.5 pb-2">
@@ -660,17 +708,28 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, onAmend, 
         {pokBowls > 0 && <span className="rounded-lg bg-kds-pok px-2.5 py-1 text-lg font-black text-kds-pok-ink">{tr('面薄', 'Mee pok')} ×{pokBowls}</span>}
         {pokBowls > 0 && thinBowls > 0 && <span className="rounded-lg border border-kds-line px-2 py-1 font-bold">{tr('细面', 'Thin')} ×{thinBowls}</span>}
         {sameToken > 1 && <span className="rounded-lg bg-kds-action px-2 py-1 text-sm font-bold text-kds-action-ink">{tr(`同牌 ${sameToken} 单`, `${sameToken} on this token`)}</span>}
-        <span className="ml-auto inline-flex items-center gap-2 rounded-xl bg-kds-soft px-3 py-2 font-bold">
+        <span className={`${actions ? '' : 'ml-auto '}inline-flex items-center gap-2 rounded-xl bg-kds-soft px-3 py-2 font-bold`}>
           {t.serviceMode !== 'takeaway' && <PictoArt id="service:dine_in" size={26} />}
           {t.serviceMode !== 'dine_in' && <PictoArt id="service:takeaway" size={26} />}
           {tr(SERVICE_MODE_NAMES[t.serviceMode].zh, SERVICE_MODE_NAMES[t.serviceMode].en)}
         </span>
-        {/* 改单（2026-11-16）：放在牌号这一行的最右边，离最下面的「完成出餐」远，油手不容易按错。 */}
-        {onAmend && !frozen && !t.extraOnly && t.kitchenRouting === 'digital' && (
-          <button type="button" disabled={disabled} onClick={() => onAmend(t)}
-            className="inline-flex h-12 items-center gap-1.5 rounded-xl border-2 border-kds-line px-3 text-base font-bold disabled:opacity-45">
-            <Icon name="edit" size={20} />{tr('改单', 'Edit')}
-          </button>
+        {/* 改单、补打（2026-11-16）：放在牌号这一行的最右边，离最下面的「完成出餐」远，油手不容易按错；窄栏里两个一起换行、靠右。 */}
+        {actions && (
+          <span className="ml-auto flex gap-2">
+            {canAmend && (
+              <button type="button" disabled={disabled} onClick={() => onAmend!(t)}
+                className="inline-flex h-12 items-center gap-1.5 rounded-xl border-2 border-kds-line px-3 text-base font-bold disabled:opacity-45">
+                <Icon name="edit" size={20} />{tr('改单', 'Edit')}
+              </button>
+            )}
+            {/* 补打不改数据，画面过期或别的单在处理时也能按；只在读同一张时防连按。 */}
+            {onReprint && (
+              <button type="button" disabled={reprintingId != null} onClick={() => onReprint(t)}
+                className="inline-flex h-12 items-center gap-1.5 rounded-xl border-2 border-kds-line px-3 text-base font-bold disabled:opacity-45">
+                <Icon name="receipt" size={20} />{reprintingId === t.id ? tr('读取中…', 'Loading…') : tr('补打', 'Reprint')}
+              </button>
+            )}
+          </span>
         )}
       </div>
       <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 px-5 py-2 ${frozen ? 'bg-kds-danger-bg' : u.bar}`}>

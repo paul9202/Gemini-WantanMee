@@ -7,8 +7,8 @@ import assert from 'node:assert/strict';
 import { defaultConfig, MENU_V1, normalizeConfig, NOTE_NO_TOMATO, unitPriceSen } from './index';
 import type { LineConfig, ServiceMode } from './index';
 import { extraConfig, extraNote } from './extras';
-import { amendSlipKey, amendSlipSource, autoPrintsSlip, buildRunnerSlip, printsAmendSlip, resumesOnReconnect, RunnerSlip, RunnerSlipSource, SLIP_RESUME_WINDOW_MS, slipAmount, slipKey, slipMark, slipTotal } from './runnerSlip';
-import type { AmendedOrderView, AmendedTicketView } from './runnerSlip';
+import { amendSlipKey, amendSlipSource, autoPrintsSlip, buildRunnerSlip, manualSlip, printsAmendSlip, resumesOnReconnect, RunnerSlip, RunnerSlipSource, SLIP_RESUME_WINDOW_MS, slipAmount, slipKey, slipMark, slipTotal } from './runnerSlip';
+import type { AmendedOrderView, AmendedTicketView, OrderSlipView } from './runnerSlip';
 
 const menu = MENU_V1;
 const TZ = 'Asia/Kuala_Lumpur';
@@ -195,4 +195,42 @@ test('真单（没改过）没有改单字样', () => {
   const s = buildRunnerSlip(menu, source(), OPTS);
   assert.equal(s.amendNote, undefined);
   assert.ok(s.lines.every((l) => !l.tags.some((t) => t.text === '改' || t.text === '加')));
+});
+
+// ---- 后厨手动补打 ----
+
+const orderView = (patch: Partial<OrderSlipView> = {}): OrderSlipView => ({ ...amendedOrder(), acceptedAtEffectiveMs: Date.UTC(2026, 10, 16, 6, 32), ...patch });
+
+test('后厨手动补打：没改过的单补打原来那张（同一个打印记录，时间写接单时间，没有改单字样）', () => {
+  const { key, source: src } = manualSlip('o1', orderView(), { amendCount: 0 });
+  assert.equal(key, slipKey({ orderId: 'o1' }));
+  const s = buildRunnerSlip(menu, src, OPTS);
+  assert.equal(s.time, '14:32');
+  assert.equal(s.amendNote, undefined);
+  assert.equal(s.mark, null);
+  assert.equal(s.totalSen, 1600);
+  assert.equal(s.lines.length, 2);
+  assert.ok(s.lines.every((l) => l.tags.length === 0));
+});
+
+test('后厨手动补打：改过的单补打最近一次改单那张（带改了什么和改 / 加框）', () => {
+  const { key, source: src } = manualSlip('o1', orderView(), amendedTicket({ amendCount: 2 }));
+  assert.equal(key, amendSlipKey('o1', 2));
+  const s = buildRunnerSlip(menu, src, OPTS);
+  assert.equal(s.amendNo, 2);
+  assert.ok(s.amendNote!.startsWith('改了：'));
+  assert.deepEqual(s.lines[0].tags, [{ text: '改', outline: true }]);
+});
+
+test('后厨手动补打：加料单照加料的写法', () => {
+  const s = buildRunnerSlip(menu, manualSlip('o1', orderView({ extraOnly: true }), {}).source, OPTS);
+  assert.equal(s.header.label, '加料 EXTRA');
+});
+
+test('后厨手动补打的标记：这台机没打过也写「补打」（不写序号）；打过照旧写「补打 N」', () => {
+  assert.equal(slipMark(0, false, undefined, true), '补打');
+  assert.equal(slipMark(0, true, undefined, true), '补打', '不写核对后补打');
+  assert.equal(slipMark(2, false, undefined, true), '补打 3');
+  assert.equal(slipMark(0, false, 2, true), '改单 · 补打');
+  assert.equal(slipMark(1, false, 2, true), '改单 · 补打 2');
 });

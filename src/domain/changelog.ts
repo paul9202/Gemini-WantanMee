@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-kitchen-reprint', date: '2026-11-16', roles: ALL,
+    title: { zh: '后厨屏上可以补打送餐单', en: 'Reprint an order slip from the kitchen screen' },
+    items: [
+      { zh: '送餐单丢了、弄脏了、要多一张：在后厨屏那张单上按「补打」，出餐口的打印机按这张单现在的内容再打一张，最上面写「补打」。改过的单补打的是最近改的那张。', en: 'Lost, dirty or need another slip? Tap Reprint on the order in the kitchen screen; the printer at the pass prints the order as it is now, marked “补打” (reprint). For an edited order it reprints the latest edit.' },
+      { zh: '只有连着打印机的那台平板（用老板或收银登录）才有这个按钮。', en: 'Only the tablet connected to the printer (signed in as owner or cashier) shows this button.' },
+    ],
+  },
+  {
     id: '2026-11-16-slip-after-amend', date: '2026-11-16', roles: ALL,
     title: { zh: '后厨改单后，出餐口自动补打一张送餐单', en: 'After a kitchen edit, a new order slip prints at the pass' },
     items: [

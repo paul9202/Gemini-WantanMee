@@ -360,3 +360,35 @@ test('改单补打：和原来那张分开记次数；再补打写「改单 · �
   await flush();
   assert.equal(link.printed[2][0].trim(), '改单 · 补打 2');
 });
+
+test('后厨手动补打：自动打印关着也打；打过的写「补打 N」，没打过的写「补打」；原来那条记录换成这一条', async () => {
+  const { m, link, prints } = setup({ settings: { autoPrint: false } });
+  await m.connect();
+  await m.enqueue('order:a', slip(12), { label: '#a' });
+  assert.equal(job(m, 'order:a')!.status, 'skipped');
+  assert.equal(m.printNow('order:a', slip(12), '#a · 后厨补打'), 'queued');
+  await flush();
+  assert.equal(link.printed.length, 1);
+  assert.equal(link.printed[0][0].trim(), '补打', '这台机没打过');
+  assert.equal(m.getState().jobs.filter((j) => j.key === 'order:a').length, 1);
+  assert.equal(job(m, 'order:a')!.label, '#a · 后厨补打');
+  assert.equal(m.printNow('order:a', slip(12), '#a · 后厨补打'), 'queued');
+  await flush();
+  assert.equal(link.printed[1][0].trim(), '补打 2');
+  assert.equal(prints.get('order:a'), 2);
+});
+
+test('后厨手动补打：已经排着就不再排；打印机断开时排着，连回来打；这台设备没用打印机返回 off', async () => {
+  const { m, link } = setup();
+  assert.equal(m.printNow('order:a', slip(12), '#a'), 'off');
+  await m.connect();
+  link.drop();
+  assert.equal(m.printNow('order:a', slip(12), '#a'), 'queued');
+  assert.equal(m.printNow('order:a', slip(12), '#a'), 'already');
+  await flush();
+  link.failNext = null;
+  await m.connect();
+  await flush();
+  assert.equal(link.printed.length, 1);
+  assert.equal(job(m, 'order:a')!.status, 'done');
+});
