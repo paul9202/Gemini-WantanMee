@@ -14,8 +14,11 @@ export type PaymentMethod = LegacyPaymentMethod | 'unspecified';
  * auto_on_serve：门店开了「出餐即记收款」，后厨出餐时自动记的（不是员工确认到账）。
  */
 export type ConfirmationMode = 'manual' | 'auto_on_serve';
-/** 收款冲正的原因：correction 误登记更正；undo_serve 30 秒内撤回出餐；not_paid 客人没付就走了。 */
-export type ReversalCause = 'correction' | 'undo_serve' | 'not_paid';
+/**
+ * 收款冲正的原因：correction 误登记更正；undo_serve 30 秒内撤回出餐；not_paid 客人没付就走了；
+ * amend 收过钱的单改了金额（2026-11-16）：冲掉原收款，之后按新金额再登记一次（客人多退少补）。
+ */
+export type ReversalCause = 'correction' | 'undo_serve' | 'not_paid' | 'amend';
 
 export const PAYMENT_METHOD_ZH: Record<PaymentMethod, string> = { cash: '现金', qr_manual: 'DuitNow QR', unspecified: '已确认收款' };
 

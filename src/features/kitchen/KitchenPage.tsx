@@ -41,8 +41,18 @@ import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
 import { hasNoCharSiew, hasNoTomato, noteFreeText } from '../../domain/lineItem';
 import { useKdsTheme, useNewTicketChime, useScreenWakeLock } from './prefs';
 import { UpdateNotice, UpdatesDialog } from '../updates/UpdatesPage';
+import { useMenu } from '../../data/menu';
+import { AmendLine, amendSettlement, UNDO_AMEND_WINDOW_MS } from '../../domain/amend';
+import { AmendSheet, KitchenCancelDialog, ticketLines } from './AmendSheet';
 
-type Ticket = KitchenTicket & { id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean; manualHandoffAtMs?: number | null; receiptNumber?: string | null };
+/** 改单字段（2026-11-16）：priorPaidSen 改单前客人已付（收过钱又改了金额）；amendMarks 每行改过 / 新加；amendSummary 改了什么。 */
+type Ticket = KitchenTicket & {
+  id: string; kitchenAckAtMs: number | null; cancelReason?: string | null; routedFromManual?: boolean; manualHandoffAtMs?: number | null; receiptNumber?: string | null;
+  priorPaidSen?: number | null; amendCount?: number; amendedAtMs?: number; amendMarks?: Record<string, 'mod' | 'add'>; amendSummary?: string; amendUndo?: boolean;
+};
+type AmendResult = { version: number; fromTotalSen: number; totalSen: number; paymentReversedSen: number; priorPaidSen: number | null; summary: string };
+/** 刚改好的单：30 秒内可以撤回（带着改前的内容再改一次）。收过钱又改了金额的不给撤回（钱已经重算）。 */
+type AmendUndo = { orderId: string; token: number; prev: AmendLine[]; prevTotal: number; version: number; at: number; fromTotalSen: number; totalSen: number };
 // 不再提供 startOrder：新单接单即制作中，旧 queued 单也直接出餐。撤回走 undoServed。
 type Action = 'serveOrder' | 'confirmKitchenCancel' | 'rejectKitchenCancel';
 type ActExtra = { consumed?: boolean; reason?: string };
@@ -81,6 +91,11 @@ export function KitchenPage() {
   }, [notice]);
   // 全部出餐一次可撤回多张；servedAt 取最早一张的时间，倒计时不会超过任何一张的撤回时限。
   const [undo, setUndo] = useState<{ items: UndoItem[]; servedAt: number } | null>(null);
+  // 改单：打开时记下那一刻的版本，交的时候用它（期间别人改过 / 出餐了，服务器会拒绝，不会盖掉别人的改动）。
+  const [amending, setAmending] = useState<{ id: string; version: number } | null>(null);
+  const [cancelling, setCancelling] = useState<string | null>(null);
+  const [amendUndo, setAmendUndo] = useState<AmendUndo | null>(null);
+  const menu = useMenu(config?.activeMenuVersion);
   const [reconnecting, setReconnecting] = useState(false);
   const acked = useRef(new Set<string>());
   // 已点「知道了」的同牌加单 / 加料：只存内存，刷新后重新提醒。
@@ -145,6 +160,61 @@ export function KitchenPage() {
       if (name === 'serveOrder') {
         setUndo({ items: [{ orderId: t.id, token: t.tokenNumber, receipt: t.receiptNumber ?? null, version: r.version, autoPaidSen: senOf(r.autoPaidSen) }], servedAt: Date.now() });
       }
+    } catch (e) {
+      setMessage(failureText(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  /**
+   * 改单 / 撤回改单：交整张新的清单，金额由服务器重算后比对。undoOf：撤回时传刚才那次的记录。
+   * 成功后关掉改单页；没动到钱的改单给 30 秒撤回。
+   */
+  async function submitAmend(orderId: string, version: number, lines: AmendLine[], totalSen: number, undoOf: AmendUndo | null = null) {
+    if (busyId || !config) return;
+    const before = tickets.find((x) => x.id === orderId);
+    setBusyId(orderId);
+    setMessage(null);
+    setNotice(null);
+    try {
+      const r = await submit<AmendResult>('amendOrder', {
+        operationId: newOperationId(), orderId, expectedVersion: version, menuVersion: config.activeMenuVersion, lines, expectedTotalSen: totalSen, ...(undoOf ? { undo: true } : {}),
+      });
+      setAmending(null);
+      if (undoOf) {
+        setAmendUndo(null);
+        setNotice(tr(`${undoOf.token} 号已撤回改单 · 回到 ${kitchenRM(r.totalSen)}`, `No. ${undoOf.token} edit undone · back to ${kitchenRM(r.totalSen)}`));
+        return;
+      }
+      if (before && r.paymentReversedSen === 0) {
+        setAmendUndo({ orderId, token: before.tokenNumber, prev: ticketLines(before), prevTotal: r.fromTotalSen, version: r.version, at: Date.now(), fromTotalSen: r.fromTotalSen, totalSen: r.totalSen });
+      } else {
+        setAmendUndo(null);
+        const s = amendSettlement(r.totalSen, r.priorPaidSen);
+        setNotice(s?.refundSen ? tr(`${before?.tokenNumber ?? ''} 号改好了 · 收银机会提示退 ${kitchenRM(s.refundSen)} 给客人`, `Saved · front will refund ${kitchenRM(s.refundSen)}`)
+          : s?.collectSen ? tr(`${before?.tokenNumber ?? ''} 号改好了 · 收银机会提示补收 ${kitchenRM(s.collectSen)}`, `Saved · front will collect ${kitchenRM(s.collectSen)} more`)
+            : tr('改好了', 'Saved'));
+      }
+    } catch (e) {
+      const stale = e instanceof CommandFailure && e.reasonCode === 'STALE_VERSION';
+      setMessage(stale ? tr('这张单刚刚被改过或出餐了：请关掉重新打开再改', 'This order just changed: close and open it again') : failureText(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function kitchenCancel(t: Ticket, reason: string, consumed: boolean) {
+    if (busyId) return;
+    setBusyId(t.id);
+    setMessage(null);
+    setNotice(null);
+    try {
+      await submit('kitchenCancelOrder', { operationId: newOperationId(), orderId: t.id, expectedVersion: t.version, reason, consumed });
+      setCancelling(null);
+      setAmending(null);
+      if (amendUndo?.orderId === t.id) setAmendUndo(null);
+      setNotice(tr(`${t.tokenNumber} 号已取消 · ${reason}`, `No. ${t.tokenNumber} cancelled`));
     } catch (e) {
       setMessage(failureText(e));
     } finally {
@@ -233,6 +303,10 @@ export function KitchenPage() {
   const dateLabel = date ? new Intl.DateTimeFormat(lang === 'en' ? 'en-MY' : 'zh-CN', { month: 'long', day: 'numeric', timeZone: 'UTC' }).format(new Date(`${date}T00:00:00Z`)) : '';
   // now 每秒刷新一次，可能略早于出餐时刻；显示不超过 30 秒。实际时限由服务器判断。
   const undoLeft = undo ? Math.min(UNDO_SERVE_WINDOW_MS, UNDO_SERVE_WINDOW_MS - (now - undo.servedAt)) : 0;
+  const amendUndoLeft = amendUndo && tickets.some((x) => x.id === amendUndo.orderId && x.version === amendUndo.version)
+    ? Math.min(UNDO_AMEND_WINDOW_MS, UNDO_AMEND_WINDOW_MS - (now - amendUndo.at)) : 0;
+  const amendTicket = amending ? tickets.find((x) => x.id === amending.id) ?? null : null;
+  const cancelTicket = cancelling ? tickets.find((x) => x.id === cancelling) ?? null : null;
   const iconBtn = 'flex h-14 w-14 items-center justify-center rounded-xl border border-kds-line text-kds-text hover:bg-kds-soft';
 
   return (
@@ -285,6 +359,22 @@ export function KitchenPage() {
       )}
 
       {updatesOpen && <UpdatesDialog onClose={() => setUpdatesOpen(false)} />}
+      {amending && amendTicket && menu && (
+        <AmendSheet key={amending.id} ticket={amendTicket} menu={menu} busy={busyId === amending.id} disabled={stale || (busyId !== null && busyId !== amending.id)}
+          onClose={() => setAmending(null)} onCancelOrder={() => setCancelling(amending.id)}
+          onSubmit={(lines, total) => void submitAmend(amending.id, amending.version, lines, total)} />
+      )}
+      {amending && !amendTicket && (
+        // 打开期间这张单出餐 / 被取消了：改单页自己关掉并说明。
+        <div role="alert" className="fixed inset-x-0 top-0 z-50 flex flex-wrap items-center gap-3 bg-kds-danger-bg px-4 py-3 text-lg font-bold text-kds-danger sm:px-7">
+          {tr('这张单已经出餐或取消了，不能再改', 'This order was served or cancelled — it can no longer be changed')}
+          <button type="button" onClick={() => setAmending(null)} className="ml-auto h-14 rounded-xl border-2 border-current px-5">{tr('知道了', 'Got it')}</button>
+        </div>
+      )}
+      {cancelTicket && (
+        <KitchenCancelDialog ticket={cancelTicket} busy={busyId === cancelTicket.id} disabled={stale || (busyId !== null && busyId !== cancelTicket.id)}
+          onClose={() => setCancelling(null)} onConfirm={(reason, consumed) => void kitchenCancel(cancelTicket, reason, consumed)} />
+      )}
       <UpdateNotice className="border-b border-kds-line bg-kds-soft px-4 py-3 sm:px-7" primaryClassName="bg-kds-action text-kds-action-ink" />
       {sw === 'update' && (
         <div role="status" className="flex flex-wrap items-center gap-4 border-b border-kds-line bg-kds-soft px-4 py-3 sm:px-7">
@@ -337,7 +427,11 @@ export function KitchenPage() {
         {/* min-w-0：卡片内容再长也只在卡内换行，不撑破网格（1280 宽三栏、960 宽两栏）。 */}
         <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3 [&>*]:min-w-0">
           {groups.map((g) => {
-            const cardProps = { now, today: date, disabled: stale || busyId !== null, onAct: act, openIds: queuedIds };
+            const cardProps = {
+              now, today: date, disabled: stale || busyId !== null, onAct: act, openIds: queuedIds,
+              // 改单要用当前菜单算价；菜单还没载入时先不给按钮。
+              onAmend: menu ? (x: Ticket) => { setMessage(null); setAmending({ id: x.id, version: x.version }); } : undefined,
+            };
             // 碗卡不再补「＋加料」：加料有自己的卡、自己的金额（还没出的碗和它的加料总在同一个框，框上合计已含）。
             // 两处都写同一笔，送餐的人会收两次；出餐时也只各记各的。
             const extrasOf = (_t: Ticket): Extras => NO_EXTRAS;
@@ -371,6 +465,18 @@ export function KitchenPage() {
           {stale ? tr('画面可能过期 · 不要据此制作或出餐', 'Screen may be stale — do not cook or serve from it') : tr('订单已实时更新', 'Orders are live')}
           {' · '}{tr(`人工单待核对 ${manualQ.data.length} 单（补同步订单不会自动重做）`, `${manualQ.data.length} paper ticket(s) to check (synced orders are not re-cooked)`)}
         </span>
+        {amendUndo && amendUndoLeft > 0 && (
+          <div role="status" className="ml-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-kds-soft px-3 py-1.5">
+            <Icon name="edit" size={26} />
+            <span className="text-lg"><b className="text-2xl">{amendUndo.token}</b> {tr('号改好了', 'edited')}
+              {amendUndo.totalSen !== amendUndo.fromTotalSen && <> · <b className="tabular-nums">{kitchenRM(amendUndo.fromTotalSen)} → {kitchenRM(amendUndo.totalSen)}</b></>}
+            </span>
+            <button type="button" disabled={stale || busyId !== null} onClick={() => void submitAmend(amendUndo.orderId, amendUndo.version, amendUndo.prev, amendUndo.prevTotal, amendUndo)}
+              className="h-14 rounded-xl border-2 border-kds-action px-5 font-bold text-kds-action disabled:opacity-50">
+              ↶ {tr(`撤回（${Math.ceil(amendUndoLeft / 1000)}秒）`, `Undo (${Math.ceil(amendUndoLeft / 1000)} s)`)}
+            </button>
+          </div>
+        )}
         {undo && undoLeft > 0 && (
           <div role="status" className="ml-auto flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl bg-kds-soft px-3 py-1.5">
             <PictoArt id="action:serve" size={32} />
@@ -499,9 +605,18 @@ function AmountTag({ t, framed, extras }: { t: Ticket; framed: boolean; extras: 
   if (a.kind === 'unknown') {
     return <span className={`whitespace-nowrap font-black text-kds-muted ${framed ? 'text-xl' : 'text-[28px] leading-none'}`}>RM —{extra}</span>;
   }
+  // 收过钱又改了金额：客人已付过一笔，送餐时只补差额 / 退差额（收银机按新金额登记）。
+  const settle = amendSettlement(a.sen, t.priorPaidSen);
   return (
     <span className={`whitespace-nowrap font-black tabular-nums text-kds-warning ${framed ? 'text-xl opacity-90' : 'text-[28px] leading-none'}`}>
       {kitchenRM(a.sen)}{extra}
+      {settle && (
+        <small className={`ml-1.5 text-[15px] font-bold ${settle.refundSen ? 'text-kds-danger' : 'text-kds-warning'}`}>
+          {settle.refundSen ? tr(`已付 ${kitchenSenPlain(t.priorPaidSen!)} · 退 ${kitchenSenPlain(settle.refundSen)}`, `paid ${kitchenSenPlain(t.priorPaidSen!)} · refund ${kitchenSenPlain(settle.refundSen)}`)
+            : settle.collectSen ? tr(`已付 ${kitchenSenPlain(t.priorPaidSen!)} · 补 ${kitchenSenPlain(settle.collectSen)}`, `paid ${kitchenSenPlain(t.priorPaidSen!)} · +${kitchenSenPlain(settle.collectSen)}`)
+              : tr('已付 · 不用收', 'paid')}
+        </small>
+      )}
     </span>
   );
 }
@@ -509,12 +624,14 @@ function AmountTag({ t, framed, extras }: { t: Ticket; framed: boolean; extras: 
 type Extras = { sen: number; count: number; unknown: number };
 const NO_EXTRAS: Extras = { sen: 0, count: 0, unknown: 0 };
 
-function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId, openIds, framed = false, extras }: {
+function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, onAmend, anchorId, openIds, framed = false, extras }: {
   /** sameToken：要在卡片上标出的同牌单数（含本单）；在框里的卡片传 1，不重复标。anchorId：提醒横幅滚动的目标。openIds：队列里还没出餐的单（加料卡据此判断那碗出了没有）。 */
   t: Ticket; sameToken: number; now: number; today: string; disabled: boolean; busy: boolean; anchorId?: string; openIds: ReadonlySet<string>;
   /** framed：在同牌框里，金额改小字。extras：这碗还挂着没出的加料金额。 */
   framed?: boolean; extras: Extras;
   onAct: (name: Action, t: TicketRef, extra?: ActExtra) => void;
+  /** 打开改单（菜单没载入时为 undefined，不显示按钮）。 */
+  onAmend?: (t: Ticket) => void;
 }) {
   const tr = useT();
   const [rejectReason, setRejectReason] = useState<string | null>(null);
@@ -548,6 +665,13 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId,
           {t.serviceMode !== 'dine_in' && <PictoArt id="service:takeaway" size={26} />}
           {tr(SERVICE_MODE_NAMES[t.serviceMode].zh, SERVICE_MODE_NAMES[t.serviceMode].en)}
         </span>
+        {/* 改单（2026-11-16）：放在牌号这一行的最右边，离最下面的「完成出餐」远，油手不容易按错。 */}
+        {onAmend && !frozen && !t.extraOnly && t.kitchenRouting === 'digital' && (
+          <button type="button" disabled={disabled} onClick={() => onAmend(t)}
+            className="inline-flex h-12 items-center gap-1.5 rounded-xl border-2 border-kds-line px-3 text-base font-bold disabled:opacity-45">
+            <Icon name="edit" size={20} />{tr('改单', 'Edit')}
+          </button>
+        )}
       </div>
       <div className={`flex flex-wrap items-center gap-x-2 gap-y-0.5 px-5 py-2 ${frozen ? 'bg-kds-danger-bg' : u.bar}`}>
         <Icon name="clock" size={18} className={frozen ? 'text-kds-danger' : u.text} />
@@ -580,11 +704,16 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, anchorId,
       )}
       {t.sharedToken && !t.extraOnly && <Banner tone="action"><Icon name="users" size={22} />{tr(`同牌加单 · ${t.tokenNumber} 号的客人再加（和前面 ${t.tokenNumber} 号的一起送）`, `Same-token add-on · token ${t.tokenNumber} ordered more (serve with the earlier ${t.tokenNumber})`)}</Banner>}
       {t.addOnTo && !t.sharedToken && !t.extraOnly && <Banner tone="action"><PictoArt id="service:takeaway" size={24} />{tr(`加单 · 原 ${t.addOnTo.tokenNumber} 号的客人（吃完再加）`, `Add-on · for token ${t.addOnTo.tokenNumber}'s customer`)}</Banner>}
+      {(t.amendCount ?? 0) > 0 && t.amendSummary && !frozen && (
+        <Banner tone="warn"><Icon name="edit" size={20} className="shrink-0" />
+          <span className="line-clamp-2">{t.amendedAtMs ? clock(t.amendedAtMs) : ''} {t.amendUndo ? tr('撤回了改单', 'edit undone') : tr('改过', 'edited')} · {t.amendSummary}</span>
+        </Banner>
+      )}
       {t.routedFromManual &&<Banner tone="action"><PictoArt id="token:return" size={24} />{tr('人工单转入 · 收银已核实厨房未做', 'From paper ticket · cashier confirmed not cooked')}</Banner>}
       <ul className={`flex-1 space-y-3 px-5 py-3 ${frozen ? 'opacity-60' : ''}`}>
         {t.lines.map((l) => t.extraOnly
           ? <ExtraLineRow key={l.lineId} l={l} />
-          : <KitchenLineRow key={l.lineId} l={l} serviceMode={kitchenLineMode(t, l)} mixed={t.serviceMode === 'mixed'} />)}
+          : <KitchenLineRow key={l.lineId} l={l} serviceMode={kitchenLineMode(t, l)} mixed={t.serviceMode === 'mixed'} mark={t.amendMarks?.[l.lineId] ?? null} />)}
       </ul>
       {frozen ? (
         <div className="m-4 mt-0 rounded-xl bg-kds-danger-bg p-3 text-kds-danger">
@@ -664,8 +793,12 @@ function ExtraLineRow({ l }: { l: KitchenLine }) {
 }
 
 /** mixed：同一单有堂食也有打包，每行醒目标出这碗是哪一种。 */
-function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode: ServiceMode; mixed: boolean }) {
+function KitchenLineRow({ l, serviceMode, mixed, mark = null }: { l: KitchenLine; serviceMode: ServiceMode; mixed: boolean; mark?: 'mod' | 'add' | null }) {
   const tr = useT();
+  // 改单后这一行：改过「改」、新加「新」，一直留到出餐。
+  const markChip = mark && (
+    <span className={`shrink-0 rounded-md px-2 py-0.5 text-sm font-black ${mark === 'add' ? 'bg-kds-live/25 text-kds-live' : 'bg-kds-warning-bg text-kds-warning'}`}>{mark === 'add' ? tr('新', 'New') : tr('改', 'Changed')}</span>
+  );
   const lang = useLang();
   const cfg = l as unknown as LineConfig;
   const name = lang === 'en' ? lineNameEn(MENU_V1, cfg) : l.nameZh;
@@ -697,6 +830,7 @@ function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
             {sauceDot}
             <b className="text-lg leading-tight">{name}</b>
+            {markChip}
             {modeChip}
             <span className={`ml-auto text-sm ${muted}`}>{balls(l.noodleHalfUnits)} {tr('团 / 份', 'ball(s) each')}</span>
           </div>
@@ -707,6 +841,7 @@ function KitchenLineRow({ l, serviceMode, mixed }: { l: KitchenLine; serviceMode
         <div className="min-w-0 flex-1">
           <div className="flex items-start gap-2">
             <b className="text-xl leading-tight">{name}</b>
+            {markChip}
             {modeChip}
             <b className={`ml-auto shrink-0 text-2xl tabular-nums ${l.quantity > 1 ? 'text-kds-action' : ''}`}>×{l.quantity}</b>
           </div>

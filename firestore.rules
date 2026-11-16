@@ -69,8 +69,9 @@ service cloud.firestore {
         allow read: if isFront(storeId);
         allow write: if false;
       }
+      // 菜单（品名、售价、售罄；没有成本）：后厨改单要按当前价格算新金额（2026-11-16 起后厨也能读）。
       match /menuVersions/{version} {
-        allow read: if isFront(storeId);
+        allow read: if isAnyMember(storeId);
         allow write: if false;
       }
       match /visualCatalogs/{version} {

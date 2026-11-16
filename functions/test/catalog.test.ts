@@ -39,10 +39,11 @@ test('发布菜单：新价生效；旧版本在线单 MENU_CHANGED；越权、�
   assert.equal(ok.result.totalSen, 800);
   const order = (await admin().doc(`stores/${f.storeId}/orders/${ok.result.orderId}`).get()).data()!;
   assert.equal(order.menuVersion, r.version);
-  // 收银可以读取启用的菜单版本（离线时也要用）；后厨不能读售价
+  // 收银可以读取启用的菜单版本（离线时也要用）；后厨也能读（2026-11-16 起后厨改单要按当前售价算新金额；菜单里没有成本）
   const menuDoc = await getDoc(doc(f.cashier.db, `stores/${f.storeId}/menuVersions/${r.version}`));
   assert.equal(menuDoc.data()!.menu.addOns.char_siew.priceSen, 250);
-  await assert.rejects(getDoc(doc(f.kitchen.db, `stores/${f.storeId}/menuVersions/${r.version}`)), /permission/i);
+  const kitchenMenu = await getDoc(doc(f.kitchen.db, `stores/${f.storeId}/menuVersions/${r.version}`));
+  assert.equal(kitchenMenu.data()!.menu.addOns.char_siew.priceSen, 250);
 });
 
 test('净面价单独设定：发布小 4 / 中 5 / 大 6 后，净面单按新净面价收；只改正价不动净面价', async () => {

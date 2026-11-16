@@ -1,5 +1,5 @@
 /**
- * 制作与退款命令：完成出餐、撤回出餐、请求取消、确认后厨取消、老板整单退款（开始制作只为旧版待做单保留）。
+ * 制作与退款命令：完成出餐、撤回出餐、请求取消、确认后厨取消、后厨直接取消、老板整单退款（开始制作只为旧版待做单保留）。
  * 状态转换全部交给领域状态机 applyLifecycle；这里负责读取依赖、落实副作用并保持投影一致。
  * 出餐 / 取消最终成立时在同一事务把本单从餐牌上摘下；同牌加单的其他单还没完成时牌继续占用，全部摘完才释放。
  * 牌已属于新单时绝不改动。
@@ -42,7 +42,7 @@ const ERROR_MAP: Record<LifecycleError, ReasonCode> = {
   REASON_REQUIRED: 'REASON_REQUIRED', REFUND_MUST_BE_FULL: 'REFUND_MUST_BE_FULL', ALREADY_REFUNDED: 'ALREADY_REFUNDED',
 };
 
-type CommandName = 'startOrder' | 'serveOrder' | 'undoServe' | 'requestCancel' | 'confirmKitchenCancel' | 'rejectKitchenCancel' | 'confirmFullRefund';
+type CommandName = 'startOrder' | 'serveOrder' | 'undoServe' | 'requestCancel' | 'confirmKitchenCancel' | 'rejectKitchenCancel' | 'confirmFullRefund' | 'kitchenCancelOrder';
 
 const ROLES: Record<CommandName, Role[]> = {
   startOrder: ['kitchen', 'owner'],
@@ -52,10 +52,12 @@ const ROLES: Record<CommandName, Role[]> = {
   confirmKitchenCancel: ['kitchen', 'owner'],
   rejectKitchenCancel: ['kitchen', 'owner'],
   confirmFullRefund: ['owner'],
+  // 后厨自己取消（2026-11-16）：一步完成，按做了没有决定成本。
+  kitchenCancelOrder: ['kitchen', 'owner'],
 };
 
 function parse(name: CommandName, raw: unknown) {
-  const extra = name === 'requestCancel' ? ['reason'] : name === 'confirmFullRefund' ? ['amountSen', 'refundMethod', 'reason'] : name === 'confirmKitchenCancel' ? ['consumed'] : name === 'rejectKitchenCancel' ? ['reason'] : [];
+  const extra = name === 'requestCancel' ? ['reason'] : name === 'confirmFullRefund' ? ['amountSen', 'refundMethod', 'reason'] : name === 'confirmKitchenCancel' ? ['consumed'] : name === 'rejectKitchenCancel' ? ['reason'] : name === 'kitchenCancelOrder' ? ['reason', 'consumed'] : [];
   const o = obj(raw, ['storeId', 'operationId', 'orderId', 'expectedVersion', ...extra]);
   const base = { storeId: storeId(o), operationId: uuid(o, 'operationId'), orderId: uuid(o, 'orderId'), expectedVersion: int(o, 'expectedVersion', 1, 1_000_000) };
   let cmd: LifecycleCommand;
@@ -70,6 +72,7 @@ function parse(name: CommandName, raw: unknown) {
     // 「继续做，拒绝取消」：原因可选（例如「已送餐，顾客仍要」）。
     case 'rejectKitchenCancel': cmd = { type: 'reject_cancel' }; rejectReason = optStr(o, 'reason', 100); break;
     case 'requestCancel': cmd = { type: 'request_cancel', reason: str(o, 'reason', 200) }; break;
+    case 'kitchenCancelOrder': cmd = { type: 'kitchen_cancel', reason: str(o, 'reason', 200), consumed: bool(o, 'consumed') }; break;
     case 'confirmFullRefund':
       cmd = { type: 'confirm_full_refund', amountSen: int(o, 'amountSen', 1, 10_000_000) };
       // 退款不强制选渠道；旧客户端传 cash / qr_manual 时照实记录。
@@ -106,7 +109,7 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
   const cost = (await tx.get(costRef)).data();
   const today = businessDateOf(nowMs, config.businessDay);
   // 退款/取消写入今日账本，受今日写入屏障约束。
-  const writesLedger = name === 'confirmFullRefund' || name === 'requestCancel' || name === 'confirmKitchenCancel';
+  const writesLedger = name === 'confirmFullRefund' || name === 'requestCancel' || name === 'confirmKitchenCancel' || name === 'kitchenCancelOrder';
   const todayDay = writesLedger ? await requireDayOpen(tx, store, today) : null;
 
   const before = lifecycleOf(order);
@@ -208,7 +211,8 @@ async function lifecycleTx(ctx: CommandContext, name: CommandName, input: Return
       patch.refundId = refundId;
     }
   }
-  if (input.cmd.type === 'confirm_kitchen_cancel') patch.cancelCostDecision = input.cmd.consumed ? 'consumed' : 'not_made';
+  if (input.cmd.type === 'confirm_kitchen_cancel' || input.cmd.type === 'kitchen_cancel') patch.cancelCostDecision = input.cmd.consumed ? 'consumed' : 'not_made';
+  if (input.cmd.type === 'kitchen_cancel') patch.cancelledBy = { uid: actor.uid, role: actor.role, atMs: nowMs };
   if (input.cmd.type === 'reject_cancel') {
     // 保留本次取消申请与拒绝记录，前台据此提示（订单页）。
     patch.cancelRejection = { requestedReason: before.cancelReason, reason: input.rejectReason, by: actor.uid, atMs: nowMs };

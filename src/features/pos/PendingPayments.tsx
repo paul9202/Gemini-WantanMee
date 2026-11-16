@@ -8,6 +8,9 @@
  * 一组超过服务器单次上限（10 张）时拆成连续几张卡，每张卡的按钮都能用。
  * 每张卡有「加单」：回点餐页给这位客人再点，送厨后仍挂在同一组里；原牌仍被这桌占着时同牌加单，不用再给牌。
  * 还有「加料」：开加料面板，预选这组第一张正常的单（加料单本身不能再加料）。
+ * 后厨改过的单（2026-11-16）：卡上写「后厨几点改了：原来 RM x → 现在 RM y」和改了什么，按新金额收。
+ * 收过钱又被改了金额的单：服务器已冲掉原收款、回到待收款，卡上写客人已付多少、这次要补收 / 退给客人多少，
+ * 按钮写清楚（例如「已退 RM2.00 · 登记 RM23.00」），按了才按新金额登记。
  * 门店开了「出餐即记收款」时：出餐的单服务器自动记收款，这里只剩还没出餐的（和更新前就出餐、还挂着的旧单）。
  * 前台点收款的同时后厨刚好出餐，服务器会拒绝并说明是出餐自动记的：拦下来写明「不要再收这一碗」，
  * 剩下的按刷新后的账单重新算，由员工再点一次才登记，绝不自动替他收。
@@ -42,6 +45,10 @@ export interface UnpaidOrder {
   addOnToOrderId: string | null;
   /** 下单后加料的小单。 */
   extraOnly?: boolean;
+  /** 最近一次改单（后厨或收银改的）。 */
+  amend?: { atMs: number; role: string; fromTotalSen: number; toTotalSen: number; summary: string; undo?: boolean } | null;
+  /** 收过钱又改了金额：改单前客人已付多少（这次按新金额登记，多退少补）。 */
+  priorPaidSen?: number | null;
 }
 
 /** 一张卡：原单 + 它的加单（原单已另行收款时只剩加单）。按接单时间排，原单在前。 */
@@ -114,6 +121,8 @@ interface OrderDoc {
   items: { nameZh: string; quantity: number }[];
   addOnTo?: { orderId: string } | null;
   extraOnly?: boolean;
+  lastAmend?: { atMs: number; role: string; fromTotalSen: number; toTotalSen: number; summary: string; undo?: boolean } | null;
+  amendPriorPaidSen?: number | null;
 }
 
 /** 云端待收款订单 + 本机尚未同步的离线未付款单，扣除本机已登记（待同步）的。 */
@@ -132,6 +141,8 @@ export function useUnpaidOrders(nameOf?: (c: LineConfig) => string): { orders: U
         stage: o.kitchenCancelRequested ? 'cancel_pending' : o.fulfillmentStatus === 'served' ? 'served' : 'cooking',
         addOnToOrderId: o.addOnTo?.orderId ?? null,
         extraOnly: Boolean(o.extraOnly),
+        amend: o.lastAmend ?? null,
+        priorPaidSen: o.amendPriorPaidSen ?? null,
       });
     }
     for (const o of rt.localOrders) {
@@ -189,6 +200,21 @@ export function PaidAtServeNotice({ conflict, remaining, busy, onConfirm, onDism
   );
 }
 
+/** 这张单被改过：谁、几点改的，金额怎么变，改了什么。 */
+function AmendNote({ order }: { order: UnpaidOrder }) {
+  const tr = useT();
+  const a = order.amend!;
+  const time = new Date(a.atMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const who = a.role === 'kitchen' ? tr('后厨', 'Kitchen') : a.role === 'owner' ? tr('老板', 'Owner') : tr('收银', 'Front');
+  return (
+    <p className="mt-1.5 rounded-lg bg-warn-bg px-2 py-1 text-sm text-warn">
+      <b>{tr(`${who} ${time} ${a.undo ? '撤回了改单' : '改了单'}`, `${who} ${a.undo ? 'undid an edit' : 'edited'} at ${time}`)}</b>
+      {a.fromTotalSen !== a.toTotalSen && <b className="tabular-nums"> · {formatRM(a.fromTotalSen)} → {formatRM(a.toTotalSen)}</b>}
+      <span className="block text-[13px] text-ink">{a.summary}</span>
+    </p>
+  );
+}
+
 /** 一张待收款卡（单张订单，或原单 + 加单一组）：主按钮登记这张卡上现在能收的单；成功后显示明确反馈。 */
 export function PaymentCard({ group, onRecorded, onAddOn, onExtra }: { group: UnpaidGroup; onRecorded?: (ids: string[]) => void; onAddOn?: (order: UnpaidOrder) => void; onExtra?: (order: UnpaidOrder) => void }) {
   const tr = useT();
@@ -203,6 +229,9 @@ export function PaymentCard({ group, onRecorded, onAddOn, onExtra }: { group: Un
   const [servedPaidIds, setServedPaidIds] = useState<string[]>([]);
   const due = group.payable.filter((o) => !recordedIds.includes(o.id) && !servedPaidIds.includes(o.id));
   const dueSen = due.reduce((s, o) => s + o.totalSen, 0);
+  // 收过钱又改了金额的单：客人手上已经付过这么多，这次实际只补差额 / 退差额。
+  const priorSen = due.reduce((s, o) => s + (o.priorPaidSen ?? 0), 0);
+  const netSen = dueSen - priorSen;
   const multi = group.orders.length > 1;
   const first = group.orders[0];
   const head = due[0] ?? first;
@@ -269,11 +298,20 @@ export function PaymentCard({ group, onRecorded, onAddOn, onExtra }: { group: Un
                     : <span className={`ml-auto rounded-lg px-2 py-0.5 text-sm font-semibold ${order.stage === 'served' ? 'bg-warn-bg text-warn' : 'bg-subtle text-ink-2'}`}>{stageText(order.stage)}</span>}
                 </div>
                 <p className="mt-1 line-clamp-2 text-sm">{items}{multi && <b className={`ml-2 tabular-nums ${order.stage === 'cancel_pending' ? 'font-normal text-ink-2 line-through' : ''}`}>{formatRM(order.totalSen)}</b>}</p>
+                {order.amend && <AmendNote order={order} />}
               </div>
             </div>
           );
         })}
       </div>
+      {priorSen > 0 && due.length > 0 && (
+        <p role="alert" className={`mt-3 flex min-h-14 items-center gap-2 rounded-xl px-3 py-2 font-bold ${netSen < 0 ? 'bg-danger-bg text-danger' : 'bg-warn-bg text-warn'}`}>
+          <Icon name="cash" size={22} />
+          {netSen < 0 ? tr(`客人改单前已付 ${formatRM(priorSen)}，现在 ${formatRM(dueSen)} → 要退 ${formatRM(-netSen)} 给客人`, `Customer paid ${formatRM(priorSen)}, now ${formatRM(dueSen)} → refund ${formatRM(-netSen)}`)
+            : netSen > 0 ? tr(`客人改单前已付 ${formatRM(priorSen)}，现在 ${formatRM(dueSen)} → 要补收 ${formatRM(netSen)}`, `Customer paid ${formatRM(priorSen)}, now ${formatRM(dueSen)} → collect ${formatRM(netSen)} more`)
+              : tr(`客人改单前已付 ${formatRM(priorSen)}，金额一样，不用再收`, `Customer already paid ${formatRM(priorSen)} — nothing more to collect`)}
+        </p>
+      )}
       {msg && (
         <p role="status" className={`mt-3 flex min-h-14 items-center gap-2 rounded-xl px-3 font-semibold ${msg.ok ? 'bg-ok-bg text-ok' : 'bg-danger-bg text-danger'}`}>
           {msg.ok && <Icon name="check" size={22} />}{msg.text}
@@ -288,9 +326,12 @@ export function PaymentCard({ group, onRecorded, onAddOn, onExtra }: { group: Un
         <div className="mt-3 flex flex-wrap gap-2">
           <button type="button" onClick={() => void confirm()} disabled={busy || due.length === 0}
             className="flex h-14 min-w-[60%] flex-1 items-center justify-center gap-2 rounded-xl bg-ok px-3 text-lg font-bold text-white disabled:bg-control">
-            <Icon name="check" size={24} />{busy ? tr('正在登记…', 'Recording…') : due.length === 0 ? tr('确认已收款', 'Confirm received') : tr(`确认已收款 ${formatRM(dueSen)}`, `Confirm received ${formatRM(dueSen)}`)}
+            <Icon name="check" size={24} />{busy ? tr('正在登记…', 'Recording…') : due.length === 0 ? tr('确认已收款', 'Confirm received')
+              : priorSen > 0 && netSen < 0 ? tr(`已退 ${formatRM(-netSen)} · 登记 ${formatRM(dueSen)}`, `Refunded ${formatRM(-netSen)} · record ${formatRM(dueSen)}`)
+                : priorSen > 0 ? tr(`已补收 ${formatRM(netSen)} · 登记 ${formatRM(dueSen)}`, `Collected ${formatRM(netSen)} more · record ${formatRM(dueSen)}`)
+                  : tr(`确认已收款 ${formatRM(dueSen)}`, `Confirm received ${formatRM(dueSen)}`)}
           </button>
-          {due.length > 0 && (
+          {due.length > 0 && !(priorSen > 0 && netSen <= 0) && (
             <button type="button" onClick={() => setQr(true)} className="flex h-14 shrink-0 items-center gap-2 rounded-xl border border-line px-3 font-semibold">
               <Icon name="qr" size={22} />{tr('显示收款码', 'Show QR')}
             </button>
@@ -308,7 +349,7 @@ export function PaymentCard({ group, onRecorded, onAddOn, onExtra }: { group: Un
           )}
         </div>
       )}
-      {qr && due.length > 0 && <ReceivingQrDialog amountSen={dueSen} label={due.length > 1 ? tr(`${head.ticketNo} 等 ${due.length} 张 · 原餐牌 ${head.tokenNumber}`, `${head.ticketNo} +${due.length - 1} · token ${head.tokenNumber}`) : tr(`${head.ticketNo} · 原餐牌 ${head.tokenNumber}`, `${head.ticketNo} · token ${head.tokenNumber}`)} onClose={() => setQr(false)} />}
+      {qr && due.length > 0 && <ReceivingQrDialog amountSen={priorSen > 0 ? netSen : dueSen} label={due.length > 1 ? tr(`${head.ticketNo} 等 ${due.length} 张 · 原餐牌 ${head.tokenNumber}`, `${head.ticketNo} +${due.length - 1} · token ${head.tokenNumber}`) : tr(`${head.ticketNo} · 原餐牌 ${head.tokenNumber}`, `${head.ticketNo} · token ${head.tokenNumber}`)} onClose={() => setQr(false)} />}
     </li>
   );
 }

@@ -53,6 +53,9 @@ export function registeredBreakdown(payments: PaymentDoc[]): RegisteredBreakdown
       paired.add(original.id);
       out.undoServeCount++;
       out.undoServeSen += original.amountSen;
+    } else if (cause === 'amend' && original && !paired.has(original.id) && original.amountSen === -r.amountSen) {
+      // 改单冲掉的原收款：和冲正成对抵消，两边都不计；按新金额再登记的那笔照常算（不会把一单算成两单）。
+      paired.add(original.id);
     } else if (cause === 'not_paid') {
       out.notPaidCount++;
       out.notPaidSen += -r.amountSen;
@@ -424,7 +427,7 @@ export function csvOrders(orders: OrderReportRow[], timeZone: string): string {
   ]);
 }
 
-const REVERSAL_ZH: Record<ReversalCause, string> = { correction: '收款更正', undo_serve: '撤回出餐（收款一起撤回）', not_paid: '客人没付就走了' };
+const REVERSAL_ZH: Record<ReversalCause, string> = { correction: '收款更正', undo_serve: '撤回出餐（收款一起撤回）', not_paid: '客人没付就走了', amend: '改单（按新金额重收）' };
 const paymentKindZh = (p: PaymentDoc) => (p.kind === 'reversal' ? REVERSAL_ZH[p.cause ?? 'correction'] ?? '收款更正'
   : p.confirmationMode === 'auto_on_serve' ? '收款（出餐自动记）' : '收款');
 

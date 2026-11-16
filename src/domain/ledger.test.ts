@@ -188,3 +188,19 @@ test('出餐即记收款：没有新字段的旧数据，日结口径完全不�
   assert.deepEqual([f.registeredAutoCount, f.undoServeCount, f.notPaidCount], [0, 0, 0]);
   assert.ok(csvClose(f, 1, '').includes('收款为人工登记，未与钱包/银行自动核对'));
 });
+
+test('改单（2026-11-16）：冲掉的原收款和冲正成对抵消，按新金额再收的照常算一单；合计不变', () => {
+  const P = (id: string, amountSen: number, extra: Partial<LedgerDocs['payments'][number]> = {}): LedgerDocs['payments'][number] =>
+    ({ id, orderId: id.split('-')[0], businessDate: D, orderBusinessDate: D, method: 'unspecified', amountSen, occurredAtMs: 1, ...extra });
+  const pays = [
+    P('x1-p1', 2500),
+    P('x1-p1-rev', -2500, { kind: 'reversal', reversesPaymentId: 'x1-p1', cause: 'amend' }),
+    P('x1-p2', 2300),
+  ];
+  const b = registeredBreakdown(pays);
+  assert.deepEqual([b.manualCount, b.manualSen, b.correctionsSen], [1, 2300, 0]);
+  assert.equal(b.manualSen + b.autoSen + b.correctionsSen - b.notPaidSen, pays.reduce((s, p) => s + p.amountSen, 0));
+  // 跨营业日找不到原收款：当普通更正，合计仍然对得上。
+  const lone = registeredBreakdown([P('x2-p1-rev', -900, { kind: 'reversal', reversesPaymentId: 'x2-p1', cause: 'amend' }), P('x2-p2', 700)]);
+  assert.deepEqual([lone.manualSen, lone.correctionsSen], [700, -900]);
+});

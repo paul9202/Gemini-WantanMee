@@ -61,20 +61,25 @@ export interface AddOnLink {
   receiptNumber: string | null;
 }
 
+/** 订单文档上的 items（接单与改单共用）：配置 + 数量 + 单价小计 + 每份数量 + 显示名。 */
+export function orderItems(menu: MenuVersion, lines: CartLine[], totals: OrderTotals) {
+  return lines.map((l, i) => {
+    const p = linePortions(menu, l.config);
+    return {
+      lineId: l.lineId, ...l.config, quantity: l.quantity, serviceMode: l.serviceMode,
+      unitPriceSen: totals.lines[i].unitPriceSen, lineTotalSen: totals.lines[i].lineTotalSen,
+      noodleHalfUnits: p.noodleHalfUnits, wantonCount: p.wantonCount,
+      nameZh: lineNameZh(menu, l.config), photoId: linePhotoId(l.config),
+      pictogramIds: linePictograms(menu, l.config, l.serviceMode).map((x) => x.id),
+    };
+  });
+}
+
 export function writeAcceptedOrder(tx: Transaction, store: StoreRefs, a: AcceptedOrderInput) {
   const legacy = a.legacyPayment;
   const life = newAcceptedState({ acceptedAtMs: a.acceptedAtEffectiveMs, kitchenRouting: a.kitchenRouting, legacyPaidSen: legacy ? a.totals.totalSen : null });
   const paymentId = legacy ? paymentIdFor(a.orderId, 1) : null;
-  const items = a.lines.map((l, i) => {
-    const p = linePortions(a.menu, l.config);
-    return {
-      lineId: l.lineId, ...l.config, quantity: l.quantity, serviceMode: l.serviceMode,
-      unitPriceSen: a.totals.lines[i].unitPriceSen, lineTotalSen: a.totals.lines[i].lineTotalSen,
-      noodleHalfUnits: p.noodleHalfUnits, wantonCount: p.wantonCount,
-      nameZh: lineNameZh(a.menu, l.config), photoId: linePhotoId(l.config),
-      pictogramIds: linePictograms(a.menu, l.config, l.serviceMode).map((x) => x.id),
-    };
-  });
+  const items = orderItems(a.menu, a.lines, a.totals);
   tx.create(store.order(a.orderId), {
     schemaVersion: 3, storeId: a.storeId, id: a.orderId, receiptNumber: a.receiptNumber, offlineReceiptNumber: a.offlineReceiptNumber,
     tokenNumber: a.tokenNumber, serviceMode: orderServiceMode(a.lines.map((l) => l.serviceMode), a.serviceMode), source: a.source, kitchenRouting: a.kitchenRouting,
@@ -190,13 +195,15 @@ export function paymentRegistrationWrites(tx: Transaction, store: StoreRefs, r: 
   });
   // 出餐前人工确认收款：后厨卡片改显示「已付 · 不用收」，送餐的人不会再收一次。
   // 自动记收款发生在出餐那一刻，厨单已出餐，不标。
-  if (mode === 'manual' && ticketUnserved(r.ticket)) tx.update(store.ticket(r.orderId), { paidBeforeServe: true });
+  if (mode === 'manual' && ticketUnserved(r.ticket)) tx.update(store.ticket(r.orderId), { paidBeforeServe: true, priorPaidSen: null });
   const orderPatch: Record<string, unknown> = {
     paymentState: 'paid', paidSen: r.amountSen, paymentMethod: 'unspecified', paymentSeq: r.seq, paymentId: id,
     paidAtMs: r.occurredAtMs, paymentBusinessDate: r.businessDate, paymentConfirmedBy: r.confirmedBy,
     paymentConfirmationMode: mode,
     // 只有出餐自动记的收款才记 servePaymentId：撤回出餐时据此判断要不要一起撤回这笔收款。
     servePaymentId: mode === 'auto_on_serve' ? id : null,
+    // 改单后按新金额收齐了：不再提示补收 / 退钱（之后被更正回待收款也不会再冒出旧提示）。
+    amendPriorPaidSen: null,
     updatedAtMs: r.recordedAtMs,
   };
   return { id, orderPatch };

@@ -77,6 +77,14 @@ interface OrderRow {
   alsoCollectedBeforeServe?: boolean;
   businessDate: string;
   version: number;
+  /** 改单记录（2026-11-16）：谁、几点、金额怎么变、改了什么。 */
+  amendHistory?: { atMs: number; role: string; fromTotalSen: number; toTotalSen: number; summary: string; undo?: boolean; paymentReversedSen?: number }[];
+  /** 收过钱又改了金额：改单前客人已付多少（按新金额登记时多退少补）。 */
+  amendPriorPaidSen?: number | null;
+  /** 后厨直接取消的记录。 */
+  cancelledBy?: { role: string; atMs: number } | null;
+  cancelReason?: string | null;
+  cancelCostDecision?: 'consumed' | 'not_made' | null;
   /** items 带下单时的完整配置；这里只用到辣度（汤品为 null）和加料的备注。 */
   items: { lineId: string; nameZh: string; quantity: number; photoId: string; productKind?: LineKind; spice?: Spice | null; note?: string | null }[];
 }
@@ -397,6 +405,26 @@ export function OrdersPage() {
           <p role="status" className="col-span-2 rounded-lg bg-warn-bg px-3 py-2 text-sm font-semibold text-warn lg:col-span-6">
             {tr(`后厨拒绝取消，继续制作${o.cancelRejection.reason ? `：${o.cancelRejection.reason}` : ''}。订单照常出餐、照常收款。`, `Kitchen rejected the cancel and keeps cooking${o.cancelRejection.reason ? `: ${o.cancelRejection.reason}` : ''}. Serve and collect as usual.`)}
           </p>
+        )}
+        {(o.amendHistory?.length ?? 0) > 0 && (
+          <details className="col-span-2 rounded-lg bg-warn-bg/50 px-3 py-2 text-sm lg:col-span-6">
+            <summary className="cursor-pointer font-semibold text-warn">{tr(`改过 ${o.amendHistory!.length} 次`, `Edited ${o.amendHistory!.length} time(s)`)}
+              {o.paymentState === 'unpaid' && (o.amendPriorPaidSen ?? 0) > 0 && <span className="ml-2">{tr(`· 客人改单前已付 ${formatRM(o.amendPriorPaidSen!)}，按 ${formatRM(o.totalSen)} 登记时多退少补`, `· customer paid ${formatRM(o.amendPriorPaidSen!)} before the edit`)}</span>}
+            </summary>
+            <ul className="mt-2 space-y-1.5 border-l-2 border-line pl-3">
+              {o.amendHistory!.map((a) => (
+                <li key={a.atMs}>
+                  <b>{new Date(a.atMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })} {a.role === 'kitchen' ? tr('后厨', 'Kitchen') : a.role === 'owner' ? tr('老板', 'Owner') : tr('收银', 'Front')}{a.undo ? tr('撤回改单', ' undid edit') : tr('改单', ' edited')}</b>
+                  {a.fromTotalSen !== a.toTotalSen && <span className="tabular-nums"> · {formatRM(a.fromTotalSen)} → {formatRM(a.toTotalSen)}</span>}
+                  {(a.paymentReversedSen ?? 0) > 0 && <span className="text-ink-2">{tr(`（原收款 ${formatRM(a.paymentReversedSen!)} 已冲掉，按新金额重收）`, ` (payment ${formatRM(a.paymentReversedSen!)} reversed, collect again)`)}</span>}
+                  <span className="block text-ink-2">{a.summary}</span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
+        {o.fulfillmentStatus === 'cancelled' && o.cancelledBy?.role === 'kitchen' && (
+          <p className="col-span-2 text-xs text-ink-2 lg:col-span-6">{tr(`后厨 ${new Date(o.cancelledBy.atMs).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })} 取消${o.cancelReason ? `：${o.cancelReason}` : ''}${o.cancelCostDecision === 'consumed' ? ' · 已经下锅（成本照算）' : ' · 还没做'}`, `Cancelled by kitchen${o.cancelReason ? `: ${o.cancelReason}` : ''}`)}</p>
         )}
         {o.paymentState === 'written_off' && o.writeOff && (
           <p className="col-span-2 text-xs text-ink-2 lg:col-span-6">{tr(`放弃追收：${o.writeOff.reason}（${formatRM(o.writeOff.amountSen)}，${new Date(o.writeOff.atMs).toLocaleString('zh-CN', { hour12: false })}）`, `Written off: ${o.writeOff.reason} (${formatRM(o.writeOff.amountSen)})`)}</p>

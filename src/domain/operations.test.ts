@@ -430,3 +430,32 @@ test('后厨「继续做，拒绝取消」：结束申请、恢复可出餐；�
   assert.ok(served.ok, '拒绝后可正常出餐');
   assert.equal(applyLifecycle(accepted(), { type: 'reject_cancel' }, ctx()).ok, false);
 });
+
+test('后厨直接取消（2026-11-16）：一步完成，按做了没有决定成本；收银不能用；已出餐不能取消', () => {
+  const notMade = applyLifecycle(accepted(), { type: 'kitchen_cancel', reason: '客人不要了', consumed: false }, ctx());
+  assert.ok(notMade.ok);
+  assert.equal(notMade.state.fulfillmentStatus, 'cancelled');
+  assert.equal(notMade.state.paymentState, 'not_due');
+  assert.equal(notMade.state.costAllocated, false);
+  assert.deepEqual([...notMade.effects].sort(), ['cost_reverse', 'kitchen_projection_update', 'token_release']);
+
+  const cooked = applyLifecycle(paidOrder(), { type: 'kitchen_cancel', reason: '点错了', consumed: true }, ctx());
+  assert.ok(cooked.ok);
+  assert.equal(cooked.state.paymentState, 'refund_due', '已付款取消：照旧由老板退款');
+  assert.equal(cooked.state.costAllocated, true);
+  assert.ok(!cooked.effects.includes('cost_reverse'));
+
+  // 前台已申请取消的单，后厨也可以直接取消。
+  const req = applyLifecycle(accepted(), { type: 'request_cancel', reason: 'x' }, ctx({ actorRole: 'cashier' }));
+  assert.ok(req.ok);
+  assert.ok(applyLifecycle(req.state, { type: 'kitchen_cancel', reason: '客人不要了', consumed: false }, ctx({ expectedVersion: 2 })).ok);
+
+  const asCashier = applyLifecycle(accepted(), { type: 'kitchen_cancel', reason: 'x', consumed: false }, ctx({ actorRole: 'cashier' }));
+  assert.equal(asCashier.ok ? 'ok' : asCashier.error, 'FORBIDDEN');
+  const blank = applyLifecycle(accepted(), { type: 'kitchen_cancel', reason: '  ', consumed: false }, ctx());
+  assert.equal(blank.ok ? 'ok' : blank.error, 'REASON_REQUIRED');
+  const served = applyLifecycle(accepted(), { type: 'serve' }, ctx());
+  assert.ok(served.ok);
+  const late = applyLifecycle(served.state, { type: 'kitchen_cancel', reason: 'x', consumed: false }, ctx({ expectedVersion: 2 }));
+  assert.equal(late.ok ? 'ok' : late.error, 'INVALID_TRANSITION');
+});

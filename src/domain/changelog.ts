@@ -21,6 +21,16 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-kitchen-edit', date: '2026-11-16', roles: ALL,
+    title: { zh: '后厨屏上可以直接改单、取消', en: 'Edit or cancel an order right on the kitchen screen' },
+    items: [
+      { zh: '还没出餐的单，卡片右上角有「改单」：加减碗数、换面、换酱、改大小、辣度、油渣、葱、加料、堂食打包，删一碗、加一碗都可以。改完卡片留在原来的位置，不会排到最后。30 秒内可以撤回。', en: 'Unserved tickets have an Edit button (top right): change bowl counts, noodles, sauce, size, chili, lard, scallion, extras, dine-in/takeaway, remove or add a bowl. The ticket keeps its place in the queue. Undo within 30 seconds.' },
+      { zh: '「两碗里只改一碗」按「其中 1 碗不一样」；面薄卖完了，一下把这张单的面薄全换细面。', en: '“Make 1 bowl different” changes just one of two bowls; one tap switches all mee pok on the ticket to thin noodles.' },
+      { zh: '改单页里有「取消整单」：选为什么、做了没有，按了就取消，不用等前台。没付钱的单不用收；已经付了的，请老板在订单页退款。', en: '“Cancel order” in the edit page asks why and whether it was cooked, then cancels right away. Unpaid orders need nothing more; paid ones are refunded by the owner on Orders.' },
+      { zh: '收银机的待收款会自动换成新的金额，写着后厨几点改了什么。前台已经收了钱的单改了金额，会提示要退给客人或补收多少。', en: 'The front’s unpaid list updates to the new amount and shows what the kitchen changed. If the order was already paid, it shows how much to refund or collect.' },
+    ],
+  },
+  {
     id: '2026-11-15-today-lighter', date: '2026-11-15', roles: ['owner'],
     title: { zh: '今天页打开更快、更省', en: 'Today page opens faster and reads less' },
     items: [

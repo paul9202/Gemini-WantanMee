@@ -49,6 +49,8 @@ export type LifecycleCommand =
   | { type: 'confirm_kitchen_cancel'; consumed: boolean }
   /** 后厨「继续做，拒绝取消」：结束本次取消申请，订单恢复正常制作 / 出餐。 */
   | { type: 'reject_cancel' }
+  /** 后厨自己取消（2026-11-16）：厨师最清楚做了没有，一步完成，不用前台申请、也不用再确认。 */
+  | { type: 'kitchen_cancel'; reason: string; consumed: boolean }
   | { type: 'confirm_full_refund'; amountSen: number };
 
 export interface LifecycleContext {
@@ -80,6 +82,7 @@ const ALLOWED: Record<LifecycleCommand['type'], ActorRole[]> = {
   request_cancel: ['cashier', 'owner'],
   confirm_kitchen_cancel: ['kitchen', 'owner'],
   reject_cancel: ['kitchen', 'owner'],
+  kitchen_cancel: ['kitchen', 'owner'],
   confirm_full_refund: ['owner'],
 };
 
@@ -176,6 +179,20 @@ export function applyLifecycle(s: OrderLifecycleState, cmd: LifecycleCommand, ct
       // 只结束取消申请：不改付款、不退款、不释放餐牌；实际出餐仍需「完成出餐」。
       if (s.fulfillmentStatus !== 'preparing' || !s.kitchenCancelRequested) return { ok: false, error: 'INVALID_TRANSITION' };
       return next({ kitchenCancelRequested: false, cancelReason: null }, ['kitchen_projection_update']);
+
+    case 'kitchen_cancel': {
+      const reason = cmd.reason.trim();
+      if (!reason) return { ok: false, error: 'REASON_REQUIRED' };
+      // 还没出餐的才能取消；前台已申请取消的也可以直接在这里完成。
+      if (s.fulfillmentStatus !== 'queued' && s.fulfillmentStatus !== 'preparing') return { ok: false, error: 'INVALID_TRANSITION' };
+      return next(
+        {
+          fulfillmentStatus: 'cancelled', kitchenCancelRequested: false, cancelReason: reason.slice(0, 200), paymentState: paymentAfterCancel(s.paymentState),
+          costAllocated: cmd.consumed ? s.costAllocated : false,
+        },
+        cmd.consumed ? ['token_release', 'kitchen_projection_update'] : ['cost_reverse', 'token_release', 'kitchen_projection_update'],
+      );
+    }
 
     case 'confirm_full_refund':
       if (s.paymentState === 'refunded') return { ok: false, error: 'ALREADY_REFUNDED' };
