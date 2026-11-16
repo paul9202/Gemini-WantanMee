@@ -215,3 +215,19 @@ test('送餐单：品名、合计这些大字行都多走，最后走纸按普�
   assert.deepEqual([...endsTall.slice(-6)], [0x1b, 0x33, 30, 0x1b, 0x64, 5], '最后一行是大字：走纸前改回普通行距，撕纸口长短不变');
   assert.deepEqual([...bytes.slice(-3)], [0x1b, 0x64, 5], '手撕走纸不变');
 });
+
+test('改单补打：「改单 · 以这张为准」在最上面，「改了：…」在牌号下面整句印出，每行不超宽', () => {
+  for (const paper of [58, 80] as const) {
+    const base = slip();
+    const s = { ...base, mark: '改单 · 以这张为准', amendNo: 1, amendNote: '改了：黑酱面 · 中 2→1 碗 面薄→细面 不加叉烧；加 干捞云吞 · 10粒', lines: [{ ...base.lines[0], tags: [{ text: '改', outline: true }] }] };
+    const lines = layoutRunnerSlip(s, paper);
+    const text = previewLines(lines);
+    assert.equal(text[0].trim(), '改单 · 以这张为准');
+    const tokenAt = text.findIndex((t) => t === '12');
+    const note = text.slice(tokenAt + 1, text.findIndex((t, i) => i > tokenAt && t.startsWith('---')));
+    assert.ok(note.join('').replace(/\s|·/g, '').includes('改了：黑酱面中2→1碗面薄→细面不加叉烧；加干捞云吞10粒'), note.join('\n'));
+    assert.ok(text.some((t) => t.startsWith('1  [改] 黑酱面')), text.join('\n'));
+    for (const t of note) assert.ok(!t.trimStart().startsWith('·'), t);
+    for (const l of lines) assert.ok(width(l) <= COLUMNS[paper], `${previewLines([l])[0]} 宽 ${width(l)}`);
+  }
+});

@@ -169,6 +169,8 @@ export function layoutRunnerSlip(slip: RunnerSlip, width: PaperWidth): PrintLine
   out.push({ segs: [{ text: '' }] });
   out.push({ segs: [{ text: String(slip.token), bold: true, w: 8, h: 8 }], align: 'center' });
   if (slip.flag) out.push(...wrapSegs([{ text: slip.flag, bold: true, h: 2 }], cols).map((l) => ({ ...l, align: 'center' as const })));
+  // 改了什么：在空格处换行，菜名「红酱面 · 小」当一个词不拆开。
+  if (slip.amendNote) out.push(...wrapSegs(slip.amendNote.replace(/ · /g, '·').split(' ').filter(Boolean).map((text, i) => ({ text, bold: true, ...(i ? { lead: ' ' } : {}) })), cols));
   out.push(rule);
   for (const l of slip.lines) {
     const qty = String(l.quantity).padEnd(3, ' ');

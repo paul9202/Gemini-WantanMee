@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-slip-after-amend', date: '2026-11-16', roles: ALL,
+    title: { zh: '后厨改单后，出餐口自动补打一张送餐单', en: 'After a kitchen edit, a new order slip prints at the pass' },
+    items: [
+      { zh: '后厨屏（或收银机）改了单，主收银平板的打印机马上按改后的内容再打一张。最上面写「改单 · 以这张为准」，牌号下面写改了什么，改过的碗前面框「改」、新加的框「加」。原来那张作废，照新的送。', en: 'When an order is edited on the kitchen screen (or register), the main register prints a new slip with the edited order. It says “改单 · 以这张为准” (edited, use this one) at the top, what changed under the token, and boxes changed bowls with 改 and new ones with 加. Throw away the old slip.' },
+      { zh: '撤回改单也会再打一张。收银平板的点餐页要开着；关着时改的单，10 分钟以内打开会补打，更早的不再打。', en: 'Undoing an edit prints again too. The register’s order page must be open; edits made while it was closed print when it reopens within 10 minutes.' },
+    ],
+  },
+  {
     id: '2026-11-16-slip-meepok-plain', date: '2026-11-16', roles: FRONT,
     title: { zh: '送餐单上的「面薄」改成普通字', en: '“面薄” on order slips is now plain text' },
     items: [

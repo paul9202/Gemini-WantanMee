@@ -345,3 +345,18 @@ test('测试条连不上：返回错误码', async () => {
   assert.deepEqual(r, { ok: false, code: 'CONNECT_FAILED' });
   assert.equal(m.getState().error, 'CONNECT_FAILED');
 });
+
+test('改单补打：和原来那张分开记次数；再补打写「改单 · 补打 2」', async () => {
+  const { m, link, prints } = setup();
+  await m.connect();
+  await m.enqueue('order:a', slip(12), { label: '#a' });
+  const amended = { ...slip(12), mark: '改单 · 以这张为准', amendNo: 1, amendNote: '改了：黑酱面 · 小 不辣→辣' };
+  await m.enqueue('order:a:amend:1', amended, { label: '#a · 改单' });
+  await flush();
+  assert.equal(link.printed.length, 2, '原来那张打过了，改单那张照样打');
+  assert.equal(link.printed[1][0].trim(), '改单 · 以这张为准');
+  assert.equal(prints.get('order:a:amend:1'), 1);
+  m.reprint('order:a:amend:1');
+  await flush();
+  assert.equal(link.printed[2][0].trim(), '改单 · 补打 2');
+});

@@ -7,6 +7,8 @@
  * - 干捞云吞的酱料收据没写，这里补上：断网时厨师照纸单做。
  * - 加料行写下单时自动生成的「给 …」备注；同牌加单、吃完再加、加料各有一句说明。
  * - 补打写「补打 N」；结果不明、核对后才确认接单的单写「核对后补打」。
+ * - 后厨改单后补打（2026-11-16）：按改后的内容再打一张，最上面写「改单 · 以这张为准」，牌号下面写改了什么，
+ *   改过的碗前面框「改」、新加的框「加」；时间写改单的时间。原来那张作废，送面的人照新的送。
  */
 import { lineNameZh, LineConfig } from './lineItem';
 import { MenuVersion, NOODLE_TYPE_NAMES, OrderServiceMode, orderServiceMode, SAUCE_NAMES, ServiceMode } from './menu';
@@ -22,7 +24,7 @@ export interface RunnerSlipSource {
   receiptNumber: string | null;
   offlineReceiptNumber: string | null;
   source: 'online' | 'offline';
-  lines: { config: LineConfig; quantity: number; unitPriceSen: number; serviceMode?: ServiceMode }[];
+  lines: { config: LineConfig; quantity: number; unitPriceSen: number; serviceMode?: ServiceMode; lineId?: string }[];
   totalSen: number;
   /** 同牌加单：挂在客人已拿着的牌上（服务器返回 sharedToken）。 */
   sharedToken?: boolean;
@@ -30,6 +32,16 @@ export interface RunnerSlipSource {
   addOnToToken?: number | null;
   /** 下单后加料的小单。 */
   extraOnly?: boolean;
+  /** 后厨改单后补打的这一张。 */
+  amend?: AmendSlipInfo;
+}
+
+/** 改单的信息（从厨单上抄来：第几次改、改了什么一句话、哪几行改过 / 新加；撤回也算一次改单）。 */
+export interface AmendSlipInfo {
+  no: number;
+  summary: string;
+  marks: Record<string, 'mod' | 'add'>;
+  undo?: boolean;
 }
 
 export interface RunnerSlipOptions {
@@ -57,8 +69,12 @@ export interface RunnerSlip {
   token: number;
   /** 牌号下面的一句说明（同牌加单 / 吃完再加 / 加料）。 */
   flag: string | null;
-  /** 补打 N / 核对后补打。 */
+  /** 补打 N / 核对后补打 / 改单 · 以这张为准。 */
   mark: string | null;
+  /** 改单补打：第几次改（打印队列补打时据此仍写「改单」）。 */
+  amendNo?: number;
+  /** 改单补打：牌号下面写改了什么。 */
+  amendNote?: string | null;
   lines: RunnerSlipLine[];
   totalSen: number;
   /** 票号或临时号。 */
@@ -75,7 +91,7 @@ function clock(ms: number, timeZone: string): string {
   return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
 }
 
-function slipLine(menu: MenuVersion, l: RunnerSlipSource['lines'][number], orderMode: OrderServiceMode, fallback: ServiceMode): RunnerSlipLine {
+function slipLine(menu: MenuVersion, l: RunnerSlipSource['lines'][number], orderMode: OrderServiceMode, fallback: ServiceMode, amendMarks?: AmendSlipInfo['marks']): RunnerSlipLine {
   const mode = l.serviceMode ?? fallback;
   const c = l.config;
   const amountSen = l.unitPriceSen * l.quantity;
@@ -83,6 +99,8 @@ function slipLine(menu: MenuVersion, l: RunnerSlipSource['lines'][number], order
     return { quantity: l.quantity, name: lineNameZh(menu, c), tags: [], detail: c.note ? [{ text: c.note }] : [], amountSen };
   }
   const tags: RunnerSlipLine['tags'] = [];
+  const amendMark = l.lineId ? amendMarks?.[l.lineId] : undefined;
+  if (amendMark) tags.push({ text: amendMark === 'add' ? '加' : '改', outline: true });
   if (orderMode === 'mixed' && mode === 'takeaway') tags.push({ text: '打包' });
   if (c.isKosong) tags.push({ text: '净面', outline: true });
   const detail: RunnerSlipLine['detail'] = [
@@ -113,16 +131,21 @@ export function buildRunnerSlip(menu: MenuVersion, src: RunnerSlipSource, opts: 
     time: clock(src.acceptedAtMs, opts.timeZone),
     token: src.tokenNumber,
     flag,
-    mark: slipMark(opts.printIndex, opts.reconciled),
-    lines: src.lines.map((l) => slipLine(menu, l, mode, src.serviceMode)),
+    mark: slipMark(opts.printIndex, opts.reconciled, src.amend?.no),
+    ...(src.amend ? { amendNo: src.amend.no, amendNote: `${src.amend.undo ? '撤回改单' : '改了'}：${src.amend.summary}` } : {}),
+    lines: src.lines.map((l) => slipLine(menu, l, mode, src.serviceMode, src.amend?.marks)),
     totalSen: src.totalSen,
     ref: src.receiptNumber ? `#${src.receiptNumber}` : `临时号 ${src.offlineReceiptNumber ?? '—'}`,
     count: src.lines.reduce((s, l) => s + l.quantity, 0),
   };
 }
 
-/** 最上面的标记：第一次打不写（核对后才确认接单的写「核对后补打」），之后写「补打 N」。 */
-export function slipMark(printIndex: number, reconciled = false): string | null {
+/**
+ * 最上面的标记：第一次打不写（核对后才确认接单的写「核对后补打」），之后写「补打 N」。
+ * 改单补打写「改单 · 以这张为准」（第二次起写「改单 2」…），这张再补打写「改单 · 补打 N」。
+ */
+export function slipMark(printIndex: number, reconciled = false, amendNo?: number): string | null {
+  if (amendNo) return printIndex > 0 ? `改单 · 补打 ${printIndex + 1}` : `改单${amendNo > 1 ? ` ${amendNo}` : ''} · 以这张为准`;
   return printIndex > 0 ? `补打 ${printIndex + 1}` : reconciled ? '核对后补打' : null;
 }
 
@@ -163,4 +186,63 @@ export function slipKey(src: { orderId?: string | null; clientOrderId?: string |
   if (src.orderId) return `order:${src.orderId}`;
   if (src.clientOrderId) return `local:${src.clientOrderId}`;
   throw new Error('送餐单需要订单 ID');
+}
+
+// ---- 后厨改单后补打 ----
+
+/** 改单补打在本机打印记录里的键：每一次改单一张（撤回也是一次）。 */
+export function amendSlipKey(orderId: string, amendCount: number): string {
+  return `order:${orderId}:amend:${amendCount}`;
+}
+
+/** 厨单改过、而且是最近改的（和断开补打同一个 10 分钟）：收银机打开时才看到的旧改动不再补打。 */
+export function printsAmendSlip(t: { amendCount?: number | null; amendedAtMs?: number | null }, nowMs: number): boolean {
+  return (t.amendCount ?? 0) > 0 && typeof t.amendedAtMs === 'number' && nowMs - t.amendedAtMs <= SLIP_RESUME_WINDOW_MS;
+}
+
+/** 厨单上改单补打要用的字段（服务器改单时写上）。 */
+export interface AmendedTicketView {
+  amendCount: number;
+  amendedAtMs: number;
+  amendSummary?: string;
+  amendMarks?: Record<string, 'mod' | 'add'>;
+  amendUndo?: boolean;
+}
+
+/** 订单文档里改单补打要用的字段：items 是改后的每一行，带成交单价（厨单故意不带单价）。 */
+export interface AmendedOrderView {
+  tokenNumber: number;
+  serviceMode: ServiceMode;
+  receiptNumber: string | null;
+  offlineReceiptNumber?: string | null;
+  totalSen: number;
+  sharedToken?: boolean;
+  addOnTo?: { tokenNumber: number } | null;
+  items: (LineConfig & { lineId: string; quantity: number; unitPriceSen: number; serviceMode?: ServiceMode })[];
+}
+
+/**
+ * 改单补打的内容：订单现在的每一行 + 厨单上的改单说明。时间写改单的时间。
+ * 能改的单都在后厨屏上（断网单补同步后也在），所以表头不写「断网单 · 后厨屏上没有」。
+ */
+export function amendSlipSource(o: AmendedOrderView, t: AmendedTicketView): RunnerSlipSource {
+  return {
+    tokenNumber: o.tokenNumber,
+    serviceMode: o.serviceMode === 'takeaway' ? 'takeaway' : 'dine_in',
+    acceptedAtMs: t.amendedAtMs,
+    receiptNumber: o.receiptNumber,
+    offlineReceiptNumber: o.offlineReceiptNumber ?? null,
+    source: 'online',
+    lines: o.items.map((it) => ({
+      lineId: it.lineId,
+      config: { productKind: it.productKind, size: it.size, noodleType: it.noodleType, sauce: it.sauce, spice: it.spice, lard: it.lard, scallion: it.scallion, isKosong: it.isKosong, addOns: it.addOns, note: it.note },
+      quantity: it.quantity,
+      unitPriceSen: it.unitPriceSen,
+      ...(it.serviceMode ? { serviceMode: it.serviceMode } : {}),
+    })),
+    totalSen: o.totalSen,
+    sharedToken: Boolean(o.sharedToken),
+    addOnToToken: o.addOnTo?.tokenNumber ?? null,
+    amend: { no: t.amendCount, summary: t.amendSummary ?? '', marks: t.amendMarks ?? {}, undo: t.amendUndo },
+  };
 }

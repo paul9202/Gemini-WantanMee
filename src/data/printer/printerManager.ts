@@ -174,7 +174,7 @@ export function createPrinterManager(deps: PrinterDeps) {
         updateJob(job.key, { status: 'printing' });
         // 测试单不记打印次数，补打标记照样单自己的写法。
         const prints = job.test ? job.prints : await deps.getPrints(job.key).catch(() => job.prints);
-        const lines = layoutRunnerSlip(job.test ? job.slip : { ...job.slip, mark: slipMark(prints, job.reconciled) }, state.settings.width);
+        const lines = layoutRunnerSlip(job.test ? job.slip : { ...job.slip, mark: slipMark(prints, job.reconciled, job.slip.amendNo) }, state.settings.width);
         const started = deps.now();
         const l = link;
         try {

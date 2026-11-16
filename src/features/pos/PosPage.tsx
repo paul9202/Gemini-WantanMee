@@ -9,7 +9,7 @@
  * 下单后加料：页头「＋加料」开面板，给已下的单加叉烧 / 云吞，单独一张小单，不动当前这张单、餐牌和加单目标；只能联网。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { collection, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, cartServiceMode, computeTotals, emptyCart, setLineQuantity, setLineServiceMode, setServiceMode, updateLineConfig } from '../../domain/cart';
 import { defaultConfig, LineConfig, normalizeConfig, unitPriceSen } from '../../domain/lineItem';
@@ -46,7 +46,7 @@ import { ProductGrid } from './ProductGrid';
 import { TokenPicker } from './TokenPicker';
 import { ReceiptDialog, receiptFromLocal, receiptFromOrder } from '../receipt/ReceiptDialog';
 import type { ReceiptSource } from '../../domain/receipt';
-import { buildRunnerSlip, RunnerSlipSource, slipKey } from '../../domain/runnerSlip';
+import { amendSlipKey, amendSlipSource, AmendedOrderView, AmendedTicketView, buildRunnerSlip, printsAmendSlip, RunnerSlipSource, slipKey } from '../../domain/runnerSlip';
 import type { MenuVersion, ServiceMode } from '../../domain/menu';
 import type { OrderLineInput } from '../../domain/cart';
 import { printer, slipPrintingOn, usePrinter } from '../../data/printer/printer';
@@ -80,6 +80,24 @@ async function queueReconciledSlip(op: PendingOp, current: MenuVersion | undefin
     receiptNumber: r.receiptNumber, offlineReceiptNumber: null, source: 'online', lines: slipLines(menu, order.lines),
     totalSen: r.totalSen ?? op.summary.totalSen, sharedToken: Boolean(r.sharedToken), extraOnly,
   }, `#${r.receiptNumber}${extraOnly ? ' · 加料' : ''} · 核对后`, true);
+}
+
+/**
+ * 后厨改单后补打：读订单现在的内容（带成交单价）再打一张「改单」。订单已经又改了一次（厨单还没跟上）就不打这一张，等下一次。
+ * 打印出任何问题都不影响收银，所以吞掉所有错误。
+ */
+async function queueAmendSlip(orderId: string, t: AmendedTicketView, current: MenuVersion | undefined, timeZone: string) {
+  try {
+    const snap = await getDoc(doc(db, storePath(`orders/${orderId}`)));
+    const o = snap.data() as (AmendedOrderView & { amendCount?: number; menuVersion: string }) | undefined;
+    if (!o || (o.amendCount ?? 0) !== t.amendCount) return;
+    const menu = current?.version === o.menuVersion ? current : (await menuForVersion(o.menuVersion)) ?? current;
+    if (!menu) return;
+    const n = t.amendCount;
+    queueSlip(menu, timeZone, amendSlipKey(orderId, n), amendSlipSource(o, t), `${o.receiptNumber ? `#${o.receiptNumber}` : `${o.tokenNumber} 号`} · ${t.amendUndo ? '撤回改单' : '改单'}${n > 1 ? ` ${n}` : ''}`);
+  } catch {
+    // 打印不影响收银
+  }
 }
 
 interface CreateOrderResult {
@@ -139,7 +157,7 @@ export function PosPage() {
     else base = { ...rt.snapshot.tokens };
     return overlayLocalTokens(base, unsynced.map((r) => r.event));
   }, [tokensQ.data, tokensFromServer, rt.snapshot, unsynced]);
-  const queueQ = useLiveQuery<{ fulfillmentStatus: string; acceptedAtEffectiveMs: number; kitchenAckAtMs?: number | null; manualHandoffAtMs?: number | null }>(
+  const queueQ = useLiveQuery<{ fulfillmentStatus: string; acceptedAtEffectiveMs: number; kitchenAckAtMs?: number | null; manualHandoffAtMs?: number | null } & Partial<AmendedTicketView>>(
     query(collection(db, storePath('kitchenTickets')), where('kitchenRouting', '==', 'digital'), where('fulfillmentStatus', 'in', ['queued', 'preparing'])),
     'pos-queue',
   );
@@ -266,6 +284,20 @@ export function PosPage() {
   useEffect(() => {
     if (!slipOn && printer.getState().link !== 'off' && printer.getState().link !== 'needs_tap') printer.disconnect();
   }, [slipOn]);
+  // 送餐单：后厨改单后补打一张「改单」。只补打 10 分钟以内的改动（收银机打开时才看到的旧改动不打）；
+  // 同一次改单只打一次（这次打开里记一下，页面重开后靠本机打印记录）。
+  const amendSeen = useRef(new Set<string>());
+  useEffect(() => {
+    if (!slipOn || !config) return;
+    const now = Date.now();
+    for (const t of queueQ.data) {
+      if (!printsAmendSlip(t, now)) continue;
+      const key = amendSlipKey(t.id, t.amendCount!);
+      if (amendSeen.current.has(key)) continue;
+      amendSeen.current.add(key);
+      void queueAmendSlip(t.id, t as AmendedTicketView, menu, config.timeZone);
+    }
+  }, [queueQ.data, slipOn, config, menu]);
   // 送餐单：下单结果不明的单，核对确认已接单后补打（标「核对后补打」）；查无此单就不打。
   // 打开页面时还在送单中 / 结果不明的旧单也算（页面在送单途中被关掉）。本次打开里正常送单中的不算，那些接单时直接打。
   const awaitingCheck = useRef<Set<string> | null>(null);

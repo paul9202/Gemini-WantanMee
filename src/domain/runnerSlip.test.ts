@@ -7,7 +7,8 @@ import assert from 'node:assert/strict';
 import { defaultConfig, MENU_V1, normalizeConfig, NOTE_NO_TOMATO, unitPriceSen } from './index';
 import type { LineConfig, ServiceMode } from './index';
 import { extraConfig, extraNote } from './extras';
-import { autoPrintsSlip, buildRunnerSlip, resumesOnReconnect, RunnerSlip, RunnerSlipSource, SLIP_RESUME_WINDOW_MS, slipAmount, slipKey, slipTotal } from './runnerSlip';
+import { amendSlipKey, amendSlipSource, autoPrintsSlip, buildRunnerSlip, printsAmendSlip, resumesOnReconnect, RunnerSlip, RunnerSlipSource, SLIP_RESUME_WINDOW_MS, slipAmount, slipKey, slipMark, slipTotal } from './runnerSlip';
+import type { AmendedOrderView, AmendedTicketView } from './runnerSlip';
 
 const menu = MENU_V1;
 const TZ = 'Asia/Kuala_Lumpur';
@@ -136,4 +137,62 @@ test('打印记录的键：云端单用订单 ID，断网单用本机 ID', () =>
   assert.equal(slipKey({ orderId: 'abc' }), 'order:abc');
   assert.equal(slipKey({ clientOrderId: 'xyz' }), 'local:xyz');
   assert.throws(() => slipKey({}));
+});
+
+// ---- 后厨改单后补打 ----
+
+const amendedOrder = (patch: Partial<AmendedOrderView> = {}): AmendedOrderView => ({
+  tokenNumber: 12, serviceMode: 'dine_in', receiptNumber: '261116-007', offlineReceiptNumber: null, totalSen: 1600,
+  items: [
+    { lineId: 'a', ...blackMeePoh, quantity: 1, unitPriceSen: 900, serviceMode: 'dine_in' },
+    { lineId: 'b', ...soupSmall, quantity: 1, unitPriceSen: 700, serviceMode: 'dine_in' },
+  ],
+  ...patch,
+});
+const amendedTicket = (patch: Partial<AmendedTicketView> = {}): AmendedTicketView => ({
+  amendCount: 1, amendedAtMs: Date.UTC(2026, 10, 16, 6, 40), amendSummary: '黑酱面 · 中 不加叉烧；加 云吞汤面 · 小', amendMarks: { a: 'mod', b: 'add' }, ...patch,
+});
+
+test('改单补打：最上面「改单 · 以这张为准」，牌号下面写改了什么，改过的框「改」、新加的框「加」，时间写改单时间', () => {
+  const s = buildRunnerSlip(menu, amendSlipSource(amendedOrder(), amendedTicket()), OPTS);
+  assert.equal(s.mark, '改单 · 以这张为准');
+  assert.equal(s.amendNo, 1);
+  assert.equal(s.amendNote, '改了：黑酱面 · 中 不加叉烧；加 云吞汤面 · 小');
+  assert.deepEqual(s.lines[0].tags, [{ text: '改', outline: true }]);
+  assert.deepEqual(s.lines[1].tags, [{ text: '加', outline: true }]);
+  assert.equal(s.time, '14:40');
+  assert.equal(s.ref, '#261116-007');
+  assert.equal(s.totalSen, 1600);
+  assert.equal(s.lines[0].amountSen, 900, '用订单上的成交单价');
+});
+
+test('改单补打：第二次写「改单 2」；撤回写「撤回改单」；再补打写「改单 · 补打 N」', () => {
+  assert.equal(buildRunnerSlip(menu, amendSlipSource(amendedOrder(), amendedTicket({ amendCount: 2 })), OPTS).mark, '改单 2 · 以这张为准');
+  assert.ok(buildRunnerSlip(menu, amendSlipSource(amendedOrder(), amendedTicket({ amendUndo: true })), OPTS).amendNote!.startsWith('撤回改单：'));
+  assert.equal(slipMark(1, false, 1), '改单 · 补打 2');
+  assert.equal(slipMark(0, true, 3), '改单 3 · 以这张为准', '改单优先于核对后补打');
+});
+
+test('改单补打：能改的单都在后厨屏上，表头不写断网单；同牌加单、吃完再加的说明照写', () => {
+  const s = buildRunnerSlip(menu, amendSlipSource(amendedOrder({ receiptNumber: null, offlineReceiptNumber: 'O-F01-0042' }), amendedTicket()), OPTS);
+  assert.deepEqual(s.header, { label: '堂食 DINE IN', inverse: false });
+  assert.equal(s.ref, '临时号 O-F01-0042');
+  assert.equal(buildRunnerSlip(menu, amendSlipSource(amendedOrder({ sharedToken: true }), amendedTicket()), OPTS).flag, '同牌加单 · 和前面的 12 号一起送');
+  assert.equal(buildRunnerSlip(menu, amendSlipSource(amendedOrder({ addOnTo: { tokenNumber: 5 } }), amendedTicket()), OPTS).flag, '加单 · 原 5 号的客人');
+});
+
+test('改单补打：每次改单一个键；只补打 10 分钟以内的改动；没改过的不打', () => {
+  assert.equal(amendSlipKey('o1', 2), 'order:o1:amend:2');
+  assert.notEqual(amendSlipKey('o1', 1), slipKey({ orderId: 'o1' }), '和原来那张分开记');
+  const at = 1_000_000;
+  assert.equal(printsAmendSlip({ amendCount: 1, amendedAtMs: at }, at + SLIP_RESUME_WINDOW_MS), true);
+  assert.equal(printsAmendSlip({ amendCount: 1, amendedAtMs: at }, at + SLIP_RESUME_WINDOW_MS + 1), false);
+  assert.equal(printsAmendSlip({ amendCount: 0, amendedAtMs: at }, at), false);
+  assert.equal(printsAmendSlip({}, at), false);
+});
+
+test('真单（没改过）没有改单字样', () => {
+  const s = buildRunnerSlip(menu, source(), OPTS);
+  assert.equal(s.amendNote, undefined);
+  assert.ok(s.lines.every((l) => !l.tags.some((t) => t.text === '改' || t.text === '加')));
 });
