@@ -22,6 +22,7 @@ import { Login } from './Login';
 import { navigate, Route, useRoute } from './router';
 import { Role, SessionProvider, useSession } from './session';
 import { Shell } from './Shell';
+import { AmendSlipWatcher } from '../features/printer/AmendSlipWatcher';
 
 const ALLOWED: Record<Exclude<Route, '/login'>, Role[]> = {
   '/pos': ['cashier', 'owner'],
@@ -86,6 +87,8 @@ export default function App() {
   return (
     <SessionProvider>
       <IconSprite />
+      {/* 后厨改单后补打送餐单：连着打印机的平板不管停在哪一页都看着。 */}
+      <AmendSlipWatcher />
       <Routes />
     </SessionProvider>
   );
