@@ -12,6 +12,12 @@ import type { Sen } from './money';
 export const NOTE_MAX_LENGTH = 80;
 export const MAX_LINE_QUANTITY = 50;
 /**
+ * 一碗里同一种加料最多几份（2026-11-16 起不再只能一份）。只是防误按和坏数据的保护，和一行数量上限一样，平时碰不到。
+ * 几份就在 addOns 里重复几次，例如加叉烧 ×3 = ['char_siew', 'char_siew', 'char_siew']：
+ * 旧订单（每种最多一个）原样有效，价钱、份量逐个累加。
+ */
+export const MAX_ADD_ON_COUNT = MAX_LINE_QUANTITY;
+/**
  * 「不要番茄酱」用备注字段的固定值表示：备注已在所有线上版本里接受并存储，不用改后台也不用担心旧设备拒单。
  * 旧订单靠这个值识别，发布后不能改字。只有现调的红酱才有番茄酱。
  */
@@ -73,8 +79,20 @@ export interface LineConfig {
   lard: Level | null;
   scallion: Level;
   isKosong: boolean;
+  /** 每份加料一个元素，同一种加几份就重复几次（见 MAX_ADD_ON_COUNT）。 */
   addOns: AddOnId[];
   note: string;
+}
+
+/** 这一碗加了几份某种加料。 */
+export function addOnCount(cfg: { addOns?: readonly string[] | null }, id: AddOnId): number {
+  return (cfg.addOns ?? []).filter((a) => a === id).length;
+}
+
+/** 把某种加料设成 n 份，按固定顺序（ADD_ON_IDS）写回，同一碗不管怎么按出来都一样，购物车才能合并。 */
+export function withAddOnCount(addOns: readonly AddOnId[], id: AddOnId, n: number): AddOnId[] {
+  const count = (a: AddOnId) => (a === id ? Math.max(0, Math.min(MAX_ADD_ON_COUNT, Math.floor(n))) : addOns.filter((x) => x === a).length);
+  return ADD_ON_IDS.flatMap((a) => Array<AddOnId>(count(a)).fill(a));
 }
 
 export type ReasonCode =
@@ -126,9 +144,9 @@ export function normalizeConfig(menu: MenuVersion, cfg: LineConfig): LineConfig 
   const lard = product.allowsSpiceAndLard ? (cfg.lard && LEVELS.includes(cfg.lard) ? cfg.lard : 'normal') : null;
   const scallion = LEVELS.includes(cfg.scallion) ? cfg.scallion : 'normal';
   const isKosong = product.allowsKosong && cfg.isKosong === true;
-  const addOns = ADD_ON_IDS.filter(
-    (id) => cfg.addOns.includes(id) && product.addOns.includes(id) && !(isKosong && menu.addOns[id].isMeat),
-  );
+  const addOns = ADD_ON_IDS.flatMap((id) => (product.addOns.includes(id) && !(isKosong && menu.addOns[id].isMeat)
+    ? Array<AddOnId>(Math.min(MAX_ADD_ON_COUNT, addOnCount(cfg, id))).fill(id)
+    : []));
   const cleanNote = cfg.note.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, NOTE_MAX_LENGTH);
   const tokens = noteTokens(cleanNote).filter((t) =>
     t === NOTE_NO_TOMATO ? allowsNoTomato({ sauce })
@@ -200,12 +218,11 @@ export function validateConfig(menu: MenuVersion, cfg: LineConfig): ValidationIs
 
   if (cfg.isKosong && !product.allowsKosong) issues.push({ code: 'KOSONG_NOT_ALLOWED', field: 'isKosong' });
 
-  const seen = new Set<string>();
-  for (const id of cfg.addOns) {
-    if (seen.has(id)) issues.push({ code: 'DUPLICATE_ADDON', field: 'addOns' });
-    seen.add(id);
+  // 同一种加料可以重复（加几份就几个），只拦超过保护上限的。DUPLICATE_ADDON 留在 ReasonCode 里给旧记录的提示用。
+  for (const id of new Set(cfg.addOns)) {
     if (!ADD_ON_IDS.includes(id) || !product.addOns.includes(id)) issues.push({ code: 'INVALID_ADDON', field: 'addOns' });
     else if (cfg.isKosong && menu.addOns[id].isMeat) issues.push({ code: 'KOSONG_MEAT_ADDON', field: 'addOns' });
+    else if (addOnCount(cfg, id) > MAX_ADD_ON_COUNT) issues.push({ code: 'INVALID_ADDON', field: 'addOns' });
   }
   if (cfg.productKind === 'extra' && cfg.addOns.length !== 1) issues.push({ code: 'INVALID_ADDON', field: 'addOns' });
   if (cfg.note.length > NOTE_MAX_LENGTH) issues.push({ code: 'NOTE_TOO_LONG', field: 'note' });
@@ -249,8 +266,8 @@ export function linePortions(menu: MenuVersion, cfg: LineConfig): LinePortions {
   if (!size) throw new RangeError(`未知规格 ${cfg.productKind}/${cfg.size}`);
   const baseWantonCount = cfg.isKosong ? 0 : size.wantonCount;
   const baseCharSiewPortions = cfg.isKosong || hasNoCharSiew(cfg) ? 0 : size.charSiewPortions;
-  const extraCharSiew = cfg.addOns.includes('char_siew') ? 1 : 0;
-  const extraWantonPacks = cfg.addOns.includes('wanton_3') ? 1 : 0;
+  const extraCharSiew = addOnCount(cfg, 'char_siew');
+  const extraWantonPacks = addOnCount(cfg, 'wanton_3');
   return {
     noodleHalfUnits: size.noodleHalfUnits,
     baseWantonCount,

@@ -38,7 +38,7 @@ export const BOM_V1: BomVersion = {
 
 export const BOM_VERSIONS: Record<string, BomVersion> = { [BOM_V1.version]: BOM_V1 };
 
-/** 单份成本（不含包装）。加叉烧/加云吞各只计一次。 */
+/** 单份成本（不含包装）。加叉烧/加云吞加几份算几份。 */
 export function unitCostUnits(menu: MenuVersion, bom: BomVersion, cfg: LineConfig): CostUnits {
   const p = linePortions(menu, cfg);
   const noodle = cfg.noodleType ? p.noodleHalfUnits * bom.noodleHalfBall[cfg.noodleType] : 0;

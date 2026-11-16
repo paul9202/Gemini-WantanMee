@@ -36,7 +36,8 @@ test('parseLineConfig：允许加料时也必须正好一个加料，且不能�
   };
   assert.deepEqual(issues({ addOns: [] }), ['INVALID_ADDON']);
   assert.deepEqual(issues({ addOns: ['char_siew', 'wanton_3'] }), ['INVALID_ADDON']);
-  assert.ok(issues({ addOns: ['char_siew', 'char_siew'] }).includes('DUPLICATE_ADDON'));
+  // 加料行一行一种料，加几份写在行数量里，不在 addOns 里重复。
+  assert.deepEqual(issues({ addOns: ['char_siew', 'char_siew'] }), ['INVALID_ADDON']);
   assert.deepEqual(issues({ addOns: ['sauce'] }), ['INVALID_ADDON']);
   assert.deepEqual(issues({ size: 'small' }), ['INVALID_SIZE']);
   assert.deepEqual(issues({ noodleType: 'thin_egg' }), ['INVALID_NOODLE_TYPE']);

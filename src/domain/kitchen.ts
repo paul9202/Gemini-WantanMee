@@ -33,7 +33,7 @@ export interface KitchenLine {
   wantonCount: number;
   nameZh: string;
   photoId: string;
-  pictograms: { id: PictogramId; emphasized: boolean }[];
+  pictograms: { id: PictogramId; emphasized: boolean; count?: number }[];
 }
 
 export interface KitchenTicket {

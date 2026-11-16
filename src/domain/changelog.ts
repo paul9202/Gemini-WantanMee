@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-multi-addon', date: '2026-11-16', roles: ALL,
+    title: { zh: '一碗可以加好几份叉烧、云吞', en: 'Add more than one portion of char siew or wantan to a bowl' },
+    items: [
+      { zh: '点餐时按「加叉烧」或「加 3 粒」还是先加一份；加了以后格子下面有 − 和 ＋，要几份按几下，减到 0 就是不加。价钱按份数算。', en: 'Tapping +Char siew or +3 wantan still adds one portion; then use − and ＋ under it for more, down to 0 to remove. The price counts every portion.' },
+      { zh: '后厨屏、送餐单、收据写「加叉烧 ×3」；只加一份的照旧写「加叉烧」。后厨改单和下单后加料也一样可以加好几份。', en: 'The kitchen screen, order slips and receipts show “加叉烧 ×3”; a single portion still shows just “加叉烧”. Kitchen edits and post-order extras can add several portions too.' },
+    ],
+  },
+  {
     id: '2026-11-16-pos-defaults', date: '2026-11-16', roles: FRONT,
     title: { zh: '点餐：每碗面默认细面，白酱面默认不辣', en: 'Ordering: every bowl starts as thin noodles; white sauce starts with no chili' },
     items: [

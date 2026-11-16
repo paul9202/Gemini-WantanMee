@@ -2,9 +2,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addLine, BOM_V1, computeTotals, defaultConfig, emptyCart, ENTRY_TILES, formatCostRM, formatCostRMPrecise,
-  LineConfig, linePhotoId, linePictograms, linePortions, MENU_V1, NoodleSize, normalizeConfig, parseLineConfig,
-  setLineQuantity, setServiceMode, unitCostUnits, unitPriceSen, updateLineConfig, validateConfig,
+  addLine, addOnCount, BOM_V1, computeTotals, defaultConfig, emptyCart, ENTRY_TILES, formatCostRM, formatCostRMPrecise,
+  LineConfig, lineMergeKey, linePhotoId, linePictograms, linePortions, MAX_ADD_ON_COUNT, MENU_V1, modifierNamesZh, NoodleSize, normalizeConfig, parseLineConfig,
+  pictogramText, setLineQuantity, setServiceMode, unitCostUnits, unitPriceSen, updateLineConfig, validateConfig, withAddOnCount,
 } from './index';
 
 const menu = MENU_V1;
@@ -108,8 +108,52 @@ test('M06 小面加叉烧/加云吞/二者：900/900/1100；BOM 各加一次', (
   assert.equal(unitCostUnits(menu, BOM_V1, cs) - baseCost, 1200);
   assert.equal(unitCostUnits(menu, BOM_V1, wt) - baseCost, 660);
   assert.equal(unitCostUnits(menu, BOM_V1, both) - baseCost, 1860);
-  // 重复加料被拒绝而不是加两次
-  assert.ok(validateConfig(menu, { ...base, addOns: ['char_siew', 'char_siew'] }).some((i) => i.code === 'DUPLICATE_ADDON'));
+});
+
+test('M06b 一碗可以加好几份叉烧 / 云吞：价钱、份量、成本加几份算几份', () => {
+  const base = noodle('small');
+  const baseCost = unitCostUnits(menu, BOM_V1, base);
+  const cs3 = noodle('small', { addOns: ['char_siew', 'char_siew', 'char_siew'] });
+  assert.deepEqual(validateConfig(menu, cs3), []);
+  assert.equal(unitPriceSen(menu, cs3), 700 + 3 * 200);
+  assert.equal(unitCostUnits(menu, BOM_V1, cs3) - baseCost, 3 * 1200);
+  assert.equal(linePortions(menu, cs3).extraCharSiew, 3);
+  assert.equal(linePortions(menu, cs3).charSiewPortions, 1 + 3);
+  const w2 = noodle('small', { addOns: ['wanton_3', 'wanton_3'] });
+  assert.equal(linePortions(menu, w2).extraWantonPacks, 2);
+  assert.equal(linePortions(menu, w2).wantonCount, linePortions(menu, base).wantonCount + 6);
+  // 份数数出来、写回固定顺序：先叉烧后云吞，同一碗怎么按都一样
+  const mixed = noodle('small', { addOns: ['wanton_3', 'char_siew', 'wanton_3'] });
+  assert.deepEqual(mixed.addOns, ['char_siew', 'wanton_3', 'wanton_3']);
+  assert.equal(addOnCount(mixed, 'wanton_3'), 2);
+  assert.deepEqual(withAddOnCount(mixed.addOns, 'char_siew', 4), ['char_siew', 'char_siew', 'char_siew', 'char_siew', 'wanton_3', 'wanton_3']);
+  assert.deepEqual(withAddOnCount(mixed.addOns, 'wanton_3', 0), ['char_siew']);
+  // 一份和两份不是同一碗，购物车不合并
+  assert.notEqual(lineMergeKey(noodle('small', { addOns: ['char_siew'] })), lineMergeKey(noodle('small', { addOns: ['char_siew', 'char_siew'] })));
+  // 净面照样整份清掉；云吞类照样不能加叉烧
+  assert.deepEqual(noodle('small', { addOns: ['char_siew', 'char_siew'], isKosong: true }).addOns, []);
+  const dw = { ...defaultConfig(menu, 'dry_wanton'), addOns: ['wanton_3', 'wanton_3', 'char_siew'] } as LineConfig;
+  assert.deepEqual(validateConfig(menu, dw).map((i) => i.code), ['INVALID_ADDON']);
+});
+
+test('M06c 加料份数只有保护上限：服务端收 MAX_ADD_ON_COUNT 份，再多才拒', () => {
+  const many = (n: number) => ({ ...noodle('small'), addOns: Array(n).fill('char_siew') });
+  assert.equal(parseLineConfig(menu, many(MAX_ADD_ON_COUNT)).ok, true);
+  assert.deepEqual(validateConfig(menu, many(MAX_ADD_ON_COUNT + 1)).map((i) => i.code), ['INVALID_ADDON']);
+  assert.equal(addOnCount(normalizeConfig(menu, many(MAX_ADD_ON_COUNT + 5)), 'char_siew'), MAX_ADD_ON_COUNT);
+  assert.equal(addOnCount({ addOns: withAddOnCount([], 'char_siew', MAX_ADD_ON_COUNT + 5) }, 'char_siew'), MAX_ADD_ON_COUNT);
+});
+
+test('M06d 多份加料：图卡一种一张带份数，收据 / 送餐单写「加叉烧 ×3」；一份照旧不写份数', () => {
+  const c = noodle('small', { addOns: ['char_siew', 'char_siew', 'char_siew', 'wanton_3'] });
+  const addOns = linePictograms(menu, c, 'dine_in').filter((p) => p.id.startsWith('addon:'));
+  assert.deepEqual(addOns, [{ id: 'addon:char_siew', emphasized: true, count: 3 }, { id: 'addon:wanton_3', emphasized: true }]);
+  // 一份时对象上根本没有 count（厨单整条存进 Firestore，不能有 undefined）
+  assert.equal('count' in addOns[1], false);
+  const names = modifierNamesZh(menu, c, 'dine_in');
+  assert.ok(names.includes('加叉烧 ×3'));
+  assert.ok(names.includes('加3粒'));
+  assert.equal(pictogramText({ id: 'addon:wanton_3', count: 2 }, 'en'), '+3 wantan ×2');
 });
 
 test('M07 中面 BOM = 1.5×850+4×220+1200+500 = 3855 单位 = RM3.855', () => {

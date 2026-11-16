@@ -40,7 +40,7 @@ import { Lang, useLang, useT } from '../../app/i18n';
 import { lineNameEn, LineConfig } from '../../domain/lineItem';
 import { MENU_V1, OrderServiceMode, SAUCE_NAMES, SERVICE_MODE_NAMES, ServiceMode } from '../../domain/menu';
 import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
-import { hasNoCharSiew, hasNoTomato, noteFreeText } from '../../domain/lineItem';
+import { addOnCount, hasNoCharSiew, hasNoTomato, noteFreeText } from '../../domain/lineItem';
 import { useKdsTheme, useNewTicketChime, useScreenWakeLock } from './prefs';
 import { UpdateNotice, UpdatesDialog } from '../updates/UpdatesPage';
 import { menuForVersion, useMenu } from '../../data/menu';
@@ -691,7 +691,7 @@ function TicketCard({ t, sameToken, now, today, disabled, busy, onAct, onAmend, 
   const pokHalf = ofType('mee_poh').reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
   const thinHalf = ofType('thin_egg').reduce((s, l) => s + l.noodleHalfUnits * l.quantity, 0);
   const wantons = t.lines.reduce((s, l) => s + l.wantonCount * l.quantity, 0);
-  const charSiew = t.extraOnly ? t.lines.filter((l) => l.addOns.includes('char_siew')).reduce((s, l) => s + l.quantity, 0) : 0;
+  const charSiew = t.extraOnly ? t.lines.reduce((s, l) => s + addOnCount(l, 'char_siew') * l.quantity, 0) : 0;
   const ref: TicketRef = { id: t.id, version: t.version, tokenNumber: t.tokenNumber, receiptNumber: t.receiptNumber };
   // 只有人工开工（旧流程 startOrder）才显示具体开工时刻。自动开工每张都一样，不再占一行（让位给金额，1280×800 一屏多看几张）。
   const manualStart = t.startedSource === 'manual' && t.startedAtMs != null ? t.startedAtMs : null;
@@ -935,6 +935,7 @@ function KitchenLineRow({ l, serviceMode, mixed, mark = null }: { l: KitchenLine
           {special.map((p) => (
             <span key={p.id} className={`inline-flex items-center gap-2 rounded-xl border border-kds-line px-2.5 py-1.5 font-bold ${chipTone}`}>
               <PictoArt id={p.id} size={28} />{label(p.id)}
+              {p.count && p.count > 1 && <span className="rounded-md bg-kds-action px-1.5 text-xl font-black tabular-nums text-kds-action-ink">×{p.count}</span>}
             </span>
           ))}
         </div>

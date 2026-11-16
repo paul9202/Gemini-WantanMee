@@ -7,7 +7,7 @@
  */
 import { useMemo, useState } from 'react';
 import { AmendLine, diffAmend, amendSettlement } from '../../domain/amend';
-import { defaultConfig, LineConfig, lineName, linePhotoId, normalizeConfig, unitPriceSen } from '../../domain/lineItem';
+import { addOnCount, defaultConfig, LineConfig, lineName, linePhotoId, MAX_ADD_ON_COUNT, normalizeConfig, unitPriceSen, withAddOnCount } from '../../domain/lineItem';
 import { AddOnId, ENTRY_TILES, Level, MenuVersion, NOODLE_TYPE_NAMES, productOf, Sauce, SAUCE_NAMES, ServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import type { KitchenLine, KitchenTicket } from '../../domain/kitchen';
 import { kitchenRM } from '../../domain/kitchen';
@@ -217,13 +217,25 @@ function LineEditor({ r, menu, lang, mark, onQty, onConfig, onMode, onRemove, on
         {product.addOns.length > 0 && row(tr('加料', 'Extras'), (
           <div className="flex flex-wrap gap-1.5">
             {product.addOns.map((id: AddOnId) => {
-              const on = c.addOns.includes(id);
+              const n = addOnCount(c, id);
               const blocked = c.isKosong && menu.addOns[id].isMeat;
+              const name = tr(menu.addOns[id].nameZh, menu.addOns[id].nameEn);
+              const setN = (v: number) => onConfig({ addOns: withAddOnCount(c.addOns, id, v) });
+              // 没加时整个按钮加一份；加了以后变成 − 份数 +，一碗可以加好几份。
+              if (n === 0 || blocked) {
+                return (
+                  <button key={id} type="button" aria-pressed={false} disabled={blocked} onClick={() => setN(1)}
+                    className="h-12 rounded-xl border-2 border-kds-line px-3 text-base font-bold disabled:opacity-35">
+                    {name} +{kitchenRM(menu.addOns[id].priceSen)}
+                  </button>
+                );
+              }
               return (
-                <button key={id} type="button" aria-pressed={on} disabled={blocked} onClick={() => onConfig({ addOns: on ? c.addOns.filter((a) => a !== id) : [...c.addOns, id] })}
-                  className={`h-12 rounded-xl border-2 px-3 text-base font-bold disabled:opacity-35 ${on ? 'border-kds-text bg-kds-text text-kds' : 'border-kds-line'}`}>
-                  {tr(menu.addOns[id].nameZh, menu.addOns[id].nameEn)} +{kitchenRM(menu.addOns[id].priceSen)}
-                </button>
+                <div key={id} className="inline-flex h-12 items-center overflow-hidden rounded-xl border-2 border-kds-text bg-kds-text text-kds">
+                  <button type="button" aria-label={tr(`${name} 少一份`, `${name}: one less`)} onClick={() => setN(n - 1)} className="h-full w-12 text-2xl font-black">−</button>
+                  <span className="px-1 text-base font-bold">{name} <b className="tabular-nums" aria-live="polite">×{n}</b></span>
+                  <button type="button" aria-label={tr(`${name} 多一份`, `${name}: one more`)} disabled={n >= MAX_ADD_ON_COUNT} onClick={() => setN(n + 1)} className="h-full w-12 text-2xl font-black disabled:opacity-30">+</button>
+                </div>
               );
             })}
           </div>

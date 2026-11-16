@@ -2,8 +2,8 @@
  * 图卡语义表（06 §4）。POS、购物车、KDS、培训卡共用同一语义 ID，
  * UI 只负责把 ID 渲染成同一张图，不允许各页面自行解释含义。
  */
-import { hasNoCharSiew, hasNoTomato, LineConfig } from './lineItem';
-import { MenuVersion, productOf, ServiceMode } from './menu';
+import { addOnCount, hasNoCharSiew, hasNoTomato, LineConfig } from './lineItem';
+import { ADD_ON_IDS, MenuVersion, productOf, ServiceMode } from './menu';
 
 export type PictogramId =
   | 'spice:none' | 'spice:less' | 'spice:normal' | 'spice:extra'
@@ -60,6 +60,14 @@ export interface LinePictogram {
   id: PictogramId;
   /** 偏离默认的要求才在 KDS 强调；默认项保留但弱化，不完全丢失。辣度例外：每碗都强调，默认的「辣」也是。 */
   emphasized: boolean;
+  /** 加料一碗加了不止一份时的份数（2 起）；一份不写，旧厨单也没有这个字段。 */
+  count?: number;
+}
+
+/** 图卡的文字，加料多份时带份数，例如「加叉烧 ×3」。 */
+export function pictogramText(p: Pick<LinePictogram, 'id' | 'count'>, lang: 'zh' | 'en' = 'zh'): string {
+  const name = lang === 'en' ? PICTOGRAMS[p.id].en : PICTOGRAMS[p.id].zh;
+  return p.count && p.count > 1 ? `${name} ×${p.count}` : name;
 }
 
 /**
@@ -69,7 +77,7 @@ export interface LinePictogram {
 export function modifierNamesZh(menu: MenuVersion, cfg: LineConfig, serviceMode: ServiceMode): string[] {
   return linePictograms(menu, cfg, serviceMode)
     .filter((p) => p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'kosong:on')
-    .map((p) => PICTOGRAMS[p.id].zh);
+    .map((p) => pictogramText(p));
 }
 
 /** 某行在 POS/KDS/收据上显示的图卡序列（顺序固定）。 */
@@ -84,7 +92,11 @@ export function linePictograms(menu: MenuVersion, cfg: LineConfig, serviceMode: 
   if (cfg.spice) out.push({ id: `spice:${cfg.spice}`, emphasized: true });
   out.push({ id: `scallion:${cfg.scallion}`, emphasized: cfg.scallion !== 'normal' });
   if (cfg.lard) out.push({ id: `lard:${cfg.lard}`, emphasized: cfg.lard !== 'normal' });
-  for (const a of cfg.addOns) out.push({ id: `addon:${a}`, emphasized: true });
+  // 每种加料一张图卡，多份写份数（不写 undefined：厨单整条存进 Firestore）。
+  for (const a of ADD_ON_IDS) {
+    const n = addOnCount(cfg, a);
+    if (n > 0) out.push(n > 1 ? { id: `addon:${a}`, emphasized: true, count: n } : { id: `addon:${a}`, emphasized: true });
+  }
   if (serviceMode === 'takeaway' && !product.isSoup && cfg.productKind !== 'extra') out.push({ id: 'takeaway:no_side_soup', emphasized: true });
   return out;
 }

@@ -71,6 +71,18 @@ test('叉烧：面碗 1 份，净面和「不要叉烧」不放，加叉烧另�
   assert.equal(u.wanton.fromNoodle, 4 * 5);
 });
 
+test('一碗加好几份：叉烧、云吞加几份算几份，乘碗数', () => {
+  const u = materialUsage([order([
+    item(cfg('dry_noodle', { addOns: ['char_siew', 'char_siew', 'char_siew'] }), 2),
+    item(cfg('dry_wanton', { addOns: ['wanton_3', 'wanton_3'] })),
+  ])]);
+  assert.equal(u.charSiew.extra, 3 * 2);
+  assert.equal(u.charSiew.total, 2 + 3 * 2);
+  assert.equal(u.wanton.extraPacks, 2);
+  assert.equal(u.wanton.extraCount, 6);
+  assert.equal(u.wanton.fromNoodle + u.wanton.fromWanton10 + u.wanton.fromWanton15 + u.wanton.extraCount, u.wanton.total);
+});
+
 test('下单后加料不算一碗，只算它带的云吞和叉烧；取消的单不算', () => {
   const extra = cfg('extra', { addOns: ['char_siew', 'wanton_3'] });
   const u = materialUsage([

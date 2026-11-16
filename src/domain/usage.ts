@@ -10,7 +10,7 @@
  * - 材料成本按「用量 × 当前单位成本（BOM）」算，是给老板看的估算；日结 / 利润仍以下单时写入的成本记录为准。
  */
 import { BomVersion, unitCostUnits } from './bom';
-import { defaultConfig, hasNoCharSiew, LineConfig, linePortions, normalizeConfig } from './lineItem';
+import { addOnCount, defaultConfig, hasNoCharSiew, LineConfig, linePortions, normalizeConfig } from './lineItem';
 import { ENTRY_TILES, MENU_V1, MenuVersion, NOODLE_TYPES, NoodleSize, NoodleType, PRODUCT_KINDS, ProductKind, Sauce, SizeId } from './menu';
 import type { CostUnits, Sen } from './money';
 
@@ -72,8 +72,8 @@ function portionsOf(it: UsageItem): { half: number; wanton: number; baseWanton: 
   } catch {
     p = null;
   }
-  const extraPacks = addOns.includes('wanton_3') ? 1 : 0;
-  const extraCharSiew = addOns.includes('char_siew') ? 1 : 0;
+  const extraPacks = addOnCount({ addOns }, 'wanton_3');
+  const extraCharSiew = addOnCount({ addOns }, 'char_siew');
   const wanton = it.wantonCount ?? p?.wantonCount ?? extraPacks * MENU_V1.addOns.wanton_3.wantonCount;
   const baseCharSiew = p?.baseCharSiewPortions ?? 0;
   return {

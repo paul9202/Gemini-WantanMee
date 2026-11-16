@@ -4,7 +4,8 @@
  */
 import { ReactNode, useState } from 'react';
 import {
-  allowsNoCharSiew, allowsNoTomato, hasNoCharSiew, hasNoTomato, LineConfig, linePhotoId, normalizeConfig, NOTE_NO_CHAR_SIEW, NOTE_NO_TOMATO, unitPriceSen, withNoteToken,
+  addOnCount, allowsNoCharSiew, allowsNoTomato, hasNoCharSiew, hasNoTomato, LineConfig, linePhotoId, MAX_ADD_ON_COUNT, normalizeConfig, NOTE_NO_CHAR_SIEW, NOTE_NO_TOMATO,
+  unitPriceSen, withAddOnCount, withNoteToken,
 } from '../../domain/lineItem';
 import { AddOnId, Level, MenuVersion, NOODLE_TYPE_NAMES, productOf, Sauce, SAUCE_NAMES, SizeDef, Spice } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
@@ -53,11 +54,10 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
     ...notePictogramIds(config).map(pic),
   ].filter(Boolean).join(' · ');
 
-  const toggleAddOn = (id: AddOnId) => {
-    const on = !config.addOns.includes(id);
+  const setAddOn = (id: AddOnId, n: number) => {
     set(
-      { addOns: on ? [...config.addOns, id] : config.addOns.filter((a) => a !== id) },
-      on && id === 'char_siew' && hasNoCharSiew(config) ? tr('已取消「不要叉烧」', 'Removed "No char siew"') : undefined,
+      { addOns: withAddOnCount(config.addOns, id, n) },
+      n > 0 && id === 'char_siew' && hasNoCharSiew(config) ? tr('已取消「不要叉烧」', 'Removed "No char siew"') : undefined,
     );
   };
   const toggleNoCharSiew = () => {
@@ -76,6 +76,23 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
       {extra && <span className="text-xs text-ink-2">{extra}</span>}
     </Choice>
   );
+
+  /** 加料格：没加时和其他要求一样点一下（= 一份）；加了以后下面出现 − 份数 +，一碗可以加好几份，减到 0 就是不加。 */
+  const addOnCell = (key: string, id: AddOnId, art: ReactNode, label: string) => {
+    const n = addOnCount(config, id);
+    if (n === 0 || config.isKosong) return quick(key, false, () => setAddOn(id, 1), art, label, `+${addOnPrice(id)}`, config.isKosong);
+    return (
+      <div key={key} className="flex min-h-14 flex-col gap-1.5 rounded-xl border-2 border-ok bg-ok-bg px-3 py-2">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-9 w-11 shrink-0 items-center justify-center">{art}</span>
+          <span className="min-w-0 flex-1 font-semibold leading-tight">{label}</span>
+          <span className="text-xs text-ink-2">{n > 1 ? `+${formatRM(menu.addOns[id].priceSen * n).replace('.00', '')}` : `+${addOnPrice(id)}`}</span>
+        </div>
+        <Stepper size="sm" min={0} max={MAX_ADD_ON_COUNT} value={n} onChange={(v) => setAddOn(id, v)}
+          labelLess={tr(`${label} 减一份`, `${label}: one less`)} labelMore={tr(`${label} 加一份`, `${label}: one more`)} />
+      </div>
+    );
+  };
 
   const levelRow = (kind: 'scallion' | 'lard', value: Level) => (
     <div className="grid grid-cols-3 gap-2">
@@ -162,8 +179,8 @@ export function Customizer({ menu, config, onChange, quantity, onQuantity, editi
           <div className="grid grid-cols-2 gap-2.5">
             {quick('scallion', config.scallion === 'none', () => set({ scallion: config.scallion === 'none' ? 'normal' : 'none' }), <PictoArt id="scallion:none" size={30} />, pic('scallion:none'))}
             {config.lard !== null && quick('lard', config.lard === 'none', () => set({ lard: config.lard === 'none' ? 'normal' : 'none' }), <PictoArt id="lard:none" size={30} />, pic('lard:none'))}
-            {product.addOns.includes('wanton_3') && quick('w3', config.addOns.includes('wanton_3'), () => toggleAddOn('wanton_3'), <Icon name="dumpling" size={30} />, tr('加 3 粒', '+3 wantan'), `+${addOnPrice('wanton_3')}`, config.isKosong)}
-            {product.addOns.includes('char_siew') && quick('cs', config.addOns.includes('char_siew'), () => toggleAddOn('char_siew'), <Photo id="ingredient.char_siew" size={30} rounded={6} />, tr('加叉烧', '+Char siew'), `+${addOnPrice('char_siew')}`, config.isKosong)}
+            {product.addOns.includes('wanton_3') && addOnCell('w3', 'wanton_3', <Icon name="dumpling" size={30} />, tr('加 3 粒', '+3 wantan'))}
+            {product.addOns.includes('char_siew') && addOnCell('cs', 'char_siew', <Photo id="ingredient.char_siew" size={30} rounded={6} />, tr('加叉烧', '+Char siew'))}
             {/* 放在最后，原来的格子位置不变。有酱的餐品才显示；不是红酱就灰掉，让收银知道有这个选项。 */}
             {config.sauce !== null && quick('no-tomato', hasNoTomato(config), () => set({ note: withNoteToken(config.note, NOTE_NO_TOMATO, !hasNoTomato(config)) }), <PictoArt id="sauce:no_tomato" size={30} />, pic('sauce:no_tomato'), undefined, !allowsNoTomato(config), tr('红酱才有', 'Red sauce only'))}
             {/* 有叉烧的碗（干捞面、汤面）才显示；净面本来就没有叉烧，灰掉。和「加叉烧」二选一。 */}

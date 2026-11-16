@@ -9,7 +9,7 @@ import { useLang, useT } from '../../app/i18n';
 import { useSession } from '../../app/session';
 import { MenuVersion, NOODLE_TYPE_NAMES, SAUCE_NAMES, ServiceMode, SERVICE_MODE_NAMES, productOf } from '../../domain/menu';
 import { formatRM } from '../../domain/money';
-import { linePictograms, PICTOGRAMS } from '../../domain/pictograms';
+import { linePictograms, pictogramText } from '../../domain/pictograms';
 import { Icon, Photo } from '../../ui/visual';
 import { Eyebrow, Stepper } from './parts';
 
@@ -26,7 +26,7 @@ export function useLineText(menu: MenuVersion) {
     const detail = [cfg.noodleType ? tr(NOODLE_TYPE_NAMES[cfg.noodleType].zh, NOODLE_TYPE_NAMES[cfg.noodleType].en) : null, sauce, sz || null].filter(Boolean).join(' · ');
     const special = linePictograms(menu, cfg, serviceMode)
       .filter((p) => p.emphasized && !p.id.startsWith('noodle:') && p.id !== 'takeaway:no_side_soup')
-      .map((p) => (lang === 'en' ? PICTOGRAMS[p.id].en : PICTOGRAMS[p.id].zh));
+      .map((p) => pictogramText(p, lang));
     return { name, detail, special: special.join(' · ') };
   };
 }

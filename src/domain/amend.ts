@@ -5,8 +5,8 @@
  * 收过钱的单改了金额：命令层冲掉原收款（cause=amend），订单回到待收款并记住客人已付多少，
  * 收银机据此提示「补收 / 退给客人」多少，再按新金额登记一次收款。
  */
-import { LineConfig, lineMergeKey, lineNameZh } from './lineItem';
-import { MenuVersion, NOODLE_TYPE_NAMES, ServiceMode, SERVICE_MODE_NAMES, getSize, Spice, Level } from './menu';
+import { addOnCount, LineConfig, lineMergeKey, lineNameZh } from './lineItem';
+import { ADD_ON_IDS, MenuVersion, NOODLE_TYPE_NAMES, ServiceMode, SERVICE_MODE_NAMES, getSize, Spice, Level } from './menu';
 import type { Fulfillment, PaymentState } from './orderLifecycle';
 
 /** 一张单最多改这么多次（含撤回），防止误触循环。 */
@@ -74,8 +74,16 @@ export function configDetails(menu: MenuVersion, a: LineConfig, b: LineConfig, a
   if (a.spice && b.spice && a.spice !== b.spice) out.push(`${SPICE_ZH[a.spice]}→${SPICE_ZH[b.spice]}`);
   if (a.lard && b.lard && a.lard !== b.lard) out.push(`${LARD_ZH[a.lard]}→${LARD_ZH[b.lard]}`);
   if (a.scallion !== b.scallion) out.push(`${SCALLION_ZH[a.scallion]}→${SCALLION_ZH[b.scallion]}`);
-  for (const id of b.addOns) if (!a.addOns.includes(id)) out.push(menu.addOns[id].nameZh);
-  for (const id of a.addOns) if (!b.addOns.includes(id)) out.push(`不${menu.addOns[id].nameZh}`);
+  // 加料：0→1 写「加叉烧」，去掉写「不加叉烧」，份数变了写「加叉烧 ×1→×3」。
+  for (const id of ADD_ON_IDS) {
+    const from = addOnCount(a, id);
+    const to = addOnCount(b, id);
+    const name = menu.addOns[id].nameZh;
+    if (from === to) continue;
+    if (to === 0) out.push(`不${name}`);
+    else if (from === 0) out.push(to > 1 ? `${name} ×${to}` : name);
+    else out.push(`${name} ×${from}→×${to}`);
+  }
   if (a.note !== b.note) out.push(b.note ? `备注：${b.note}` : '去掉备注');
   if (am && bm && am !== bm) out.push(`${SERVICE_MODE_NAMES[am].zh}→${SERVICE_MODE_NAMES[bm].zh}`);
   return out;

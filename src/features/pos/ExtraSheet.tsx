@@ -8,7 +8,7 @@ import { useState } from 'react';
 import { collection, orderBy, query, where } from 'firebase/firestore';
 import { businessDateOf } from '../../domain/businessDay';
 import { extraBlockReason, ExtraBlock, extraConfig } from '../../domain/extras';
-import { LineConfig, lineName, noteFreeText } from '../../domain/lineItem';
+import { LineConfig, lineName, MAX_ADD_ON_COUNT, noteFreeText } from '../../domain/lineItem';
 import { AddOnId, MenuVersion, NOODLE_TYPE_NAMES, OrderServiceMode, ServiceMode, SERVICE_MODE_NAMES, Spice } from '../../domain/menu';
 import { formatRM, Sen } from '../../domain/money';
 import type { Fulfillment, PaymentState } from '../../domain/orderLifecycle';
@@ -63,7 +63,8 @@ export interface ExtraRequest {
 }
 
 const ADD_ONS: AddOnId[] = ['char_siew', 'wanton_3'];
-const MAX_PER_CELL = 9;
+/** 一次加几份不设实际上限：只用和一行数量一样的保护上限（加料行的 quantity 就是份数）。 */
+const MAX_PER_CELL = MAX_ADD_ON_COUNT;
 const cellKey = (lineId: string, addOn: AddOnId) => `${lineId}:${addOn}`;
 const minutesSince = (fromMs: number, nowMs: number) => Math.max(0, Math.floor((nowMs - fromMs) / 60_000));
 
@@ -255,7 +256,7 @@ export function ExtraSheet({ menu, board, lastIssued, initialOrderId, blockedRea
                                 <span className="min-w-0 font-semibold">{label}<span className="block text-xs font-normal text-ink-2">{formatRM(menu.addOns[addOn].priceSen)}</span></span>
                                 <span className="flex shrink-0 items-center gap-1">
                                   <button type="button" disabled={n === 0} onClick={() => step(key, -1)} aria-label={tr(`${label} 减一份`, `${label}: one less`)} className="h-14 w-12 rounded-lg border border-line bg-card text-xl font-bold disabled:opacity-40">−</button>
-                                  <b className="w-6 text-center text-lg tabular-nums" aria-live="polite">{n}</b>
+                                  <b className="w-8 text-center text-lg tabular-nums" aria-live="polite">{n}</b>
                                   <button type="button" disabled={n === MAX_PER_CELL} onClick={() => step(key, 1)} aria-label={tr(`${label} 加一份`, `${label}: one more`)} className="h-14 w-12 rounded-lg border border-line bg-card text-xl font-bold disabled:opacity-40">＋</button>
                                 </span>
                               </div>

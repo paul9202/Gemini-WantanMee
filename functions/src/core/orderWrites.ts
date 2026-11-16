@@ -70,7 +70,8 @@ export function orderItems(menu: MenuVersion, lines: CartLine[], totals: OrderTo
       unitPriceSen: totals.lines[i].unitPriceSen, lineTotalSen: totals.lines[i].lineTotalSen,
       noodleHalfUnits: p.noodleHalfUnits, wantonCount: p.wantonCount,
       nameZh: lineNameZh(menu, l.config), photoId: linePhotoId(l.config),
-      pictogramIds: linePictograms(menu, l.config, l.serviceMode).map((x) => x.id),
+      // 加料多份时图卡 ID 重复几次，和 addOns 一样。
+      pictogramIds: linePictograms(menu, l.config, l.serviceMode).flatMap((x) => Array<string>(x.count ?? 1).fill(x.id)),
     };
   });
 }

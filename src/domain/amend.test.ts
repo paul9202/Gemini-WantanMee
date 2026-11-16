@@ -47,6 +47,15 @@ test('改单比较：换酱、改大小、辣度、加料、打包都写出来',
   assert.deepEqual(d.changes[0].details, ['红酱面→黑酱面', '小→大', '辣→不辣', '加叉烧', '堂食→打包']);
 });
 
+test('改单比较：加料份数变了写「×1→×3」，新加多份写份数，去掉写「不加…」', () => {
+  const cs = (n: number) => Array(n).fill('char_siew');
+  const details = (from: string[], to: string[]) => diffAmend(MENU_V1, [line('a', red({ addOns: from }))], [line('a', red({ addOns: to }))]).changes[0].details;
+  assert.deepEqual(details(cs(1), cs(3)), ['加叉烧 ×1→×3']);
+  assert.deepEqual(details([], cs(2)), ['加叉烧 ×2']);
+  assert.deepEqual(details(cs(2), []), ['不加叉烧']);
+  assert.deepEqual(details(cs(2), ['wanton_3', 'wanton_3']), ['不加叉烧', '加云吞3粒 ×2']);
+});
+
 test('改单收钱：收过钱的改少了退，改多了补；没收过钱为 null', () => {
   assert.deepEqual(amendSettlement(2300, 2500), { collectSen: 0, refundSen: 200 });
   assert.deepEqual(amendSettlement(2700, 2500), { collectSen: 200, refundSen: 0 });
