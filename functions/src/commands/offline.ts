@@ -321,7 +321,12 @@ async function processEvent(db: Firestore, sid: string, e: OfflineEvent, later: 
     if (existing && existing.payloadHash !== hash) {
       return { eventId: e.eventId, sequence: e.sequence, status: 'rejected', reasonCode: 'EVENT_CONFLICT' } as OfflineEventResult;
     }
-    if (existing && existing.status !== 'blocked') return existing.result as OfflineEventResult; // 重复上传：返回原结果
+    // 重复上传：返回原结果。老板已核对过的带上处理结果（补入账的 result 已改成 accepted；不入账的仍是待核对 + dismissed），
+    // 收银机据此清掉本机的「待老板核对」。
+    if (existing && existing.status === 'resolved') {
+      return { ...(existing.result as OfflineEventResult), resolution: existing.resolution === 'dismissed' ? 'dismissed' : 'imported' };
+    }
+    if (existing && existing.status !== 'blocked') return existing.result as OfflineEventResult;
 
     const config = await loadStoreConfig(tx, store);
     const nowMs = Date.now();

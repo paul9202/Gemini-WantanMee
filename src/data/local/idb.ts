@@ -124,7 +124,8 @@ export const releaseSequence = (key: string, seq: number) => atomic(['kv'], asyn
 
 // ---------- 离线订单与事件日志 ----------
 
-export type OutboxStatus = 'pending' | OfflineEventResult['status'];
+/** resolved：老板已核对、决定不入账（本机不再算「待老板核对」）。补入账的直接是 accepted。 */
+export type OutboxStatus = 'pending' | OfflineEventResult['status'] | 'resolved';
 
 export interface OutboxRecord {
   eventId: string;
@@ -194,7 +195,8 @@ export function applySyncResults(results: OfflineEventResult[]) {
     const s = tx.objectStore('outbox');
     for (const r of results) {
       const rec = (await req(s.get(r.eventId))) as OutboxRecord | undefined;
-      if (rec) await req(s.put({ ...rec, status: r.status, result: r, updatedAtMs: Date.now() }));
+      const status: OutboxStatus = r.resolution === 'dismissed' ? 'resolved' : r.status;
+      if (rec) await req(s.put({ ...rec, status, result: r, updatedAtMs: Date.now() }));
     }
   });
 }

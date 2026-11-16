@@ -44,7 +44,7 @@ const REVIEW_ZH: Record<OfflineReviewReason, string> = {
 };
 
 const STATUS_ZH: Record<OutboxRecord['status'], string> = {
-  pending: '未同步', accepted: '云端已接纳', needs_review: '待老板核对', blocked: '阻塞，等待前面的记录', rejected: '已拒收',
+  pending: '未同步', accepted: '云端已接纳', needs_review: '待老板核对', blocked: '阻塞，等待前面的记录', rejected: '已拒收', resolved: '老板已处理（不入账）',
 };
 
 const TYPE_ZH: Record<OfflineEvent['type'], string> = {
@@ -95,7 +95,7 @@ export function SyncPage() {
               {rt.manualOffline ? '恢复在线' : '云端连不上：改为离线营业'}
             </button>
           )}
-          <button type="button" disabled={offline || rt.syncing} onClick={() => void run('sync', () => syncNow())}
+          <button type="button" disabled={offline || rt.syncing} onClick={() => void run('sync', () => syncNow({ recheck: true }))}
             className="h-12 rounded-lg bg-brand px-4 font-bold text-white disabled:bg-control">{rt.syncing ? '同步中…' : '立即同步'}</button>
         </div>
       </div>
@@ -206,8 +206,12 @@ export function SyncPage() {
                   <td className="py-1 tabular-nums">{r.sequence}</td>
                   <td>{TYPE_ZH[r.event.type]}</td>
                   <td className="tabular-nums">{r.event.type === 'offline_order_created' || r.event.type === 'token_returned' ? r.event.payload.tokenNumber : ''}</td>
-                  <td className={r.status === 'accepted' ? 'text-ok' : r.status === 'needs_review' || r.status === 'rejected' ? 'text-danger' : 'text-warn'}>{STATUS_ZH[r.status]}</td>
-                  <td>{r.result?.reasonCode ? REVIEW_ZH[r.result.reasonCode] : ''}{r.event.type === 'offline_order_created' && r.status === 'needs_review' ? ` · 订单 ${formatRM(r.event.payload.totalSen)}${r.event.payload.payment ? '（已收）' : ''} 尚未入云端账` : ''}{r.event.type === 'offline_payment_recorded' && r.status === 'needs_review' ? ` · 已收 ${formatRM(r.event.payload.amountSen)} 尚未入云端账` : ''}</td>
+                  <td className={r.status === 'accepted' ? 'text-ok' : r.status === 'resolved' ? 'text-ink-2' : r.status === 'needs_review' || r.status === 'rejected' ? 'text-danger' : 'text-warn'}>{STATUS_ZH[r.status]}</td>
+                  {/* 接纳了还带着原因 = 当时待核对、后来老板补入账；老板决定不入账的是 resolved。 */}
+                  <td>{r.result?.reasonCode
+                    ? r.status === 'accepted' ? `老板已核对，已补入账（原来：${REVIEW_ZH[r.result.reasonCode]}）`
+                      : r.status === 'resolved' ? `老板已核对，不入账（原来：${REVIEW_ZH[r.result.reasonCode]}）` : REVIEW_ZH[r.result.reasonCode]
+                    : ''}{r.event.type === 'offline_order_created' && r.status === 'needs_review' ? ` · 订单 ${formatRM(r.event.payload.totalSen)}${r.event.payload.payment ? '（已收）' : ''} 尚未入云端账` : ''}{r.event.type === 'offline_payment_recorded' && r.status === 'needs_review' ? ` · 已收 ${formatRM(r.event.payload.amountSen)} 尚未入云端账` : ''}</td>
                 </tr>
               ))}
             </tbody>

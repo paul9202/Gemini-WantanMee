@@ -75,6 +75,11 @@ export interface OfflineEventResult {
   reasonCode?: OfflineReviewReason;
   orderId?: string;
   receiptNumber?: string;
+  /**
+   * 老板已处理过这条待核对记录（2026-11-16 起重新上传时带上）：imported 已补入账（status 同时是 accepted），
+   * dismissed 老板决定不入账。收银机据此把本机的「待老板核对」清掉。
+   */
+  resolution?: 'imported' | 'dismissed';
 }
 
 /** 设备时间可疑的阈值：超过 5 分钟视为时间异常。 */

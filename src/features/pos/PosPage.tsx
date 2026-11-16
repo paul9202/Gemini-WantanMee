@@ -798,7 +798,7 @@ export function PosPage() {
           {unknownOps.map((op) => (
             <div key={op.operationId} className="flex flex-wrap items-center gap-3 text-warn">
               <b>{tr(`${op.summary.tokenNumber}号 · ${formatRM(op.summary.totalSen)}：下单结果未确认，正在核对；请勿重复下单。请问厨房是否收到这张单。`, `No. ${op.summary.tokenNumber} · ${formatRM(op.summary.totalSen)}: order result unconfirmed, checking. Do NOT re-submit. Ask the kitchen if they got it.`)}</b>
-              {!offlineMode && <button type="button" onClick={() => void syncNow()} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">{tr('核对结果', 'Check result')}</button>}
+              {!offlineMode && <button type="button" onClick={() => void syncNow({ recheck: true })} className="h-11 rounded-lg bg-warn px-4 font-bold text-white">{tr('核对结果', 'Check result')}</button>}
               {!offlineMode && <button type="button" onClick={() => void setManualOffline(true)} className="h-11 rounded-lg border border-warn bg-card px-3 font-semibold">{tr('云端连不上？改为离线营业', 'Cloud unreachable? Switch to offline')}</button>}
             </div>
           ))}

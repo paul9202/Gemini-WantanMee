@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-review-clears', date: '2026-11-16', roles: FRONT,
+    title: { zh: '老板核对过的离线记录，收银机会自己清掉', en: 'Offline records the owner has reviewed now clear on the register' },
+    items: [
+      { zh: '以前老板在老板页把「待核对」处理完，收银机上还一直写「X 条待老板核对」。现在收银机每 5 分钟会问一次，按「立即同步」马上问，处理过的就不再算。', en: 'Before, the register kept showing “X need owner review” even after the owner handled them. It now checks every 5 minutes (or right away with Sync now) and drops the handled ones.' },
+      { zh: '同步中心会写「老板已核对，已补入账」或「老板已核对，不入账」。', en: 'The sync center shows “reviewed, entered” or “reviewed, not entered”.' },
+    ],
+  },
+  {
     id: '2026-11-16-slip-spacing', date: '2026-11-16', roles: FRONT,
     title: { zh: '送餐单大字不再压住下一行', en: 'Large text on order slips no longer overlaps the next line' },
     items: [

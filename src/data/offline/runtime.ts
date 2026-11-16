@@ -88,14 +88,39 @@ export const serverNow = (s: RuntimeState) => Date.now() + (s.serverOffsetMs ?? 
 
 let inFlight: Promise<void> | null = null;
 
-/** 按序号分批上传未同步事件。单飞；遇到阻塞（缺号）就停，等前置问题处理。 */
-export function syncNow(): Promise<void> {
+/** 待老板核对的记录：本机隔多久再问一次服务器老板处理了没有（手动「立即同步」不等）。 */
+const REVIEW_RECHECK_MS = 5 * 60_000;
+let lastReviewCheckMs = 0;
+export const reviewRecords = (s: RuntimeState) => s.outbox.filter((r) => r.status === 'needs_review');
+
+/**
+ * 老板在老板页（或代为处理）核对过的记录，本机不会自己知道：把待核对的记录按原样再上传一次
+ * （服务器按 eventId 认出是重复上传，只回当前结果，不会重复入账），补入账的变成「云端已接纳」，
+ * 不入账的变成「老板已处理」，本机的「待老板核对」就清掉了。2026-11-16 起。
+ */
+async function recheckReviews(force: boolean) {
+  if (!force && Date.now() - lastReviewCheckMs < REVIEW_RECHECK_MS) return;
+  await reloadLocal();
+  const recs = reviewRecords(state);
+  if (!recs.length) return;
+  lastReviewCheckMs = Date.now();
+  for (let i = 0; i < recs.length; i += 25) {
+    const batch = recs.slice(i, i + 25);
+    const { results } = await call<{ results: OfflineEventResult[] }>('syncOfflineEvents', { events: batch.map((r) => r.event) });
+    // 只记老板处理后的变化；万一回的是「阻塞」（不应发生），保留原来的待核对，不往回退。
+    await applySyncResults(results.filter((r) => r.status !== 'blocked'));
+  }
+}
+
+/** 按序号分批上传未同步事件。单飞；遇到阻塞（缺号）就停，等前置问题处理。recheck：顺便马上重新核对待老板核对的记录。 */
+export function syncNow(opts: { recheck?: boolean } = {}): Promise<void> {
   if (inFlight) return inFlight;
   if (!navigator.onLine || state.manualOffline) return Promise.resolve();
   inFlight = (async () => {
     emit({ syncing: true, lastSyncError: null });
     try {
       await reconcilePendingOps();
+      await recheckReviews(opts.recheck === true);
       for (let round = 0; round < 40; round++) {
         await reloadLocal();
         const pending = unsyncedEvents(state);
@@ -188,6 +213,8 @@ export function startAutoSync() {
   void reloadLocal();
   window.addEventListener('online', () => void syncNow());
   setInterval(() => {
-    if (navigator.onLine && !state.manualOffline && (unsyncedEvents(state).length || unresolvedOps(state).some((o) => o.status !== 'not_found'))) void syncNow();
+    if (!navigator.onLine || state.manualOffline) return;
+    const reviewDue = reviewRecords(state).length > 0 && Date.now() - lastReviewCheckMs >= REVIEW_RECHECK_MS;
+    if (unsyncedEvents(state).length || unresolvedOps(state).some((o) => o.status !== 'not_found') || reviewDue) void syncNow();
   }, 20_000);
 }

@@ -337,3 +337,28 @@ test('离线不能下单后加料：加料行进待核对，不接单、不占�
   assert.equal(await countDocs(f.storeId, 'kitchenTickets'), 0);
   assert.equal((await doc(f, 'tokens/09'))!.state, 'available');
 });
+
+test('老板核对后，收银机重新上传待核对记录：补入账的回「已接纳 + imported」，不入账的回「待核对 + dismissed」；不重复入账（2026-11-16）', async () => {
+  const f = await setupStore();
+  await admin().doc(`stores/${f.storeId}/shifts/${f.shiftId}`).update({ offlineCapabilityExpiresAtMs: Date.now() - 60_000 });
+  const ev = makeEvents(f);
+  const keep = ev.create(uuid(), 21);
+  const drop = ev.create(uuid(), 22);
+  const first = await sync(f, [keep, drop]);
+  assert.deepEqual(first.map((x) => x.reasonCode), ['OFFLINE_CAPABILITY_EXPIRED', 'OFFLINE_CAPABILITY_EXPIRED']);
+  const before = await countDocs(f.storeId, 'orders');
+
+  // 还没处理：原样回待核对，没有 resolution。
+  const again = await sync(f, [keep, drop]);
+  assert.deepEqual(again.map((x) => [x.status, (x as { resolution?: string }).resolution]), [['needs_review', undefined], ['needs_review', undefined]]);
+
+  const resolve = (eventId: string, action: 'import' | 'dismiss') => f.owner.call('resolveOfflineReview', { storeId: f.storeId, operationId: uuid(), eventId, action, reason: '老板核对过', confirmPaymentReceived: true });
+  await resolve(keep.eventId, 'import');
+  await resolve(drop.eventId, 'dismiss');
+  const imported = await countDocs(f.storeId, 'orders');
+  assert.equal(imported, before + 1);
+
+  const after2 = await sync(f, [keep, drop]);
+  assert.deepEqual(after2.map((x) => [x.status, (x as { resolution?: string }).resolution]), [['accepted', 'imported'], ['needs_review', 'dismissed']]);
+  assert.equal(await countDocs(f.storeId, 'orders'), imported, '重新上传不重复入账');
+});
