@@ -1,11 +1,11 @@
 /**
  * 本机的送餐单打印机（单例）+ React hook。
  * 设置存 localStorage（只在这台设备）；每张单打了几次、最近的任务存 IndexedDB（刷新后还在，不上云端）。
- * 本机开发 / 端到端测试：localStorage 里 hao-printer-fake=1 时用假打印机，内容记在 window.__haoPrinted。
+ * 本机开发 / 端到端测试：localStorage 里 hao-printer-fake=1 时用假打印机，内容记在 window.__haoPrinted；window.__haoPrinterPower(false / true) 模拟关机、开机。
  */
 import { useEffect, useSyncExternalStore } from 'react';
 import { kvGet, kvSet } from '../local/idb';
-import { bluetoothSupported, pickBlePrinter, PrinterLink, restoreBlePrinter } from './ble';
+import { bluetoothSupported, pickBlePrinter, PrinterLink, PrinterLinkError, restoreBlePrinter } from './ble';
 import { createPrinterManager, DEFAULT_SETTINGS, PrinterSettings, PrinterState, SlipJob } from './printerManager';
 
 const SETTINGS_KEY = 'hao-printer';
@@ -28,16 +28,27 @@ function fakeEnabled(): boolean {
 declare global {
   interface Window {
     __haoPrinted?: string[][];
+    /** 假打印机关机 / 开机（练「断开再连」用）：关机时断开，写入失败；开机后下一次写入就成功。 */
+    __haoPrinterPower?: (on: boolean) => void;
   }
 }
 
 function fakeLink(): PrinterLink {
   const cbs: (() => void)[] = [];
+  let on = true;
+  window.__haoPrinterPower = (v) => {
+    const wasOn = on;
+    on = v;
+    if (wasOn && !v) cbs.forEach((cb) => cb());
+  };
   return {
     id: 'fake-printer',
     name: '假打印机（测试）',
-    connected: () => true,
+    connected: () => on,
     async write(_bytes, preview) {
+      if (!on) throw new PrinterLinkError('CONNECT_FAILED');
+      // 真机传一张要一两秒：停一下，界面上看得到「正在打」。
+      await new Promise((r) => setTimeout(r, 300 + (preview?.length ?? 0) * 15));
       (window.__haoPrinted ??= []).push(preview ?? []);
     },
     disconnect() {},

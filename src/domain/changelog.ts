@@ -21,6 +21,15 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-printer-trial', date: '2026-11-16', roles: FRONT,
+    title: { zh: '送餐单打印机可以先试打：打假单，不碰真单', en: 'Test the slip printer first: test slips only, no real orders' },
+    items: [
+      { zh: '主收银平板：设备 → 送餐单打印机 → 试打印。可以打测试条、9 种样单（堂食、打包、要求很多、断网单……）、连打 5 张、断开再连。屏幕上先看得到纸上会打成什么样。', en: 'Main register: Device → Order slip printer → Test print. Print a test strip, 9 kinds of sample slip (dine-in, takeaway, many requests, offline…), 5 in a row, and a disconnect drill. The screen shows what the paper will look like first.' },
+      { zh: '打出来的都写着「测试 · 不用做」，牌号 81–89：不进订单、不算营业额、不占牌号，后厨屏看不到。设置里的「送餐单打印」还没打开也能试，收银下单不会打印。', en: 'Test slips say “测试 · 不用做” (test, don’t make) and use tokens 81–89: no orders, no sales, no tokens, nothing on the kitchen screen. Works before slip printing is switched on in Settings; real orders do not print.' },
+      { zh: '测试条打完会问 4 个问题，纸宽、切纸选错了一键改好再打。试打清单 7 项都过了，再去设置里打开送餐单打印。', en: 'After the test strip, 4 questions catch a wrong paper width or cutter setting and fix it in one tap. When all 7 checklist items pass, switch slip printing on in Settings.' },
+    ],
+  },
+  {
     id: '2026-11-16-kitchen-edit', date: '2026-11-16', roles: ALL,
     title: { zh: '后厨屏上可以直接改单、取消', en: 'Edit or cancel an order right on the kitchen screen' },
     items: [

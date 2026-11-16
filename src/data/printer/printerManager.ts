@@ -4,6 +4,8 @@
  * - 同一张单只自动打一次（本机打印记录按单记次数）；收银手动补打写「补打 N」。
  * - 打印机断开时任务排着：同一个页面里连回来，只补打断开 10 分钟以内的；更早的标「没打出来」，由收银决定补打还是不打了。
  * - 页面重开后不自动补打旧任务，同样标「没打出来」。
+ * - 试打印的样单（test）也走这个队列：不看「下单自动打印」开关、不记打印次数（键是 test:…，和真单分开），不能补打。
+ * - 一次只写一张：排队的单和测试条不会同时写，免得两张的内容印混在一起。
  */
 import { resumesOnReconnect, RunnerSlip, slipMark } from '../../domain/runnerSlip';
 import { CutMode, encodeLines, layoutRunnerSlip, layoutTestPage, PaperWidth, previewLines } from './escpos';
@@ -47,7 +49,12 @@ export interface SlipJob {
   doneAtMs?: number;
   /** 已经成功打了几次。 */
   prints: number;
+  /** 试打印的样单，不是真单。 */
+  test?: boolean;
 }
+
+/** 测试条打完的结果：用了多久，或错误码。 */
+export type TestPrintResult = { ok: true; ms: number } | { ok: false; code: string };
 
 export interface PrinterState {
   supported: boolean;
@@ -79,13 +86,42 @@ export interface PrinterDeps {
 
 const MAX_JOBS = 30;
 
+/**
+ * 最多留 MAX_JOBS 条。超出时先丢最旧的、打完了的测试单，再丢还排着的测试单（一下排了 30 多张样单才会这样），
+ * 最后才丢最旧的真单记录：试打印不能把真单「没打出来」的记录挤掉。
+ */
+function capJobs(jobs: SlipJob[]): SlipJob[] {
+  let extra = jobs.length - MAX_JOBS;
+  if (extra <= 0) return jobs;
+  const out = [...jobs];
+  const finished = (j: SlipJob) => j.status !== 'waiting' && j.status !== 'printing';
+  for (const drop of [(j: SlipJob) => Boolean(j.test) && finished(j), (j: SlipJob) => Boolean(j.test) && j.status !== 'printing']) {
+    for (let i = out.length - 1; i >= 0 && extra > 0; i--) {
+      if (drop(out[i])) {
+        out.splice(i, 1);
+        extra--;
+      }
+    }
+  }
+  return out.slice(0, MAX_JOBS);
+}
+
 export function createPrinterManager(deps: PrinterDeps) {
   let state: PrinterState = { supported: deps.supported, settings: deps.loadSettings(), link: 'off', jobs: [], error: null, lastWriteMs: null };
   let link: PrinterLink | null = null;
   let pumping = false;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let initDone: Promise<void> | null = null;
+  let testSeq = 0;
+  let writing: Promise<unknown> = Promise.resolve();
   const listeners = new Set<() => void>();
+
+  /** 一次只写一张：上一张写完（成功或失败）才开始写下一张。 */
+  function exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = writing.then(fn, fn);
+    writing = run.catch(() => undefined);
+    return run;
+  }
 
   const emit = () => listeners.forEach((l) => l());
   const set = (patch: Partial<PrinterState>) => {
@@ -134,11 +170,13 @@ export function createPrinterManager(deps: PrinterDeps) {
         const job = [...state.jobs].reverse().find((j) => j.status === 'waiting'); // 先来的先打
         if (!job) break;
         updateJob(job.key, { status: 'printing' });
-        const prints = await deps.getPrints(job.key).catch(() => job.prints);
-        const lines = layoutRunnerSlip({ ...job.slip, mark: slipMark(prints, job.reconciled) }, state.settings.width);
+        // 测试单不记打印次数，补打标记照样单自己的写法。
+        const prints = job.test ? job.prints : await deps.getPrints(job.key).catch(() => job.prints);
+        const lines = layoutRunnerSlip(job.test ? job.slip : { ...job.slip, mark: slipMark(prints, job.reconciled) }, state.settings.width);
         const started = deps.now();
+        const l = link;
         try {
-          await link.write(encodeLines(lines, state.settings.cut), previewLines(lines));
+          await exclusive(() => l.write(encodeLines(lines, state.settings.cut), previewLines(lines)));
         } catch (e) {
           // 连不上：任务放回去排着，等重连；写到一半出错：标没打出来，让收银决定要不要补打（可能已经打出半张）。
           const code = e instanceof PrinterLinkError ? e.code : 'WRITE_FAILED';
@@ -149,9 +187,9 @@ export function createPrinterManager(deps: PrinterDeps) {
           scheduleRetry();
           break;
         }
-        await deps.setPrints(job.key, prints + 1).catch(() => undefined);
+        if (!job.test) await deps.setPrints(job.key, prints + 1).catch(() => undefined);
         updateJob(job.key, { status: 'done', doneAtMs: deps.now(), prints: prints + 1 });
-        set({ link: 'ready', lastWriteMs: deps.now() - started });
+        set({ link: 'ready', lastWriteMs: deps.now() - started, error: null });
       }
     } finally {
       pumping = false;
@@ -225,7 +263,7 @@ export function createPrinterManager(deps: PrinterDeps) {
         key, token: slip.token, label: opts.label, slip, reconciled: Boolean(opts.reconciled), createdAtMs: deps.now(),
         status: state.settings.autoPrint ? 'waiting' : 'skipped', prints: 0,
       };
-      set({ jobs: [job, ...state.jobs].slice(0, MAX_JOBS) });
+      set({ jobs: capJobs([job, ...state.jobs]) });
       persist();
       if (job.status === 'waiting') {
         if (state.link === 'lost') scheduleRetry();
@@ -233,10 +271,24 @@ export function createPrinterManager(deps: PrinterDeps) {
       }
     },
 
-    /** 补打 / 没打出来的再打一次 / 自动打印关着时手动打。 */
+    /**
+     * 试打印：排一张样单。不看「下单自动打印」开关，不读写打印次数；返回任务键，试打印页靠它看打没打出来。
+     * 打印机断开时一样排着，连回来自动补打（断开演练就是看这个）。
+     */
+    enqueueTest(sampleId: string, slip: RunnerSlip, label: string): string {
+      const key = `test:${sampleId}:${deps.now()}:${++testSeq}`;
+      const job: SlipJob = { key, token: slip.token, label, slip: { ...slip, test: true }, reconciled: false, createdAtMs: deps.now(), status: 'waiting', prints: 0, test: true };
+      set({ jobs: capJobs([job, ...state.jobs]) });
+      persist();
+      if (state.link === 'lost') scheduleRetry();
+      void pump();
+      return key;
+    },
+
+    /** 补打 / 没打出来的再打一次 / 自动打印关着时手动打。测试单不补打（在试打印页再打一张）。 */
     reprint(key: string) {
       const job = state.jobs.find((j) => j.key === key);
-      if (!job || job.status === 'waiting' || job.status === 'printing') return;
+      if (!job || job.test || job.status === 'waiting' || job.status === 'printing') return;
       updateJob(key, { status: 'waiting', problem: undefined, createdAtMs: deps.now() });
       void pump();
     },
@@ -246,18 +298,31 @@ export function createPrinterManager(deps: PrinterDeps) {
       updateJob(key, { status: 'skipped', problem: undefined });
     },
 
-    async testPrint(): Promise<void> {
-      if (!link) return;
-      const lines = layoutTestPage({ width: state.settings.width, cut: state.settings.cut, at: new Date(deps.now()).toLocaleString('zh-CN', { hour12: false }), deviceName: state.settings.deviceName ?? '' });
-      const started = deps.now();
+    /** 测试条。正在打的单打完才开始写（不会和真单印混）；返回用了多久或错误码。 */
+    async testPrint(): Promise<TestPrintResult> {
+      const l = link;
+      if (!l) return { ok: false, code: 'CONNECT_FAILED' };
+      const lines = testPageLines(state.settings, deps.now());
       try {
-        await link.write(encodeLines(lines, state.settings.cut), previewLines(lines));
-        set({ link: 'ready', lastWriteMs: deps.now() - started, error: null });
+        const ms = await exclusive(async () => {
+          const started = deps.now();
+          await l.write(encodeLines(lines, state.settings.cut), previewLines(lines));
+          return deps.now() - started;
+        });
+        set({ link: 'ready', lastWriteMs: ms, error: null });
+        return { ok: true, ms };
       } catch (e) {
-        set({ error: e instanceof PrinterLinkError ? e.code : 'WRITE_FAILED' });
+        const code = e instanceof PrinterLinkError ? e.code : 'WRITE_FAILED';
+        set({ error: code });
+        return { ok: false, code };
       }
     },
   };
 }
 
 export type PrinterManager = ReturnType<typeof createPrinterManager>;
+
+/** 测试条的排版（打印和试打印页的预览用同一份）。 */
+export function testPageLines(settings: Pick<PrinterSettings, 'width' | 'cut' | 'deviceName'>, nowMs: number) {
+  return layoutTestPage({ width: settings.width, cut: settings.cut, at: new Date(nowMs).toLocaleString('zh-CN', { hour12: false }), deviceName: settings.deviceName ?? '' });
+}

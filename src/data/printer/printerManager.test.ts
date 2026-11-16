@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defaultConfig, MENU_V1, normalizeConfig, unitPriceSen } from '../../domain/index';
 import { buildRunnerSlip } from '../../domain/runnerSlip';
+import { buildSampleSlip } from '../../domain/sampleSlips';
 import { PrinterLink, PrinterLinkError } from './ble';
 import { createPrinterManager, DEFAULT_SETTINGS, PrinterDeps, PrinterSettings, SlipJob } from './printerManager';
 
@@ -241,4 +242,106 @@ test('测试打印：打出测试条，记下用时', async () => {
   await m.testPrint();
   assert.ok(link.printed[0].some((l) => l.includes('打印测试')));
   assert.equal(typeof m.getState().lastWriteMs, 'number');
+});
+
+// ---- 试打印 ----
+
+const sample = (id: Parameters<typeof buildSampleSlip>[1]) => buildSampleSlip(menu, id, { nowMs: Date.UTC(2026, 10, 16, 2, 5), timeZone: 'Asia/Kuala_Lumpur' });
+
+test('试打印的样单：自动打印关着也照打；不记打印次数；纸上印测试字样', async () => {
+  const { m, link, prints } = setup();
+  await m.connect();
+  m.setAutoPrint(false);
+  const key = m.enqueueTest('many', sample('many'), '样单 · 要求很多');
+  await flush();
+  assert.ok(key.startsWith('test:many:'), key);
+  assert.equal(job(m, key)?.status, 'done');
+  assert.equal(job(m, key)?.test, true);
+  assert.equal(link.printed.length, 1);
+  assert.equal(link.printed[0][0].trim(), '测试 TEST · 不用做');
+  assert.ok(link.printed[0].includes('84'));
+  assert.equal(prints.size, 0, '不碰真单的打印次数记录');
+});
+
+test('同一张样单可以打很多次，每次是新任务；补打样单的标记照样单自己的「补打 2」', async () => {
+  const { m, link } = setup();
+  await m.connect();
+  const a = m.enqueueTest('reprint', sample('reprint'), '样单 · 补打');
+  const b = m.enqueueTest('reprint', sample('reprint'), '样单 · 补打');
+  await flush();
+  assert.notEqual(a, b);
+  assert.equal(link.printed.length, 2);
+  for (const p of link.printed) assert.equal(p[2].trim(), '补打 2');
+});
+
+test('测试单不能补打（在试打印页再打一张）', async () => {
+  const { m, link } = setup();
+  await m.connect();
+  const key = m.enqueueTest('dine_in', sample('dine_in'), '样单');
+  await flush();
+  m.reprint(key);
+  await flush();
+  assert.equal(link.printed.length, 1);
+});
+
+test('断开时排样单：连不上就排着，连回来自动补打（断开演练）', async () => {
+  const { m, link } = setup();
+  await m.connect();
+  link.drop();
+  link.failNext = 'connect';
+  const key = m.enqueueTest('dine_in', sample('dine_in'), '样单');
+  await flush();
+  assert.equal(job(m, key)?.status, 'waiting');
+  assert.equal(m.getState().link, 'lost');
+  assert.equal(m.getState().jobs.filter((j) => j.status === 'waiting').length, 1, '页头显示 1 张待打');
+  await m.connect();
+  await flush();
+  assert.equal(job(m, key)?.status, 'done');
+  assert.equal(m.getState().error, null, '打出来以后不再挂着连不上的错误');
+});
+
+test('测试单再多，也不会把真单的记录挤掉', async () => {
+  const { m } = setup();
+  await m.connect();
+  for (let i = 0; i < 5; i++) await m.enqueue(`order:${i}`, slip(10 + i), { label: `#${i}` });
+  await flush();
+  for (let i = 0; i < 40; i++) m.enqueueTest('dine_in', sample('dine_in'), '样单');
+  await flush();
+  const jobs = m.getState().jobs;
+  assert.ok(jobs.length <= 30, `${jobs.length}`);
+  for (let i = 0; i < 5; i++) assert.ok(jobs.some((j) => j.key === `order:${i}`), `order:${i} 还在`);
+});
+
+test('测试条：正在打的单打完才开始写，不会和真单印混；返回用时', async () => {
+  const { m, link } = setup();
+  await m.connect();
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const order: string[] = [];
+  const write = link.write.bind(link);
+  link.write = async (bytes, preview) => {
+    const which = preview?.some((l) => l.includes('打印测试')) ? 'strip' : 'slip';
+    order.push(`start:${which}`);
+    if (which === 'slip') await gate;
+    await write(bytes, preview);
+    order.push(`end:${which}`);
+  };
+  await m.enqueue('order:a', slip(12), { label: '#a' });
+  await flush();
+  const strip = m.testPrint();
+  await flush();
+  assert.deepEqual(order, ['start:slip'], '测试条等着');
+  release();
+  const r = await strip;
+  assert.deepEqual(order, ['start:slip', 'end:slip', 'start:strip', 'end:strip']);
+  assert.equal(r.ok, true);
+});
+
+test('测试条连不上：返回错误码', async () => {
+  const { m, link } = setup();
+  await m.connect();
+  link.failNext = 'connect';
+  const r = await m.testPrint();
+  assert.deepEqual(r, { ok: false, code: 'CONNECT_FAILED' });
+  assert.equal(m.getState().error, 'CONNECT_FAILED');
 });

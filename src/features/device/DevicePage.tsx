@@ -22,6 +22,7 @@ import { setLang, useLang, useT } from '../../app/i18n';
 import { measureViewport, useViewportProfile } from '../../data/viewportProfile';
 import { slipPrintingOn, usePrinter } from '../../data/printer/printer';
 import { PrinterSheet } from '../printer/PrinterPanel';
+import { TestPrintSheet } from '../printer/TestPrintSheet';
 
 type Tone = 'ok' | 'warn' | 'bad' | 'idle';
 const TONE: Record<Tone, string> = { ok: 'bg-ok-bg text-ok', warn: 'bg-warn-bg text-warn', bad: 'bg-danger-bg text-danger', idle: 'bg-subtle text-ink-2' };
@@ -192,7 +193,7 @@ export function DevicePage() {
                 <button type="button" onClick={() => navigate('/kitchen')} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{tr('打开', 'Open')}<Icon name="arrow" size={18} /></button>
               </Row>
             )}
-            {front && slipPrintingOn(config) && <PrinterRow />}
+            {front && <PrinterRow storeOn={slipPrintingOn(config)} />}
             <Row title={tr('菜单与图片', 'Menu & photos')} sub={`${tr('菜单版本', 'Menu version')} ${config?.activeMenuVersion ?? '—'}`}>
               <span className={`rounded-lg px-2.5 py-1 text-sm font-semibold ${check && check.photos === check.total ? TONE.ok : TONE.warn}`}>
                 {check && check.photos === check.total ? tr('已就绪', 'Ready') : tr('图片未缓存完', 'Photos not cached')}
@@ -239,11 +240,24 @@ export function DevicePage() {
 
 interface Node { tone: Tone; title: string; sub: string }
 
-/** 送餐单打印机：没连过时说明用途；连过后显示打印机名和状态。点「设置」打开打印机面板。 */
-function PrinterRow() {
+/**
+ * 送餐单打印机：没连过时说明用途；连过后显示打印机名和状态。点「设置」打开打印机面板。
+ * 全店总开关关着时是「试打模式」：只能打开试打印（收银页这时不会把真单送去打印）。
+ */
+function PrinterRow({ storeOn }: { storeOn: boolean }) {
   const s = usePrinter();
   const tr = useT();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<'panel' | 'trial' | null>(null);
+  if (!storeOn) {
+    return (
+      <Row title={tr('送餐单打印机', 'Order slip printer')}
+        sub={tr('全店还没打开送餐单打印 · 可以先连上试打，不会打真单', 'Slip printing is off for the shop · connect and test first; real orders will not print')}>
+        <span className={`rounded-lg px-2.5 py-1 text-sm font-semibold ${s.link === 'ready' ? TONE.ok : TONE.idle}`}>{s.link === 'ready' ? tr('试打 · 已连接', 'Testing · connected') : tr('试打模式', 'Test mode')}</span>
+        <button type="button" onClick={() => setOpen('trial')} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{tr('试打印', 'Test print')}<Icon name="arrow" size={18} /></button>
+        {open === 'trial' && <TestPrintSheet onClose={() => setOpen(null)} />}
+      </Row>
+    );
+  }
   const state = !s.settings.enabled ? null
     : s.link === 'ready' ? { tone: 'ok' as Tone, text: tr('已连接', 'Connected') }
     : s.link === 'lost' ? { tone: 'bad' as Tone, text: tr('断开了', 'Disconnected') }
@@ -252,8 +266,8 @@ function PrinterRow() {
     <Row title={tr('送餐单打印机', 'Order slip printer')}
       sub={s.settings.enabled ? (s.settings.deviceName ?? tr('蓝牙打印机', 'Bluetooth printer')) : tr('下单后在出餐口打一张送餐单（蓝牙打印机）', 'Prints a slip at the pass for each order (Bluetooth printer)')}>
       {state && <span className={`rounded-lg px-2.5 py-1 text-sm font-semibold ${TONE[state.tone]}`}>{state.text}</span>}
-      <button type="button" onClick={() => setOpen(true)} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{s.settings.enabled ? tr('设置', 'Settings') : tr('连接', 'Connect')}<Icon name="arrow" size={18} /></button>
-      {open && <PrinterSheet onClose={() => setOpen(false)} />}
+      <button type="button" onClick={() => setOpen('panel')} className="flex h-14 items-center gap-2 rounded-xl border border-line px-4 font-bold">{s.settings.enabled ? tr('设置', 'Settings') : tr('连接', 'Connect')}<Icon name="arrow" size={18} /></button>
+      {open === 'panel' && <PrinterSheet onClose={() => setOpen(null)} />}
     </Row>
   );
 }

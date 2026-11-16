@@ -64,6 +64,8 @@ export interface RunnerSlip {
   ref: string;
   /** 共 N 份。 */
   count: number;
+  /** 试打印的样单（sampleSlips）：纸上前后印「测试 · 不用做」。真单永远没有这个字段。 */
+  test?: boolean;
 }
 
 const HEADER: Record<OrderServiceMode, string> = { dine_in: '堂食 DINE IN', takeaway: '打包 TAKEAWAY', mixed: '堂食 + 打包' };

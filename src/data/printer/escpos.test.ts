@@ -7,7 +7,8 @@ import { defaultConfig, MENU_V1, normalizeConfig, unitPriceSen } from '../../dom
 import type { LineConfig } from '../../domain/index';
 import { extraConfig, extraNote } from '../../domain/extras';
 import { buildRunnerSlip, RunnerSlipSource } from '../../domain/runnerSlip';
-import { COLUMNS, displayWidth, encodeGb18030, encodeLines, encodeRunnerSlip, layoutRunnerSlip, layoutTestPage, PrintLine, previewLines } from './escpos';
+import { buildSampleSlip, SAMPLE_REF, SAMPLE_SLIPS } from '../../domain/sampleSlips';
+import { COLUMNS, displayWidth, encodeGb18030, encodeLines, encodeRunnerSlip, layoutRunnerSlip, layoutTestPage, PrintLine, previewLines, TEST_BANNER, TEST_FOOTER } from './escpos';
 
 const menu = MENU_V1;
 const cfg = (patch: Partial<LineConfig> & Pick<LineConfig, 'productKind'>, sauce: LineConfig['sauce'] = null) =>
@@ -148,3 +149,32 @@ for (const paper of [80, 58] as const) {
     }
   });
 }
+
+// ---- 试打印的样单 ----
+
+for (const paper of [58, 80] as const) {
+  test(`${paper}mm 样单：最上面整行黑底「测试 · 不用做」，最后一行再写一次；9 张每行都不超宽`, () => {
+    for (const d of SAMPLE_SLIPS) {
+      const lines = layoutRunnerSlip(buildSampleSlip(menu, d.id, { nowMs: Date.UTC(2026, 10, 16, 2, 5), timeZone: 'Asia/Kuala_Lumpur' }), paper);
+      const text = previewLines(lines);
+      assert.equal(text[0].trim(), TEST_BANNER, d.id);
+      assert.equal(width(lines[0]), COLUMNS[paper], '黑底占满一整行');
+      assert.ok(lines[0].segs[0].inv && lines[0].segs[0].h === 2, '黑底、两倍高');
+      assert.equal(text.at(-1), TEST_FOOTER, d.id);
+      assert.ok(text.some((t) => t.includes(SAMPLE_REF)), '单号位置写测试单');
+      assert.ok(lines.some((l) => l.segs.some((s) => s.text === String(d.token) && s.w === 8)), '牌号照样放大');
+      for (const l of lines) assert.ok(width(l) <= COLUMNS[paper], `${d.id}: ${previewLines([l])[0]} 宽 ${width(l)}`);
+    }
+  });
+}
+
+test('补打那张样单：测试横条在最上面，补打标记紧跟着', () => {
+  const text = previewLines(layoutRunnerSlip(buildSampleSlip(menu, 'reprint', { nowMs: 0, timeZone: 'Asia/Kuala_Lumpur' }), 58));
+  assert.equal(text[0].trim(), TEST_BANNER);
+  assert.equal(text[2].trim(), '补打 2');
+});
+
+test('真单没有测试字样', () => {
+  const all = previewLines(layoutRunnerSlip(slip(), 58)).join('\n');
+  assert.ok(!all.includes('测试') && !all.includes('不用做'), all);
+});

@@ -179,7 +179,7 @@ function PayOnServeSwitch({ setMsg }: { setMsg: (m: Msg) => void }) {
 
 /**
  * 门店总开关（config/public.slipPrinting，缺省 = 关）：打印机到货、照连接说明试好之前一直关着。
- * 关着：设备页没有打印机这一行，收银页头不显示打印机，下单不打印，平板也不去连打印机。
+ * 关着：收银页头不显示打印机，下单不打印；设备页的打印机只能「试打印」（打写着测试的假单，不碰真单）。
  * 打开不用多问：只是让收银平板可以去连打印机，没连上之前什么都不会变。
  */
 function SlipPrintingSwitch({ setMsg }: { setMsg: (m: Msg) => void }) {
@@ -210,7 +210,7 @@ function SlipPrintingSwitch({ setMsg }: { setMsg: (m: Msg) => void }) {
         </button>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-3">
-        <p className="min-w-0 flex-1 text-xs text-ink-2">打印机到货前先关着。到货后先看「连接说明」，打开这里，再到主收银平板的「设备」页连接、打测试条。以后不想用随时可以关掉。</p>
+        <p className="min-w-0 flex-1 text-xs text-ink-2">打印机到货后，先在主收银平板「设备 → 送餐单打印机 → 试打印」打假单试好（不用打开这里，不会打真单），试打清单都过了再打开。以后不想用随时可以关掉。</p>
         <button type="button" onClick={() => setGuide(true)} className="h-11 rounded-lg border border-control bg-card px-4 font-semibold">连接说明</button>
       </div>
       {guide && <PrinterGuideDialog onClose={() => setGuide(false)} />}

@@ -1,5 +1,5 @@
 /**
- * 送餐单打印机的界面：收银页头的状态（启用后才显示）、打印机面板（连接 / 测试 / 自动打印 / 纸宽 / 没打出来 / 最近）。
+ * 送餐单打印机的界面：收银页头的状态（启用后才显示）、打印机面板（连接 / 试打印 / 自动打印 / 纸宽 / 没打出来 / 最近）。
  * 设备页也从这里打开面板。连接必须在点击里发起（Chrome 规定），所以「点一下连接打印机」直接连，不先开面板。
  */
 import { ReactNode, useState } from 'react';
@@ -7,6 +7,7 @@ import { printer, usePrinter } from '../../data/printer/printer';
 import type { JobProblem, PrinterState, SlipJob } from '../../data/printer/printerManager';
 import { useT } from '../../app/i18n';
 import { PrinterGuideDialog } from './PrinterGuide';
+import { TestPrintSheet } from './TestPrintSheet';
 
 type Tr = ReturnType<typeof useT>;
 
@@ -28,7 +29,8 @@ function problemText(p: JobProblem | undefined, tr: Tr): string {
 }
 
 const waitingCount = (s: PrinterState) => s.jobs.filter((j) => j.status === 'waiting').length;
-const failedJobs = (s: PrinterState) => s.jobs.filter((j) => j.status === 'failed');
+/** 没打出来、要收银决定的真单（试打印的测试单没打出来不用收银管）。 */
+const failedJobs = (s: PrinterState) => s.jobs.filter((j) => j.status === 'failed' && !j.test);
 
 /** 收银页头：在「后厨已连接」旁边。没启用打印机时不显示。 */
 export function PrinterChip() {
@@ -60,10 +62,10 @@ export function PrinterChip() {
 export function PrinterSheet({ onClose }: { onClose: () => void }) {
   const s = usePrinter();
   const tr = useT();
-  const [testing, setTesting] = useState(false);
+  const [trial, setTrial] = useState(false);
   const [guide, setGuide] = useState(false);
   const failed = failedJobs(s);
-  const recent = s.jobs.filter((j) => j.status !== 'failed').slice(0, 10);
+  const recent = s.jobs.filter((j) => j.status !== 'failed' || j.test).slice(0, 10);
   const ready = s.link === 'ready';
   const status = !s.settings.enabled ? tr('还没连接过打印机', 'No printer yet')
     : ready ? tr('已连接', 'Connected')
@@ -95,15 +97,18 @@ export function PrinterSheet({ onClose }: { onClose: () => void }) {
                 </div>
                 {ready ? (
                   <>
-                    <button type="button" disabled={testing} onClick={async () => { setTesting(true); await printer.testPrint(); setTesting(false); }}
-                      className="h-14 rounded-xl border border-line px-4 font-semibold disabled:text-ink-2">{testing ? tr('打印中…', 'Printing…') : tr('测试打印', 'Test print')}</button>
+                    <button type="button" onClick={() => setTrial(true)} className="h-14 rounded-xl border border-ink px-4 font-semibold">{tr('试打印…', 'Test printing…')}</button>
                     <button type="button" onClick={() => printer.disconnect()} className="h-14 rounded-xl border border-line px-4 font-semibold">{tr('断开', 'Disconnect')}</button>
                   </>
                 ) : (
-                  <button type="button" disabled={s.link === 'connecting'} onClick={() => void printer.connect()}
-                    className="h-14 rounded-xl bg-ok px-4 font-bold text-white disabled:bg-control">{s.settings.enabled ? tr('连接打印机', 'Connect printer') : tr('连接蓝牙打印机', 'Connect Bluetooth printer')}</button>
+                  <>
+                    <button type="button" disabled={s.link === 'connecting'} onClick={() => void printer.connect()}
+                      className="h-14 rounded-xl bg-ok px-4 font-bold text-white disabled:bg-control">{s.settings.enabled ? tr('连接打印机', 'Connect printer') : tr('连接蓝牙打印机', 'Connect Bluetooth printer')}</button>
+                    <button type="button" onClick={() => setTrial(true)} className="h-14 rounded-xl border border-line px-4 font-semibold">{tr('试打印…', 'Test printing…')}</button>
+                  </>
                 )}
               </div>
+              {trial && <TestPrintSheet onClose={() => setTrial(false)} />}
               {err && <p role="alert" className="mt-3 rounded-xl bg-danger-bg p-3 text-sm text-danger">{err}</p>}
               <p className="mt-3 text-[13px] text-ink-2">{tr('下单后在出餐口打一张送餐单：牌号、堂食 / 打包、每碗是什么、金额。只有主收银平板会打印；页面重新打开后可能要再点一下「连接打印机」。', 'After each order a slip prints at the pass: token, dine-in / takeaway, each bowl, amounts. Only the main register prints; after the page reopens you may need to tap Connect printer again.')}</p>
 
@@ -143,7 +148,7 @@ export function PrinterSheet({ onClose }: { onClose: () => void }) {
                     <>
                       <h3 className="mt-4 text-sm font-bold text-ink-2">{tr('最近', 'Recent')}</h3>
                       <ul>{recent.map((j) => <JobRow key={j.key} job={j} note={jobStatusText(j, s, tr)} actions={
-                        j.status === 'done' || j.status === 'skipped'
+                        !j.test && (j.status === 'done' || j.status === 'skipped')
                           ? <button type="button" onClick={() => printer.reprint(j.key)} className="h-12 rounded-lg border border-line px-3 font-semibold">{j.prints > 0 ? tr('补打', 'Reprint') : tr('打印', 'Print')}</button>
                           : null
                       } />)}</ul>
@@ -162,6 +167,7 @@ export function PrinterSheet({ onClose }: { onClose: () => void }) {
 }
 
 function jobStatusText(j: SlipJob, s: PrinterState, tr: Tr): string {
+  if (j.status === 'failed') return tr('没打出来', 'Not printed');
   if (j.status === 'printing') return tr('正在打印…', 'Printing…');
   if (j.status === 'waiting') return s.link === 'ready' ? tr('排队中', 'Queued') : tr('等打印机连上', 'Waiting for printer');
   if (j.status === 'skipped') return j.prints > 0 ? tr(`已打印 ${j.prints} 次`, `Printed ${j.prints}×`) : tr('没有打印', 'Not printed');
@@ -169,7 +175,7 @@ function jobStatusText(j: SlipJob, s: PrinterState, tr: Tr): string {
 }
 
 /** 两三个选项的分段按钮（纸宽、切纸）。 */
-function Choice<T extends string | number>({ label, value, onChange, options }: { label: string; value: T; onChange: (v: T) => void; options: [T, string][] }) {
+export function Choice<T extends string | number>({ label, value, onChange, options }: { label: string; value: T; onChange: (v: T) => void; options: [T, string][] }) {
   return (
     <div className="flex shrink-0 rounded-xl bg-subtle p-1" role="group" aria-label={label}>
       {options.map(([v, text]) => (
@@ -185,7 +191,7 @@ function JobRow({ job, note, actions }: { job: SlipJob; note: string; actions: R
     <li className="flex flex-wrap items-center gap-3 border-b border-line py-3 last:border-0">
       <b className="w-10 text-center text-2xl tabular-nums">{job.token}</b>
       <div className="min-w-0 flex-1">
-        <span className="block font-semibold">{job.label}</span>
+        <span className="block font-semibold">{job.label}{job.test && <span className="ml-1.5 rounded-md bg-subtle px-1.5 py-0.5 align-[2px] text-[11px] font-bold text-ink-2">测试</span>}</span>
         <span className="block text-[13px] text-ink-2">{job.slip.time} · {note}</span>
       </div>
       {actions}

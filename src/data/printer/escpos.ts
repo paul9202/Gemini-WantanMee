@@ -148,10 +148,22 @@ function wrapSegs(segs: (Segment & { lead?: string })[], cols: number, indent = 
 
 // ---- 排版 ----
 
+/** 试打印样单最上面那条：整行黑底、两倍高，字居中。 */
+export const TEST_BANNER = '测试 TEST · 不用做';
+/** 试打印样单最后一行。 */
+export const TEST_FOOTER = '—— 测试单 不用出餐 ——';
+
+function fullBar(text: string, cols: number): PrintLine {
+  const pad = Math.max(0, cols - displayWidth(text));
+  const left = Math.floor(pad / 2);
+  return { segs: [{ text: ' '.repeat(left) + text + ' '.repeat(pad - left), inv: true, bold: true, h: 2 }] };
+}
+
 export function layoutRunnerSlip(slip: RunnerSlip, width: PaperWidth): PrintLine[] {
   const cols = COLUMNS[width];
   const rule: PrintLine = { segs: [{ text: '-'.repeat(cols) }] };
   const out: PrintLine[] = [];
+  if (slip.test) out.push(fullBar(TEST_BANNER, cols), { segs: [{ text: '' }] });
   if (slip.mark) out.push({ segs: [{ text: ` ${slip.mark} `, inv: true, bold: true }], align: 'right' });
   out.push(...spread([{ text: ` ${slip.header.label}`, inv: slip.header.inverse, bold: true }], [{ text: `${slip.time} `, inv: slip.header.inverse, bold: true }], cols, { inv: slip.header.inverse }));
   out.push({ segs: [{ text: '' }] });
@@ -172,6 +184,7 @@ export function layoutRunnerSlip(slip: RunnerSlip, width: PaperWidth): PrintLine
   out.push(rule);
   out.push(...spread([{ text: '合计', bold: true, h: 2 }], [{ text: slipTotal(slip.totalSen), bold: true, w: 2, h: 2 }], cols, { h: 2 }));
   out.push(...spread([{ text: slip.ref }], [{ text: `共 ${slip.count} 份` }], cols));
+  if (slip.test) out.push({ segs: [{ text: '' }] }, { segs: [{ text: TEST_FOOTER, bold: true }], align: 'center' });
   return out;
 }
 
