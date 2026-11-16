@@ -21,6 +21,14 @@ const BACK: ChangelogRole[] = ['owner', 'kitchen'];
 /** 最新的在最前面。 */
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: '2026-11-16-pos-defaults', date: '2026-11-16', roles: FRONT,
+    title: { zh: '点餐：每碗面默认细面，白酱面默认不辣', en: 'Ordering: every bowl starts as thin noodles; white sauce starts with no chili' },
+    items: [
+      { zh: '上一碗选了面薄，加进单子以后下一碗自动回到细面，不用再改回来；要面薄的那碗再按一下「面薄」。', en: 'After a mee pok bowl is added, the next bowl goes back to thin noodles by itself; tap 面薄 again only for bowls that want it.' },
+      { zh: '选白酱面时辣度默认「不辣」；黑酱、红酱照旧默认「辣」。客人要辣再按一下。', en: 'White sauce now starts at no chili; black and red sauce still start spicy. Tap the chili level if the customer wants it.' },
+    ],
+  },
+  {
     id: '2026-11-16-kitchen-reprint', date: '2026-11-16', roles: ALL,
     title: { zh: '后厨屏上可以补打送餐单', en: 'Reprint an order slip from the kitchen screen' },
     items: [

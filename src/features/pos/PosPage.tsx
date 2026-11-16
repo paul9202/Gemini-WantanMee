@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { collection, query, where } from 'firebase/firestore';
 import { BOM_V1 } from '../../domain/bom';
 import { addLine, Cart, cartServiceMode, computeTotals, emptyCart, setLineQuantity, setLineServiceMode, setServiceMode, updateLineConfig } from '../../domain/cart';
-import { defaultConfig, LineConfig, normalizeConfig, unitPriceSen } from '../../domain/lineItem';
+import { defaultConfig, defaultSpice, LineConfig, normalizeConfig, unitPriceSen } from '../../domain/lineItem';
 import { notePictogramIds, PICTOGRAMS } from '../../domain/pictograms';
 import { formatRM } from '../../domain/money';
 import { manualStatus, OfflineEvent, offlineReceiptNumber, overlayLocalTokens } from '../../domain/offline';
@@ -353,11 +353,14 @@ export function PosPage() {
   });
 
   /** sharedToken：挂在客人已拿着的牌上，没有发出新牌，不改变循环建议的起点。 */
-  /** 特殊选项归默认，防止上一位顾客的走青、Kosong、不要番茄酱、不要叉烧残留；保留所选餐品与面种。 */
+  /**
+   * 特殊选项归默认，防止上一碗的走青、Kosong、不要番茄酱、不要叉烧残留；保留所选餐品与酱。
+   * 面种也回到细面（2026-11-16 店里要求）：面薄只占一成，上一碗选了面薄，下一碗常忘了改回细面而按错。
+   * 辣度回到这个酱的默认（白酱不辣）。
+   */
   function resetDraftOptions() {
     if (!menu || !draft) return;
-    const keep = defaultConfig(menu, draft.productKind, draft.sauce);
-    setDraft({ ...keep, noodleType: keep.noodleType ? draft.noodleType : null });
+    setDraft(defaultConfig(menu, draft.productKind, draft.sauce));
   }
 
   function clearAfterAccept(tokenNumber: number, sharedToken = false) {
@@ -818,7 +821,11 @@ export function PosPage() {
               <span className="ml-auto text-[11px] font-semibold tracking-[0.16em] text-ink-2">01 / SELECT</span>
             </div>
             <ProductGrid menu={menu} config={draft}
-              onPick={(t) => setDraft(normalizeConfig(menu, { ...draft, productKind: t.productKind, sauce: t.productKind === 'dry_noodle' ? t.sauce : draft.sauce }))} />
+              onPick={(t) => {
+                const next = normalizeConfig(menu, { ...draft, productKind: t.productKind, sauce: t.productKind === 'dry_noodle' ? t.sauce : draft.sauce });
+                // 酱变了（包括白酱面换成干捞云吞时酱变成黑酱）就换成这个酱的默认辣度：白酱不辣，黑酱 / 红酱辣。同一个酱再点一下不动已选的辣度。
+                setDraft(next.spice !== null && next.sauce !== draft.sauce ? { ...next, spice: defaultSpice(next.sauce) } : next);
+              }} />
             <p className="mt-4 hidden items-start gap-2 rounded-2xl border border-line bg-subtle/70 px-4 py-3 text-[13px] text-ink-2 2xl:flex">
               <Icon name="help" size={18} />{tr('选餐后调整面种和份量。普通配料已预设，有特别要求再更改。', 'After picking a dish, choose noodles and size. Standard toppings are preset — change only for special requests.')}
             </p>

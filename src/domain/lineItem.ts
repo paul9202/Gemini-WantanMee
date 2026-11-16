@@ -87,14 +87,20 @@ export interface ValidationIssue {
   field: string;
 }
 
+/** 默认辣度：白酱默认不辣（2026-11-16 店里要求），其余默认辣。 */
+export function defaultSpice(sauce: Sauce | null): Spice {
+  return sauce === 'white' ? 'none' : 'normal';
+}
+
 export function defaultConfig(menu: MenuVersion, productKind: LineKind, sauce: Sauce | null = null): LineConfig {
   const product = productOf(menu, productKind);
+  const s = sauce ?? product.sauces[0] ?? null;
   return normalizeConfig(menu, {
     productKind,
     size: product.defaultSize,
     noodleType: product.hasNoodle ? 'thin_egg' : null,
-    sauce: sauce ?? product.sauces[0] ?? null,
-    spice: 'normal',
+    sauce: s,
+    spice: defaultSpice(s),
     lard: 'normal',
     scallion: 'normal',
     isKosong: false,

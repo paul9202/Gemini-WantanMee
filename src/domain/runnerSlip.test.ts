@@ -71,7 +71,7 @@ test('堂食 + 打包：表头写两种，打包那一行前面加黑底「打�
   const s = buildRunnerSlip(menu, source({ tokenNumber: 21, lines: [line(white, 1, 'dine_in'), line(soup, 1, 'takeaway')] }), OPTS);
   assert.deepEqual(s.header, { label: '堂食 + 打包', inverse: false });
   assert.deepEqual(s.lines[0].tags, []);
-  assert.deepEqual(details(s, 0), ['细面', '辣', '多油渣']);
+  assert.deepEqual(details(s, 0), ['细面', '不辣', '多油渣'], '白酱默认不辣');
   assert.deepEqual(s.lines[1].tags, [{ text: '打包' }]);
   assert.equal(s.lines[1].name, '云吞汤 · 15粒');
   assert.deepEqual(details(s, 1), [], '汤类打包没有「不附送清汤」');
